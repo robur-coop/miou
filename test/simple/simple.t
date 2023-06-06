@@ -8,3 +8,4 @@ Simple test
   [2]
   $ ./t04.exe > out.txt
   $ test -z "$(cat out.txt)" -o "$(cat out.txt)" = "Failed!"
+  $ ./t05.exe

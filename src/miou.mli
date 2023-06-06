@@ -1,5 +1,12 @@
 module Tq : sig
+  (** A lock-free queue.
+
+      To be able to implement a scheduler across multiple domains, we must
+      have a Thread-safe Queue. This thread-safe implementation provides basic
+      operations for a queue: {!val:enqueue} & {!val:dequeue}. *)
+
   type 'a t
+  (** Type of lock-free queues. *)
 
   exception Empty
 
@@ -10,12 +17,16 @@ module Tq : sig
 end
 
 module Prm : sig
-  type 'a state =
-    | Pending  (** The task is not yet resolved. *)
-    | Resolved of 'a  (** The normal termination. *)
-    | Failed of exn  (** Abnormal termination. *)
+  (** A promise for a better futur.
 
-  exception Cancelled
+      A {b promise} is a function ([unit -> 'a]) that will be executed by the
+      scheduler in the near future. The user can launch a promise (and notify
+      the scheduler of a new task to do) as well as wait for the result of a
+      promise (see {!val:await}).
+
+      A promise can be executed concurrently with other promises (see
+      {!val:call_cc}) or in parallel with other promises (see {!val:call}).
+  *)
 
   type 'a t
   (** Type of promises. *)
@@ -37,6 +48,10 @@ module Prm : sig
       same {!type:Uid.t} a chance to run, useful to be called in cpu-intensive
       paths. *)
 
+  (** {2 Cancellation.} *)
+
+  exception Cancelled
+
   val cancel : 'a t -> unit
 
   (** {2 Await a promise.} *)
@@ -44,6 +59,14 @@ module Prm : sig
   val await : 'a t -> ('a, exn) result
   val await_exn : 'a t -> 'a
   val await_first : 'a t list -> ('a, exn) result
+
+  (** {2 State of a promise.} *)
+
+  type 'a state =
+    | Pending  (** The task is not yet resolved. *)
+    | Resolved of 'a  (** The normal termination. *)
+    | Failed of exn  (** Abnormal termination. *)
+
   val state : 'a t -> 'a state
 end
 

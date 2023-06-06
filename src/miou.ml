@@ -77,31 +77,31 @@ module Prm = struct
 
   (* TODO(dinosaure): check if we await a /right/ children according to the
      curren [uid]. *)
-  let rec await promise =
-    match Atomic.get promise.state with
+  let rec await prm =
+    match Atomic.get prm.state with
     | Resolved v ->
         (* TODO(dinosaure): check if all children are resolved. Only for domains? *)
         Ok v
     | Failed exn -> Error exn
-    | Pending -> Effect.perform Yield; await promise
+    | Pending -> Effect.perform Yield; await prm
 
-  let await_exn promise =
-    match await promise with Ok value -> value | Error exn -> reraise exn
+  let await_exn prm =
+    match await prm with Ok value -> value | Error exn -> reraise exn
 
   let await_first = function
     | [] -> invalid_arg "Prm.await_first"
-    | promises ->
+    | prms ->
         let rec go pending = function
-          | [] -> go [] promises
-          | promise :: rest ->
-              if is_terminated promise then (
+          | [] -> go [] prms
+          | prm :: rest ->
+              if is_terminated prm then (
                 List.iter cancel (List.rev_append pending rest);
-                await promise)
+                await prm)
               else (
                 yield ();
-                go (promise :: pending) rest)
+                go (prm :: pending) rest)
         in
-        go [] promises
+        go [] prms
 end
 
 type process =
@@ -120,12 +120,12 @@ type go = { go: 'a. scheduler -> (unit -> 'a) -> 'a } [@@unboxed]
 let yield : scheduler -> go -> ('a, 'b) Effect.Deep.continuation -> 'b =
  fun dom go k ->
   match Rlist.take dom.todo with
-  | Fiber (promise, fn) -> (
+  | Fiber (prm, fn) -> (
       let g = Random.State.copy dom.g in
       let dom' =
-        { g; todo= Rlist.make g; domain= promise.uid; current= Prm.Prm promise }
+        { g; todo= Rlist.make g; domain= prm.uid; current= Prm.Prm prm }
       in
-      assert (dom.domain = promise.Prm.uid);
+      assert (dom.domain = prm.Prm.uid);
       (* TODO(dinosaure): check that! We mention that [yield] gives other
          promises of the **same uid** a chance to run. *)
       try
@@ -133,38 +133,37 @@ let yield : scheduler -> go -> ('a, 'b) Effect.Deep.continuation -> 'b =
         (* NOTE(dinosaure): here, we set the promise to [Resolved] **only if**
            nobody set it to [Failed]. [is_resolved] confirms (if it's [true]) that
            we set our promise to [Resolved]. *)
-        ignore
-          (Atomic.compare_and_set promise.Prm.state Pending (Resolved value));
+        ignore (Atomic.compare_and_set prm.Prm.state Pending (Resolved value));
         Effect.Deep.continue k ()
       with exn ->
-        ignore (Atomic.compare_and_set promise.Prm.state Pending (Failed exn));
+        ignore (Atomic.compare_and_set prm.Prm.state Pending (Failed exn));
         Effect.Deep.continue k ())
   | Domain (_task, _domain) -> assert false
   | exception Rlist.Empty -> Effect.Deep.continue k ()
 
 let get_uid dom k = Effect.Deep.continue k dom.domain
 
-let spawn dom promise fn k =
+let spawn dom prm fn k =
   let process =
-    match promise.Prm.kind with
-    | Prm.Task -> Fiber (promise, fn)
+    match prm.Prm.kind with
+    | Prm.Task -> Fiber (prm, fn)
     | Prm.Domain ->
         let dom' = Domain.spawn fn in
-        Domain (promise, dom')
+        Domain (prm, dom')
     | Prm.Sleep _ -> assert false
   in
   let (Prm.Prm parent) = dom.current in
   (* NOTE(dinosaure): add the promise into parent's [children]
      and into our [todo] list. *)
-  Tq.enqueue parent.children (Prm.Prm promise);
+  Tq.enqueue parent.children (Prm.Prm prm);
   Rlist.push process dom.todo;
-  Effect.Deep.continue k promise
+  Effect.Deep.continue k prm
 
 let collect_pending_promises dom =
   let rec go pending =
     match Rlist.take dom.todo with
-    | Fiber (promise, _) when Prm.is_terminated promise -> go pending
-    | Fiber (promise, _) -> go (Prm.Prm promise :: pending)
+    | Fiber (prm, _) when Prm.is_terminated prm -> go pending
+    | Fiber (prm, _) -> go (Prm.Prm prm :: pending)
     | Domain _ -> go pending
     | exception Rlist.Empty -> pending
   in
@@ -181,9 +180,8 @@ let run ?g fn =
       | _ -> raise Still_has_children
     in
     let exnc exn =
-      let (Prm promise) = dom0.current in
-      Prm.failed_with promise exn;
-      reraise exn
+      let (Prm prm) = dom0.current in
+      Prm.failed_with prm exn; reraise exn
     in
     let effc :
         type c a. c Effect.t -> ((c, a) Effect.Deep.continuation -> a) option =
@@ -198,7 +196,7 @@ let run ?g fn =
   Uid.reset ();
   let uid = Uid.parallel () in
   let g = Option.value ~default:(Random.State.make_self_init ()) g in
-  let promise =
+  let prm =
     {
       Prm.uid
     ; state= Atomic.make Prm.Pending
@@ -207,6 +205,6 @@ let run ?g fn =
     }
   in
   let scheduler =
-    { g; todo= Rlist.make g; domain= uid; current= Prm.Prm promise }
+    { g; todo= Rlist.make g; domain= uid; current= Prm.Prm prm }
   in
   go scheduler fn
