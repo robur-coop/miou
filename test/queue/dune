@@ -1,0 +1,7 @@
+(executable
+ (name main)
+ (libraries fmt miou))
+
+(rule
+ (alias runtest)
+ (action (run ./main.exe)))

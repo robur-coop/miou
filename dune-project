@@ -1,2 +1,3 @@
-(lang dune 2.0)
+(lang dune 2.8)
 (name miou)
+(cram enable)
