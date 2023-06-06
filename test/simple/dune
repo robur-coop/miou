@@ -13,6 +13,11 @@
  (modules t03)
  (libraries miou))
 
+(executable
+ (name t04)
+ (modules t04)
+ (libraries miou))
+
 (cram
  (package miou)
- (deps t01.exe t02.exe t03.exe))
+ (deps t01.exe t02.exe t03.exe t04.exe))

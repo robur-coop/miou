@@ -1,4 +1,4 @@
-type t = { uid : Uid.t; abnormal_finaliser : unit -> unit }
+type t = { uid: Uid.t; abnormal_finaliser: unit -> unit }
 
 let own abnormal_finaliser =
   let uid = Uid.concurrent () in

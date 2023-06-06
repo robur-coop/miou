@@ -8,9 +8,7 @@ let check test =
   try
     assert test;
     print_string "."
-  with exn ->
-    print_string "x";
-    reraise exn
+  with exn -> print_string "x"; reraise exn
 
 let () =
   let q = Tq.make () in

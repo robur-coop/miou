@@ -1,12 +1,12 @@
 (* (c) Lwt authors *)
 
-type 'a t = { g : Random.State.t; mutable prev : 'a t; mutable next : 'a t }
+type 'a t = { g: Random.State.t; mutable prev: 'a t; mutable next: 'a t }
 
 type 'a node = {
-  g : Random.State.t;
-  mutable prev : 'a t;
-  mutable next : 'a t;
-  mutable data : 'a;
+    g: Random.State.t
+  ; mutable prev: 'a t
+  ; mutable next: 'a t
+  ; mutable data: 'a
 }
 
 external t_of_node : 'a node -> 'a t = "%identity"
@@ -15,7 +15,7 @@ external node_of_t : 'a t -> 'a node = "%identity"
 exception Empty
 
 let make g =
-  let rec t = { g; prev = t; next = t } in
+  let rec t = { g; prev= t; next= t } in
   t
 
 let remove node =
@@ -26,12 +26,12 @@ let remove node =
 let is_empty (t : 'a t) = t.next == t
 
 let add_l data (t : 'a t) =
-  let node = { g = t.g; prev = t; next = t.next; data } in
+  let node = { g= t.g; prev= t; next= t.next; data } in
   t.next.prev <- t_of_node node;
   t.next <- t_of_node node
 
 let add_r data (t : 'a t) =
-  let node = { g = t.g; prev = t.prev; next = t; data } in
+  let node = { g= t.g; prev= t.prev; next= t; data } in
   t.prev.next <- t_of_node node;
   t.prev <- t_of_node node
 
@@ -51,13 +51,11 @@ let length t =
 
 let take_l (t : 'a t) =
   let node = node_of_t t.next in
-  remove node;
-  node.data
+  remove node; node.data
 
 let take_r (t : 'a t) =
   let node = node_of_t t.prev in
-  remove node;
-  node.data
+  remove node; node.data
 
 let take t =
   if is_empty t then raise Empty

@@ -4,4 +4,5 @@
 
 (rule
  (alias runtest)
- (action (run ./main.exe)))
+ (action
+  (run ./main.exe)))

@@ -9,7 +9,7 @@ module Tq : sig
   val is_empty : 'a t -> bool
 end
 
-module Promise : sig
+module Prm : sig
   type 'a state =
     | Pending  (** The task is not yet resolved. *)
     | Resolved of 'a  (** The normal termination. *)

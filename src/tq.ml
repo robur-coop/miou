@@ -6,8 +6,8 @@
    The paper is available here:
    https://people.cs.pitt.edu/~jacklange/teaching/cs2510-f12/papers/implementing_lock_free.pdf *)
 
-type 'a t = { tail : 'a node Atomic.t; head : 'a node Atomic.t }
-and 'a node = { mutable value : 'a; next : 'a node option Atomic.t }
+type 'a t = { tail: 'a node Atomic.t; head: 'a node Atomic.t }
+and 'a node = { mutable value: 'a; next: 'a node option Atomic.t }
 
 (* enqueue(x):
      q <- new record
@@ -22,7 +22,7 @@ and 'a node = { mutable value : 'a; next : 'a node option Atomic.t }
      compare_and_swap tail p q
 *)
 let enqueue t value =
-  let q = { value; next = Atomic.make None } in
+  let q = { value; next= Atomic.make None } in
   let rec go () =
     let p = Atomic.get t.tail in
     if Atomic.compare_and_set p.next None (Some q) then
@@ -60,8 +60,8 @@ let dequeue t =
   go ()
 
 let make () =
-  let dummy = { value = Obj.magic (); next = Atomic.make None } in
-  let t = { tail = Atomic.make dummy; head = Atomic.make dummy } in
+  let dummy = { value= Obj.magic (); next= Atomic.make None } in
+  let t = { tail= Atomic.make dummy; head= Atomic.make dummy } in
   assert (Atomic.get t.head == Atomic.get t.tail);
   t
 
