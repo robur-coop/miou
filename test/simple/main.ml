@@ -2,19 +2,17 @@ open Miou
 
 let () = Printexc.record_backtrace true
 
+let fiber_a () =
+  Unix.sleep 1;
+  1
+
+let fiber_b () =
+  Unix.sleep 2;
+  2
+
 let () =
   Miou.run (fun () ->
-      Format.eprintf ">>> make new task a\n%!";
-      let a =
-        Promise.call_cc (fun () ->
-            Format.printf ">>> sleep 1\n%!";
-            1)
-      in
-      Format.eprintf ">>> make new task b\n%!";
-      let b =
-        Promise.call_cc (fun () ->
-            Format.printf ">>> sleep 2\n%!";
-            3)
-      in
+      let a = Promise.call_cc fiber_a in
+      let b = Promise.call_cc fiber_b in
       Promise.(await_exn a + await_exn b))
   |> Format.printf "%d\n%!"

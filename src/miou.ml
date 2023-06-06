@@ -30,11 +30,17 @@ module Promise = struct
 
   let state { state; _ } = state
 
-  type _ Effect.t += Await : 'a t -> ('a, exn) result Effect.t
+  type _ Effect.t += Yield : unit Effect.t
 
-  let await promise =
-    try Effect.perform (Await promise)
-    with Effect.Unhandled effect -> raise Base.(Outside (Effect effect))
+  let rec await promise =
+    match promise.state with
+    | Resolved v -> Ok v
+    | Failed exn -> Error exn
+    | Pending -> (
+        try
+          Effect.perform Yield;
+          await promise
+        with Effect.Unhandled effect -> raise Base.(Outside (Effect effect)))
 
   let await_exn promise =
     match await promise with Ok value -> value | Error exn -> reraise exn
@@ -46,8 +52,9 @@ type process =
 
 type scheduler = { todo : process Rlist.t; current : Uid.t Atomic.t }
 
-let next dom =
-  Format.eprintf ">>> Execute a new promise.\n%!";
+let next dom k =
+  Format.eprintf ">>> Execute a new promise (%d promise(s)).\n%!"
+    (Rlist.length dom.todo);
   match Rlist.take dom.todo with
   | Fiber (task, fn) ->
       Format.eprintf ">>> Execute a new fiber.\n%!";
@@ -55,11 +62,12 @@ let next dom =
       Atomic.set dom.current task.Promise.uid;
       let value = fn () in
       task.Promise.state <- Resolved value;
-      Atomic.set dom.current parent
+      Atomic.set dom.current parent;
+      Effect.Deep.continue k ()
   | Domain (_task, _domain) -> assert false
   | exception Rlist.Empty ->
       Format.eprintf ">>> The TODO list is empty.\n%!";
-      ()
+      Effect.Deep.continue k ()
 
 let get_uid dom k =
   let uid = Atomic.get dom.current in
@@ -77,20 +85,11 @@ let spawn dom task fn k =
   Rlist.push process dom.todo;
   Effect.Deep.continue k task
 
-let rec await dom task k =
-  match task.Promise.state with
-  | Resolved value -> Effect.Deep.continue k (Ok value)
-  | Failed exn -> Effect.Deep.continue k (Error exn)
-  | Pending ->
-      next dom;
-      await dom task k
-
 let run ?g fn =
   let go : scheduler -> (unit -> 'a) -> 'a =
    fun dom0 fn ->
     let retc value =
       Format.eprintf ">>> All call{,_cc} collected!\n%!";
-      next dom0;
       value
     in
     let exnc = reraise in
@@ -99,7 +98,9 @@ let run ?g fn =
       function
       | Uid.Uid -> Some (get_uid dom0)
       | Promise.Spawn (task, fn) -> Some (spawn dom0 task fn)
-      | Promise.Await task -> Some (await dom0 task)
+      | Promise.Yield ->
+          Format.eprintf ">>> Yield.\n%!";
+          Some (next dom0)
       | _effect -> None
     in
     Effect.Deep.match_with fn () { Effect.Deep.retc; exnc; effc }

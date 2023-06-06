@@ -32,11 +32,20 @@ let add_l data (t : 'a t) =
 
 let add_r data (t : 'a t) =
   let node = { g = t.g; prev = t.prev; next = t; data } in
-  t.next.prev <- t_of_node node;
+  t.prev.next <- t_of_node node;
   t.prev <- t_of_node node
 
 let push data (t : 'a t) =
   if Random.State.bool t.g then add_l data t else add_r data t
+
+let length t =
+  let rec go curr len =
+    if curr == t then len
+    else
+      let node = node_of_t curr in
+      go node.next (len + 1)
+  in
+  go t.next 0
 
 (* NOTE(dinosaure): [take_{r,l}] are unsafe. *)
 
