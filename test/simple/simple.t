@@ -13,3 +13,4 @@ Simple test
   $ ./t07.exe
   Fatal error: exception Miou.Not_a_child
   [2]
+  $ ./t08.exe

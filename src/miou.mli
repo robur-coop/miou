@@ -16,6 +16,13 @@ module Tq : sig
   val is_empty : 'a t -> bool
 end
 
+module Id : sig
+  type t
+
+  val equal : t -> t -> bool
+  val compare : t -> t -> int
+end
+
 module Prm : sig
   (** A promise for a better futur.
 

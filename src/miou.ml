@@ -1,12 +1,20 @@
 module Tq = Tq
 
+module Id = struct
+  type t = int
+
+  let epsilon = -1
+  let equal = Int.equal
+  let compare = Int.compare
+
+  let gen =
+    let value = Atomic.make (epsilon + 1) in
+    fun () -> Atomic.fetch_and_add value 1
+end
+
 external reraise : exn -> 'a = "%reraise"
 
 module Prm = struct
-  let gen =
-    let value = Atomic.make (-1) in
-    fun () -> Atomic.fetch_and_add value 1
-
   type 'a state =
     | Pending  (** The task is not yet resolved. *)
     | Resolved of 'a  (** The normal termination. *)
@@ -19,7 +27,7 @@ module Prm = struct
     ; state: 'a state Atomic.t
     ; kind: kind
     ; children: w Tq.t
-    ; uid: int
+    ; uid: Id.t
   }
 
   and w = Prm : 'a t -> w
@@ -29,8 +37,8 @@ module Prm = struct
 
   let call_cc fn =
     let domain = Uid.concurrent () in
-    let uid = gen () in
-    let task =
+    let uid = Id.gen () in
+    let promise =
       {
         uid
       ; domain
@@ -39,12 +47,12 @@ module Prm = struct
       ; children= Tq.make ()
       }
     in
-    Effect.perform (Spawn (task, fn))
+    Effect.perform (Spawn (promise, fn))
 
   let call fn =
     let domain = Uid.parallel () in
-    let uid = gen () in
-    let task =
+    let uid = Id.gen () in
+    let promise =
       {
         uid
       ; domain
@@ -53,7 +61,7 @@ module Prm = struct
       ; children= Tq.make ()
       }
     in
-    Effect.perform (Spawn (task, fn))
+    Effect.perform (Spawn (promise, fn))
 
   exception Cancelled
 
@@ -65,13 +73,14 @@ module Prm = struct
     (* NOTE(dinosaure): we set promise to [Failed] only if the promise is
        [Pending]. If the promise had already returned by the time cancel was
        called, **no** state transitions are made. *)
-    (* TODO(dinosaure): how to cancel a domain? *)
     Atomic.compare_and_set state Pending (Failed Cancelled) |> ignore
 
   let failed_with { state; children; _ } exn =
     Tq.iter ~f:(fun (Prm p) -> cancel p) children;
     Atomic.compare_and_set state Pending (Failed exn) |> ignore
 
+  (* [is_terminated] means that the task finished with [Resolved] **or**
+     [Failed]. *)
   let is_terminated { state; _ } =
     match Atomic.get state with
     | Resolved _ | Failed _ -> true
@@ -91,17 +100,14 @@ module Prm = struct
     | prms ->
         let rec go pending = function
           | [] -> go [] prms
+          | prm :: rest when is_terminated prm ->
+              (* TODO(dinosaure): we probably should aggregate resolved promises
+                 and randomly take one! *)
+              List.iter cancel (List.rev_append pending rest);
+              await prm
           | prm :: rest ->
-              if is_terminated prm then begin
-                (* TODO(dinosaure): we probably should aggregate resolved promises
-                   and randomly take one! *)
-                List.iter cancel (List.rev_append pending rest);
-                await prm
-              end
-              else begin
-                yield ();
-                go (prm :: pending) rest
-              end
+              yield ();
+              go (prm :: pending) rest
         in
         go [] prms
 
@@ -177,6 +183,8 @@ let spawn dom { go } prm fn k =
 
 exception Not_a_child
 
+(* Here, we verify that we await a children of the current [dom] and run
+   [until_is_resolved] *)
 let rec await dom go prm k =
   let (Prm parent) = dom.current in
   (* NOTE(dinosaure): [children] is more accurate than [dom.todo]! Even if [spawn]
@@ -227,17 +235,22 @@ let run ?g fn =
     in
     let effc :
         type c a. c Effect.t -> ((c, a) Effect.Deep.continuation -> a) option =
-      function
-      | Uid.Uid -> Some (get_uid dom0)
-      | Prm.Spawn (prm, fn) -> Some (spawn dom0 { go } prm fn)
-      | Prm.Yield ->
+     fun eff ->
+      let (Prm.Prm prm) = dom0.current in
+      match (Atomic.get prm.state, eff) with
+      | Prm.Failed exn, _ ->
+          let continuation k = Effect.Deep.discontinue k exn in
+          Some continuation
+      | _, Uid.Uid -> Some (get_uid dom0)
+      | _, Prm.Spawn (prm, fn) -> Some (spawn dom0 { go } prm fn)
+      | _, Prm.Yield ->
           let continuation k =
             runner dom0 { go };
             Effect.Deep.continue k ()
           in
           Some continuation
-      | Prm.Await prm -> Some (await dom0 { go } prm)
-      | _effect -> None
+      | _, Prm.Await prm -> Some (await dom0 { go } prm)
+      | _ -> None
     in
     Effect.Deep.match_with fn () { Effect.Deep.retc; exnc; effc }
   in
@@ -246,16 +259,14 @@ let run ?g fn =
   let g = Option.value ~default:(Random.State.make_self_init ()) g in
   let prm =
     {
-      Prm.uid= Prm.gen ()
+      Prm.uid= Id.gen ()
     ; domain= Uid.parallel ()
     ; state= Atomic.make Prm.Pending
     ; kind= Prm.Domain
     ; children= Tq.make ()
     }
   in
-  let scheduler =
-    { g; todo= Rlist.make g; domain= uid; current= Prm.Prm prm }
-  in
-  go scheduler fn
+  let dom0 = { g; todo= Rlist.make g; domain= uid; current= Prm.Prm prm } in
+  go dom0 fn
 
 let run ?g fn = match run ?g fn with Ok v -> v | Error exn -> raise exn
