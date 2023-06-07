@@ -29,8 +29,8 @@ module Prm : sig
 
       A {b promise} is a function ([unit -> 'a]) that will be executed by the
       scheduler in the near future. The user can launch a promise (and notify
-      the scheduler of a new task to do) as well as wait for the result of a
-      promise (see {!val:await}).
+      by this way the scheduler of a new task to do) as well as wait for the
+      result of a promise (see {!val:await}).
 
       A promise can be executed concurrently with other promises (see
       {!val:call_cc}) or in parallel with other promises (see {!val:call}).

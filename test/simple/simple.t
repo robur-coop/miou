@@ -23,6 +23,7 @@ tasks correctly.
   $ ./t06.exe
 t07 shows that it is not possible to await a task that is not our children
   $ ./t07.exe
+  >>> got an uncatchable exception (runner).
   Fatal error: exception Miou.Not_a_child
   [2]
 t08 shows that we execute 2 [Unix.sleep] in parallel and we should spend only
@@ -32,4 +33,9 @@ t09 is like t03 but for domains, we must wait all children
   $ ./t09.exe
   Launched!
   Fatal error: exception Miou.Still_has_children
+  [2]
+t10 is a bit more complex where 2 domains want to share the same task. Only one
+can [await] the shared task and we check that we actually return an error here
+  $ ./t10.exe
+  Fatal error: exception Miou.Not_a_child
   [2]

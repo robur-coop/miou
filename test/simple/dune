@@ -43,6 +43,11 @@
  (modules t09)
  (libraries unix miou))
 
+(executable
+ (name t10)
+ (modules t10)
+ (libraries miou))
+
 (cram
  (package miou)
  (deps
@@ -54,4 +59,5 @@
   t06.exe
   t07.exe
   t08.exe
-  t09.exe))
+  t09.exe
+  t10.exe))

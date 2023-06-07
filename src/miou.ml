@@ -13,6 +13,9 @@ module Id = struct
     fun () -> Atomic.fetch_and_add value 1
 end
 
+exception Not_a_child
+exception Still_has_children
+
 external reraise : exn -> 'a = "%reraise"
 
 module Prm = struct
@@ -135,7 +138,12 @@ let runner dom go =
              we set our promise to [Resolved]. *)
           ignore (Atomic.compare_and_set prm.Prm.state Pending (Resolved value))
       | Error exn ->
-          ignore (Atomic.compare_and_set prm.Prm.state Pending (Failed exn)))
+          ignore (Atomic.compare_and_set prm.Prm.state Pending (Failed exn))
+      | exception Not_a_child ->
+          Format.eprintf ">>> got an uncatchable exception (runner).\n%!";
+          ignore
+            (Atomic.compare_and_set prm.Prm.state Pending (Failed Prm.Cancelled));
+          reraise Not_a_child)
   | Domain _ as task -> Rlist.push task dom.todo
   | exception Rlist.Empty -> ()
 
@@ -148,7 +156,20 @@ let spawn ~parent dom { go } prm fn k =
     | Prm.Domain ->
         let g = Random.State.copy dom.g in
         let dom' = { g; todo= Rlist.make g; domain= prm.Prm.domain } in
-        let value = Domain.spawn (fun () -> go dom' prm fn) in
+        let value =
+          Domain.spawn (fun () ->
+              try go dom' prm fn with
+              | Not_a_child ->
+                  ignore
+                    (Atomic.compare_and_set prm.Prm.state Pending
+                       (Failed Not_a_child));
+                  reraise Not_a_child
+              | Still_has_children ->
+                  ignore
+                    (Atomic.compare_and_set prm.Prm.state Pending
+                       (Failed Still_has_children));
+                  reraise Still_has_children)
+        in
         (* NOTE(dinosaure): in parallel! *)
         Domain (dom', prm, value)
   in
@@ -157,8 +178,6 @@ let spawn ~parent dom { go } prm fn k =
   Tq.enqueue parent.Prm.children (Prm.Prm prm);
   Rlist.push process dom.todo;
   Effect.Deep.continue k prm
-
-exception Not_a_child
 
 (* Here, we verify that we await a children of the current [dom] and run
    [until_is_resolved] *)
@@ -193,8 +212,6 @@ let collect_pending_promises dom =
     | exception Rlist.Empty -> pending
   in
   go []
-
-exception Still_has_children
 
 let run ?g fn =
   let rec go : type a. scheduler -> a Prm.t -> (unit -> a) -> (a, exn) result =
