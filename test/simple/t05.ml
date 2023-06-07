@@ -11,7 +11,10 @@ let () =
      randomly the first one and we are going to occupy our only cpu.
 
      To improve our test, we probably should use [Prm.call] (which allocates a
-     new domain/cpu). *)
-  let a = Prm.call_cc (fun () -> Unix.sleep 10) in
+     new domain/cpu).
+
+     NOTE(dinosaure): We handle domains now! The [print_endline] ensures that
+     we execute our task. It should appears in any cases. *)
+  let a = Prm.call (fun () -> print_endline "Launched!"; Unix.sleep 10) in
   Prm.cancel a;
   match Prm.await a with Error Miou.Prm.Cancelled -> () | _ -> exit 1

@@ -9,3 +9,7 @@ Simple test
   $ ./t04.exe > out.txt
   $ test -z "$(cat out.txt)" -o "$(cat out.txt)" = "Failed!"
   $ ./t05.exe
+  Launched!
+  $ ./t07.exe
+  Fatal error: exception Miou.Not_a_child
+  [2]

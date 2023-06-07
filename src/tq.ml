@@ -55,7 +55,8 @@ let dequeue t =
         if Atomic.compare_and_set t.head p next then
           let[@warning "-8"] (Some node) = Atomic.get p.next in
           node.value
-        else go ()
+        else
+          go ()
   in
   go ()
 
@@ -68,3 +69,11 @@ let make () =
 let is_empty t =
   let p = Atomic.get t.head in
   match Atomic.get p.next with None -> true | Some _ -> false
+
+let iter ~f t =
+  let rec go p =
+    match Atomic.get p.next with
+    | None -> ()
+    | Some next -> f next.value; go next
+  in
+  go (Atomic.get t.head)

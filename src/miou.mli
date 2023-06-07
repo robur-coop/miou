@@ -41,8 +41,6 @@ module Prm : sig
   (** [call fn] returns a promise which will be executed {b in parallel} with
       other promises. *)
 
-  val sleep : int64 -> unit t
-
   val yield : unit -> unit
   (** Suspends and schedules the current task, this gives other promises of the
       same {!type:Uid.t} a chance to run, useful to be called in cpu-intensive
@@ -59,6 +57,7 @@ module Prm : sig
   val await : 'a t -> ('a, exn) result
   val await_exn : 'a t -> 'a
   val await_first : 'a t list -> ('a, exn) result
+  val await_first_exn : 'a t list -> 'a
 
   (** {2 State of a promise.} *)
 

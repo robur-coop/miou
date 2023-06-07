@@ -40,7 +40,8 @@ let push data (t : 'a t) =
 
 let length t =
   let rec go curr len =
-    if curr == t then len
+    if curr == t then
+      len
     else
       let node = node_of_t curr in
       go node.next (len + 1)
@@ -58,6 +59,9 @@ let take_r (t : 'a t) =
   remove node; node.data
 
 let take t =
-  if is_empty t then raise Empty
-  else if Random.State.bool t.g then take_l t
-  else take_r t
+  if is_empty t then
+    raise Empty
+  else if Random.State.bool t.g then
+    take_l t
+  else
+    take_r t

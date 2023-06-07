@@ -23,6 +23,16 @@
  (modules t05)
  (libraries unix miou))
 
+(executable
+ (name t06)
+ (modules t06)
+ (libraries unix miou))
+
+(executable
+ (name t07)
+ (modules t07)
+ (libraries miou))
+
 (cram
  (package miou)
- (deps t01.exe t02.exe t03.exe t04.exe t05.exe))
+ (deps t01.exe t02.exe t03.exe t04.exe t05.exe t06.exe t07.exe))

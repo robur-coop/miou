@@ -10,3 +10,4 @@ Work-In-Progress
 - [ ] *awaiting for a promise only returns after said promise has awaited its own children*
 - [ ] *children can only be awaited by their direct parent. This excludes grandpas, grandmas, cousins, brothers and sisters*
 - [ ] Add a test about our lock-free queue (like two domains which fill the queue and see the result)
+- [ ] Implement `sleep`
