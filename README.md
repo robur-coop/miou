@@ -8,6 +8,8 @@ Work-In-Progress
 - [ ] explanation
 - [ ] *every created promise must be either awaited or cancelled*
 - [ ] *awaiting for a promise only returns after said promise has awaited its own children*
-- [ ] *children can only be awaited by their direct parent. This excludes grandpas, grandmas, cousins, brothers and sisters*
-- [ ] Add a test about our lock-free queue (like two domains which fill the queue and see the result)
-- [ ] Implement `sleep`
+- [x] *children can only be awaited by their direct parent. This excludes grandpas, grandmas, cousins, brothers and sisters*
+      a test was made, see t07
+- [ ] add a test about our lock-free queue (like two domains which fill the queue and see the result)
+- [ ] implement `sleep`
+- [ ] implement `yield` à la `affect`

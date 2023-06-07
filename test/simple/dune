@@ -38,6 +38,20 @@
  (modules t08)
  (libraries unix miou))
 
+(executable
+ (name t09)
+ (modules t09)
+ (libraries unix miou))
+
 (cram
  (package miou)
- (deps t01.exe t02.exe t03.exe t04.exe t05.exe t06.exe t07.exe t08.exe))
+ (deps
+  t01.exe
+  t02.exe
+  t03.exe
+  t04.exe
+  t05.exe
+  t06.exe
+  t07.exe
+  t08.exe
+  t09.exe))
