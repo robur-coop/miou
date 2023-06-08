@@ -19,6 +19,7 @@ end
 module Id : sig
   type t
 
+  val null : t
   val equal : t -> t -> bool
   val compare : t -> t -> int
   val pp : Format.formatter -> t -> unit
@@ -108,5 +109,15 @@ module Var : sig
   val resolve : 'a t -> 'a -> unit
 end
 
+module Sys : sig
+  type !-'a t
+
+  val make : unit -> 'a t
+  val syscall : 'a t -> ('a, exn) result
+  val uid : 'a t -> Id.t
+end
+
+type syscall = Syscall : 'a Sys.t * (unit -> 'a) -> syscall
+
 val run :
-  ?g:Random.State.t -> ?events:(unit -> unit option) -> (unit -> 'a) -> 'a
+  ?g:Random.State.t -> ?events:(unit -> syscall option) -> (unit -> 'a) -> 'a

@@ -3,13 +3,13 @@ module Tq = Tq
 module Id = struct
   type t = int
 
-  let epsilon = -1
+  let null = -1
   let equal = Int.equal
   let compare = Int.compare
   let pp = Format.pp_print_int
 
   let gen =
-    let value = Atomic.make (epsilon + 1) in
+    let value = Atomic.make (null + 1) in
     fun () -> Atomic.fetch_and_add value 1
 end
 
@@ -45,7 +45,7 @@ module Prm = struct
     | Failed exn -> Error exn
     | Consumed res -> res
 
-  type kind = Task | Domain | Var
+  type kind = Task | Domain | Var | Syscall
 
   type 'a promise = {
       domain: Uid.t
@@ -93,16 +93,6 @@ module Prm = struct
       }
     in
     Effect.perform (Spawn (promise, fn))
-
-  type 'a state = Pending | Resolved of 'a | Failed of exn
-
-  let state { state; _ } =
-    match Atomic.get state with
-    | Pending -> Pending
-    | Resolved v | Consumed (Ok v) -> Resolved v
-    | Failed exn | Consumed (Error exn) -> Failed exn
-
-  let state prm = state (of_public prm)
 
   let rec failed_with : type a. a promise -> exn -> unit =
    fun { state; children; _ } exn ->
@@ -220,6 +210,16 @@ module Prm = struct
 
   let await_all_ign lst =
     match await_all_exn lst with Ok () -> () | Error exn -> raise exn
+
+  type 'a state = Pending | Resolved of 'a | Failed of exn
+
+  let state { state; _ } =
+    match Atomic.get state with
+    | Pending -> Pending
+    | Resolved v | Consumed (Ok v) -> Resolved v
+    | Failed exn | Consumed (Error exn) -> Failed exn
+
+  let state prm = state (of_public prm)
 end
 
 module Var = struct
@@ -252,23 +252,51 @@ module Var = struct
     Effect.perform (Var promise)
 end
 
+module Sys = struct
+  type 'a syscall = 'a Prm.promise
+  type -!'a t
+
+  let of_public : 'a t -> 'a syscall = Obj.magic
+  let to_public : 'a syscall -> 'a t = Obj.magic
+
+  let make () =
+    let domain = Uid.concurrent () in
+    let uid = Id.gen () in
+    let promise =
+      {
+        Prm.uid
+      ; domain
+      ; state= Atomic.make (Prm.Pending : _ Prm.private_state)
+      ; kind= Prm.Syscall
+      ; children= Tq.make ()
+      }
+    in
+    to_public promise
+
+  type _ Effect.t += Syscall : 'a Prm.promise -> ('a, exn) result Effect.t
+
+  let syscall prm = Effect.perform (Syscall (of_public prm))
+  let uid { Prm.uid; _ } = uid
+  let uid syscall = uid (of_public syscall)
+end
+
+type syscall = Syscall : 'a Sys.t * (unit -> 'a) -> syscall
+
 type process =
   | Fiber : 'a Prm.promise * (unit -> 'a) -> process
-  | Domain : scheduler * 'a Prm.promise * ('a, exn) result Domain.t -> process
+  | Domain : dom * 'a Prm.promise * ('a, exn) result Domain.t -> process
 
-and scheduler = {
+and dom = {
     g: Random.State.t
   ; todo: process Rlist.t
   ; domain: Uid.t
-  ; events: unit -> unit option
+  ; events: unit -> syscall option
 }
 
-type go = {
-    go: 'a. scheduler -> 'a Prm.promise -> (unit -> 'a) -> ('a, exn) result
-}
+type go = { go: 'a. dom -> 'a Prm.promise -> (unit -> 'a) -> ('a, exn) result }
 [@@unboxed]
 
-let rec runner dom go =
+let runner dom go =
   match Rlist.take dom.todo with
   | Fiber (prm, fn) when Prm.is_pending (Prm.to_public prm) -> (
       let g = Random.State.copy dom.g in
@@ -290,21 +318,20 @@ let rec runner dom go =
           ignore
             (Atomic.compare_and_set prm.Prm.state Pending (Failed Prm.Cancelled));
           reraise exn)
-  | Domain (_, prm, _) as task when Prm.is_pending (Prm.to_public prm) ->
-      Rlist.push task dom.todo
-  | Fiber _ | Domain _ | (exception Rlist.Empty) ->
-      let event = dom.events () in
-      if Option.is_some event then
-        runner dom go
-      else
-        Domain.cpu_relax ()
+  | Domain (_, prm, _) as process when Prm.is_pending (Prm.to_public prm) ->
+      Rlist.push process dom.todo
+  | Fiber _ | Domain _ | (exception Rlist.Empty) -> (
+      match dom.events () with
+      | Some (Syscall (prm, fn)) ->
+          Rlist.push (Fiber (Sys.of_public prm, fn)) dom.todo
+      | None -> Domain.cpu_relax ())
 
 let get_uid dom k = Effect.Deep.continue k dom.domain
 
 let spawn ~parent dom { go } prm fn k =
   let process =
     match prm.Prm.kind with
-    | Prm.Var ->
+    | Prm.Var | Prm.Syscall ->
         assert false (* XXX(dinosaure): this case should **never** occur! *)
     | Prm.Task -> Fiber (prm, fn)
     | Prm.Domain ->
@@ -367,6 +394,11 @@ and until_is_resolved dom go prm k =
       runner dom go;
       until_is_resolved dom go prm k
 
+let syscall ~parent dom go prm k =
+  assert (prm.Prm.kind = Prm.Syscall);
+  Tq.enqueue parent.Prm.children (Prm.Prm prm);
+  await ~parent dom go prm k
+
 let collect_pending_children prm =
   let rec go pending =
     match Tq.dequeue prm.Prm.children with
@@ -377,8 +409,7 @@ let collect_pending_children prm =
   go []
 
 let run ?g ?(events = Fun.const None) fn =
-  let rec go :
-      type a. scheduler -> a Prm.promise -> (unit -> a) -> (a, exn) result =
+  let rec go : type a. dom -> a Prm.promise -> (unit -> a) -> (a, exn) result =
    fun dom0 cur fn ->
     let retc value =
       (* NOTE(dinosaure): here, we set the current promise to [Resolved] but
@@ -420,6 +451,7 @@ let run ?g ?(events = Fun.const None) fn =
           Some continuation
       | _, Uid.Uid -> Some (get_uid dom0)
       | _, Prm.Spawn (prm, fn) -> Some (spawn ~parent:cur dom0 { go } prm fn)
+      | _, Sys.Syscall prm -> Some (syscall ~parent:cur dom0 { go } prm)
       | _, Var.Var prm -> Some (var ~parent:cur prm)
       | _, Prm.Yield ->
           let continuation k =
