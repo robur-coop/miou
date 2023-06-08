@@ -23,7 +23,6 @@ tasks correctly.
   $ ./t06.exe
 t07 shows that it is not possible to await a task that is not our children
   $ ./t07.exe
-  >>> got an uncatchable exception (runner).
   Fatal error: exception Miou.Not_a_child
   [2]
 t08 shows that we execute 2 [Unix.sleep] in parallel and we should spend only
@@ -39,3 +38,11 @@ can [await] the shared task and we check that we actually return an error here
   $ ./t10.exe
   Fatal error: exception Miou.Not_a_child
   [2]
+t11 is a special case where we give an opportunity for tasks to be resolved.
+However, we does not consume them so we still have the [Still_hash_children]
+issue
+  $ ./t11.exe
+  Fatal error: exception Miou.Still_has_children
+  [2]
+t12 shows a simple usage of _variables_
+  $ ./t12.exe

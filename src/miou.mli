@@ -36,7 +36,7 @@ module Prm : sig
       {!val:call_cc}) or in parallel with other promises (see {!val:call}).
   *)
 
-  type 'a t
+  type !+'a t
   (** Type of promises. *)
 
   (** {2 Launch a promise.} *)
@@ -66,15 +66,28 @@ module Prm : sig
   val await_exn : 'a t -> 'a
   val await_first : 'a t list -> ('a, exn) result
   val await_first_exn : 'a t list -> 'a
+  val await_one : 'a t list -> ('a, exn) result
+  val await_one_exn : 'a t list -> 'a
+  val await_all_ign : 'a t list -> unit
+  val await_all_exn : 'a t list -> (unit, exn) result
 
   (** {2 State of a promise.} *)
 
-  type 'a state =
+  type !+'a state =
     | Pending  (** The task is not yet resolved. *)
     | Resolved of 'a  (** The normal termination. *)
+    | Consumed of ('a, exn) result
     | Failed of exn  (** Abnormal termination. *)
 
   val state : 'a t -> 'a state
 end
 
-val run : ?g:Random.State.t -> (unit -> 'a) -> 'a
+module Var : sig
+  type !-'a t
+
+  val make : unit -> 'a Prm.t * 'a t
+  val resolve : 'a t -> 'a -> unit
+end
+
+val run :
+  ?g:Random.State.t -> ?events:(unit -> unit option) -> (unit -> 'a) -> 'a

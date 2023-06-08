@@ -13,3 +13,4 @@ Work-In-Progress
 - [ ] add a test about our lock-free queue (like two domains which fill the queue and see the result)
 - [ ] implement `sleep`
 - [ ] implement `yield` à la `affect`
+- [ ] properly `Domain.join` domains at the end
