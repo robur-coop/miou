@@ -46,3 +46,6 @@ issue
   [2]
 t12 shows a simple usage of _variables_
   $ ./t12.exe
+t13 shows that [cancel] does not make a transition state when a promise is
+already resolved
+  $ ./t13.exe

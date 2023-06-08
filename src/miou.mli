@@ -59,6 +59,26 @@ module Prm : sig
   exception Cancelled
 
   val cancel : 'a t -> unit
+  (** Cancellation allows the parent to kill a child using the associated
+      promise. Cancellation marks the promise as {i consumed}, which means that
+      you can forget about the promise, and [miou] will not be informed that the
+      child is still alive. For instance, this is a valid code:
+
+      {[
+        # Miou.(run @@ fun () -> Prm.cancel (Prm.call (Fun.const 1))) ;;
+        - : unit = ()
+      ]}
+
+      We simply consider that cancellation is equivalent to looking into the
+      promise (in other words, by using [cancel], you know that at worst, the
+      state of the promise is [Failed Cancelled]). It may happen that you wish
+      to cancel a promise that has already been resolved; in this case, no state
+      transition are made.
+
+      If you cancel a task, all the children in that task will be cancelled too.
+      Be careful, though, as cancelling them requires you to somehow observe the
+      transition of state of these children. If you follow Miou's rules, you
+      should be looking after your children anyway. *)
 
   (** {2 Await a promise.} *)
 
@@ -76,7 +96,6 @@ module Prm : sig
   type !+'a state =
     | Pending  (** The task is not yet resolved. *)
     | Resolved of 'a  (** The normal termination. *)
-    | Consumed of ('a, exn) result
     | Failed of exn  (** Abnormal termination. *)
 
   val state : 'a t -> 'a state

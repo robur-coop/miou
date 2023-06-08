@@ -21,26 +21,23 @@ external reraise : exn -> 'a = "%reraise"
 module Prm = struct
   exception Cancelled
 
-  type 'a state =
+  type 'a private_state =
     | Pending  (** The task is not yet resolved. *)
     | Resolved of 'a  (** The normal termination. *)
     | Consumed of ('a, exn) result
         (** When the parent of the task consumed the termination. *)
     | Failed of exn  (** Abnormal termination. *)
 
-  (* NOTE(dinosaure): the state machine is:
-     1) A [Pending] promise can be set to [Resolved], [Failed] or [Consumed].
-        For the [Consumed] update, it can be done only by the user via [await]
-        or [cancel]. [Resolved] or [Failed] can be set by the promise itself.
-     2) A [Resolved] promise can be set to [Consumed] only by [await] or
-        [cancel]
-     3) A [Failed] promise can be set to [Consumed] only by [await] or [cancel]
+  (* NOTE(dinosaure): Usually, we should only have 3 states:
+     - Pending
+     - Resolved
+     - Failed
 
-     The [Consumed] state prove that the user is aware about the state of the
-     promise because only [await] or [cancel] is able to set the state to
-     [Consumed]. By this way, we can check that the user _consumed_ all children
-     of the current task and we can safely stop the current task then.
-  *)
+     However, we want to check that the user _consumed_ the result of the
+     promise. The rule is: in this implementation nobody can set the state
+     to [Consumed] except [await] and [cancel]. The [Consumed] is of interest
+     only to us. We provide a _public_ [state] and a _private_ [internal_state].
+     The public one will only informs our usual states. *)
 
   let to_result_exn = function
     | Pending -> invalid_arg "Prm.to_result_exn"
@@ -52,7 +49,7 @@ module Prm = struct
 
   type 'a promise = {
       domain: Uid.t
-    ; state: 'a state Atomic.t
+    ; state: 'a private_state Atomic.t
     ; kind: kind
     ; children: w Tq.t
     ; uid: Id.t
@@ -61,6 +58,8 @@ module Prm = struct
   and w = Prm : 'a promise -> w
   and +!'a t
 
+  (* NOTE(dinosaure): this is a bit ugly but we must expose [+!'a] to the user
+     and provide, by this way, a type-safe usafe of promises and [Var.t]. *)
   let to_public : 'a promise -> 'a t = Obj.magic
   let of_public : 'a t -> 'a promise = Obj.magic
 
@@ -95,26 +94,41 @@ module Prm = struct
     in
     Effect.perform (Spawn (promise, fn))
 
-  let state { state; _ } = Atomic.get state
+  type 'a state = Pending | Resolved of 'a | Failed of exn
+
+  let state { state; _ } =
+    match Atomic.get state with
+    | Pending -> Pending
+    | Resolved v | Consumed (Ok v) -> Resolved v
+    | Failed exn | Consumed (Error exn) -> Failed exn
+
   let state prm = state (of_public prm)
 
   let rec failed_with : type a. a promise -> exn -> unit =
    fun { state; children; _ } exn ->
-    Tq.iter ~f:(fun (Prm p) -> failed_with p Cancelled) children;
-    let was_pending =
-      Atomic.compare_and_set state Pending (Consumed (Error exn))
-    in
+    Tq.iter ~f:(fun (Prm p) -> cancelled p) children;
+
     (* NOTE(dinosaure): in some cases, we want to [cancel] a promise which is
-       already resolved. In this situation, nobody will really await this
-       cancelled task and we will trigger the [Still_has_children]. In the case
-       where the task was not pending, we must set the [state] to [Consumed] and
-       assume that even if nobody consumed the value, the asked cancellation
-       _consumed_ it. *)
-    if not was_pending then
+       already resolved. In this situation, the user will **not** really await
+       this cancelled task and we will trigger the [Still_has_children]. In the
+       case where the task was not pending and we want to cancel it, we must set
+       the [state] to [Consumed] and assume that even if nobody consumed the
+       value, the asked cancellation _consumed_ it in a certain way.
+
+       There is, however, one subtlety concerning children. The cancellation
+       must be propagated, but without confirming that they have been
+       [Consumed] by someone. [cancelled] does the propagation with [Failed]
+       instead of [Consumed]. *)
+    if not (Atomic.compare_and_set state Pending (Consumed (Error exn))) then
       match Atomic.get state with
       | Resolved value -> Atomic.set state (Consumed (Ok value))
       | Failed exn -> Atomic.set state (Consumed (Error exn))
       | _ -> ()
+
+  and cancelled : type a. a promise -> unit =
+   fun { state; children; _ } ->
+    Tq.iter ~f:(fun (Prm p) -> cancelled p) children;
+    ignore (Atomic.compare_and_set state Pending (Failed Cancelled))
 
   let failed_with prm = failed_with (of_public prm)
   let cancel prm = failed_with prm Cancelled
@@ -230,7 +244,7 @@ module Var = struct
       {
         Prm.uid
       ; domain
-      ; state= Atomic.make Prm.Pending
+      ; state= Atomic.make (Prm.Pending : _ Prm.private_state)
       ; kind= Prm.Var
       ; children= Tq.make ()
       }
@@ -320,12 +334,12 @@ let var ~parent prm k =
   Tq.enqueue parent.Prm.children (Prm.Prm prm);
   Effect.Deep.continue k (Prm.to_public prm, Var.to_public prm)
 
-(* Here, we verify that we await a children of the current [dom] and run
-   [until_is_resolved] *)
+(* Here, we verify that we await a children of the current [parent] and run
+   [until_is_resolved]. The [dom] contains a list of tasks (see [dom.todo])
+   which should only resolve parent's children. So we must check that we want to
+   [await] a true child because we only have the ability to run tasks from
+   [dom.todo]. *)
 let rec await ~parent dom go prm k =
-  (* NOTE(dinosaure): [children] is more accurate than [dom.todo]! Even if
-     [spawn] adds [prm] into [children] AND [todo], the first one is
-     thread-safe. It's better to use it in our context. *)
   let res = ref false in
   Tq.iter
     ~f:(fun (Prm.Prm child) -> res := !res || child.uid = prm.Prm.uid)
@@ -348,27 +362,10 @@ and until_is_resolved dom go prm k =
       ignore (Atomic.compare_and_set prm.state res (Consumed (Error exn)));
       Effect.Deep.continue k (Error exn)
   | Pending ->
+      (* NOTE(dinosaure): here, we give a chance to do another task which
+         can probably set our current [prm] to [Resolved]. *)
       runner dom go;
       until_is_resolved dom go prm k
-
-let collect_pending_promises dom =
-  let rec go pending =
-    match Rlist.take dom.todo with
-    | Fiber (prm, _) when Prm.is_consumed prm -> go pending
-    | Domain (_, prm, _) when Prm.is_consumed prm ->
-        (* TODO(dinosaure): we probably should [Domain.join] to be sure that the
-           resource is released. However, it seems that when we cancel a domain
-           child from its parent, it never enters into the [Failed] case (it
-           does not have the opportunity). The basic solution will be to
-           implement our [Unix.sleep] function which will call [runner]
-           sometimes and give an opportunity to the domain to see that it was
-           already [Cancelled]. *)
-        go pending
-    | Fiber (prm, _) -> go (Prm.Prm prm :: pending)
-    | Domain (_, prm, _) -> go (Prm.Prm prm :: pending)
-    | exception Rlist.Empty -> pending
-  in
-  go []
 
 let collect_pending_children prm =
   let rec go pending =
@@ -391,7 +388,9 @@ let run ?g ?(events = Fun.const None) fn =
       match collect_pending_children cur with
       | [] ->
           (* NOTE(dinosaure): it's safe to use [to_result_exn]. At least,
-             [cur.Prm.state] was set to [Resolved _]. *)
+             [cur.Prm.state] was set to [Resolved _] or the state is different
+             than [Pending]. [to_result_exn] fails only when we have the
+             [Pending] case. *)
           Prm.to_result_exn (Atomic.get cur.Prm.state)
       | _ -> raise Still_has_children
     in
@@ -399,19 +398,23 @@ let run ?g ?(events = Fun.const None) fn =
       | (Not_a_child | Still_has_children) as exn -> reraise exn
       | exn ->
           (* NOTE(dinosaure): here, we must set the promise to [Failed] and
-             expect that the user [cancel]led or [await]ed the task. *)
+             expect that the user [cancel]led or [await]ed the task.
+             TODO(dinosaure): we probably should use [compare_and_set] instead
+             of [set] to be sure to not overlap a [Failed]/[Resolved] state. *)
           Atomic.set cur.Prm.state (Failed exn);
           Error exn
     in
     let effc :
         type c a. c Effect.t -> ((c, a) Effect.Deep.continuation -> a) option =
      fun eff ->
-      (* NOTE(dinosaure): we must be preemptive on the [Failed] case. *)
+      (* NOTE(dinosaure): we must be preemptive on the [Failed] case. This case mainly
+         appear when the parent was cancelled. [cancel] set our state to [Failed Cancelled]
+         and we must [discontinue] the current process. *)
       match (Atomic.get cur.state, eff) with
       | Prm.Failed exn, _ ->
           let continuation k =
-            (* NOTE(dinosaure): children should be cancelled. *)
-            assert (collect_pending_promises dom0 = []);
+            (* NOTE(dinosaure): children's children should be cancelled too. *)
+            assert (collect_pending_children cur = []);
             Effect.Deep.discontinue k exn
           in
           Some continuation
@@ -436,7 +439,7 @@ let run ?g ?(events = Fun.const None) fn =
     {
       Prm.uid= Id.gen ()
     ; domain= Uid.parallel ()
-    ; state= Atomic.make Prm.Pending
+    ; state= Atomic.make (Prm.Pending : _ Prm.private_state)
     ; kind= Prm.Domain
     ; children= Tq.make ()
     }
