@@ -1,3 +1,5 @@
+[@@@warning "-37"]
+
 module Tq = Tq
 
 module Id = struct
@@ -45,7 +47,8 @@ module Prm = struct
     | Failed exn -> Error exn
     | Consumed res -> res
 
-  type kind = Task | Domain | Var | Syscall
+  type kind = Task | Domain | Syscall
+  type resource = Resource : 'a * ('a -> unit) -> resource
 
   type 'a promise = {
       domain: Uid.t
@@ -53,6 +56,7 @@ module Prm = struct
     ; kind: kind
     ; children: w Tq.t
     ; uid: Id.t
+    ; resources: resource Tq.t
   }
 
   and w = Prm : 'a promise -> w
@@ -76,6 +80,7 @@ module Prm = struct
       ; state= Atomic.make Pending
       ; kind= Task
       ; children= Tq.make ()
+      ; resources= Tq.make ()
       }
     in
     Effect.perform (Spawn (promise, fn))
@@ -90,6 +95,7 @@ module Prm = struct
       ; state= Atomic.make Pending
       ; kind= Domain
       ; children= Tq.make ()
+      ; resources= Tq.make ()
       }
     in
     Effect.perform (Spawn (promise, fn))
@@ -222,36 +228,6 @@ module Prm = struct
   let state prm = state (of_public prm)
 end
 
-module Var = struct
-  type 'a var = 'a Prm.promise
-  type -!'a t
-
-  let of_public : 'a t -> 'a var = Obj.magic
-  let to_public : 'a var -> 'a t = Obj.magic
-
-  let resolve { Prm.state; _ } value =
-    ignore (Atomic.compare_and_set state Prm.Pending (Prm.Resolved value));
-    Prm.yield ()
-
-  let resolve var value = resolve (of_public var) value
-
-  type _ Effect.t += Var : 'a Prm.promise -> ('a Prm.t * 'a t) Effect.t
-
-  let make () =
-    let domain = Uid.concurrent () in
-    let uid = Id.gen () in
-    let promise =
-      {
-        Prm.uid
-      ; domain
-      ; state= Atomic.make (Prm.Pending : _ Prm.private_state)
-      ; kind= Prm.Var
-      ; children= Tq.make ()
-      }
-    in
-    Effect.perform (Var promise)
-end
-
 module Sysc = struct
   type 'a syscall = 'a Prm.promise
   type -!'a t
@@ -269,6 +245,7 @@ module Sysc = struct
       ; state= Atomic.make (Prm.Pending : _ Prm.private_state)
       ; kind= Prm.Syscall
       ; children= Tq.make ()
+      ; resources= Tq.make ()
       }
     in
     to_public promise
@@ -290,7 +267,7 @@ and dom = {
     g: Random.State.t
   ; todo: process Rlist.t
   ; domain: Uid.t
-  ; events: unit -> syscall option
+  ; events: unit -> syscall list option
 }
 
 type go = { go: 'a. dom -> 'a Prm.promise -> (unit -> 'a) -> ('a, exn) result }
@@ -309,8 +286,8 @@ let runner dom go =
       match go.go dom' prm fn with
       | Ok value ->
           (* NOTE(dinosaure): here, we set the promise to [Resolved] **only if**
-             nobody set it to [Failed]. [is_resolved] confirms (if it's [true]) that
-             we set our promise to [Resolved]. *)
+             nobody set it to [Failed]. [is_resolved] confirms (if it's [true])
+             that we set our promise to [Resolved]. *)
           ignore (Atomic.compare_and_set prm.Prm.state Pending (Resolved value))
       | Error exn ->
           ignore (Atomic.compare_and_set prm.Prm.state Pending (Failed exn))
@@ -322,8 +299,11 @@ let runner dom go =
       Rlist.push process dom.todo
   | Fiber _ | Domain _ | (exception Rlist.Empty) -> (
       match dom.events () with
-      | Some (Syscall (prm, fn)) ->
-          Rlist.push (Fiber (Sysc.of_public prm, fn)) dom.todo
+      | Some tasks ->
+          List.iter
+            (fun (Syscall (prm, fn)) ->
+              Rlist.push (Fiber (Sysc.of_public prm, fn)) dom.todo)
+            tasks
       | None -> Domain.cpu_relax ())
 
 let get_uid dom k = Effect.Deep.continue k dom.domain
@@ -331,7 +311,7 @@ let get_uid dom k = Effect.Deep.continue k dom.domain
 let spawn ~parent dom { go } prm fn k =
   let process =
     match prm.Prm.kind with
-    | Prm.Var | Prm.Syscall ->
+    | Prm.Syscall ->
         assert false (* XXX(dinosaure): this case should **never** occur! *)
     | Prm.Task -> Fiber (prm, fn)
     | Prm.Domain ->
@@ -356,11 +336,6 @@ let spawn ~parent dom { go } prm fn k =
   Rlist.push process dom.todo;
   Effect.Deep.continue k (Prm.to_public prm)
 
-let var ~parent prm k =
-  assert (prm.Prm.kind = Prm.Var);
-  Tq.enqueue parent.Prm.children (Prm.Prm prm);
-  Effect.Deep.continue k (Prm.to_public prm, Var.to_public prm)
-
 let rec until_is_resolved dom go (prm : 'a Prm.promise) k =
   (* NOTE(dinosaure): we do this loop until [prm] is resolved regardless the
      [prm]'s kind. Indeed, even for a [Domain], we set [prm.state] at the final
@@ -379,11 +354,11 @@ let rec until_is_resolved dom go (prm : 'a Prm.promise) k =
       runner dom go;
       until_is_resolved dom go prm k
 
-(* Here, we verify that we await a children of the current [parent] and run
-   [until_is_resolved]. The [dom] contains a list of tasks (see [dom.todo])
-   which should only resolve parent's children. So we must check that we want to
-   [await] a true child because we only have the ability to run tasks from
-   [dom.todo]. *)
+(* NOTE(dinosaure): here, we verify that we await a children of the current
+   [parent] and run [until_is_resolved]. The [dom] contains a list of tasks (see
+   [dom.todo]) which should only resolve parent's children. So we must check
+   that we want to [await] a true child because we only have the ability to run
+   tasks from [dom.todo]. *)
 let await ~parent dom go prm k =
   let res = ref false in
   Tq.iter
@@ -438,9 +413,9 @@ let run ?g ?(events = Fun.const None) fn =
     let effc :
         type c a. c Effect.t -> ((c, a) Effect.Deep.continuation -> a) option =
      fun eff ->
-      (* NOTE(dinosaure): we must be preemptive on the [Failed] case. This case mainly
-         appear when the parent was cancelled. [cancel] set our state to [Failed Cancelled]
-         and we must [discontinue] the current process. *)
+      (* NOTE(dinosaure): we must be preemptive on the [Failed] case. This case
+         mainly appear when the parent was cancelled. [cancel] set our state to
+         [Failed Cancelled] and we must [discontinue] the current process. *)
       match (Atomic.get cur.state, eff) with
       | Prm.Consumed (Error exn), _ | Prm.Failed exn, _ ->
           let continuation k =
@@ -452,7 +427,6 @@ let run ?g ?(events = Fun.const None) fn =
       | _, Uid.Uid -> Some (get_uid dom0)
       | _, Prm.Spawn (prm, fn) -> Some (spawn ~parent:cur dom0 { go } prm fn)
       | _, Sysc.Syscall prm -> Some (syscall ~parent:cur dom0 { go } prm)
-      | _, Var.Var prm -> Some (var ~parent:cur prm)
       | _, Prm.Yield ->
           let continuation k =
             runner dom0 { go };
@@ -474,6 +448,7 @@ let run ?g ?(events = Fun.const None) fn =
     ; state= Atomic.make (Prm.Pending : _ Prm.private_state)
     ; kind= Prm.Domain
     ; children= Tq.make ()
+    ; resources= Tq.make ()
     }
   in
   let dom0 = { g; todo= Rlist.make g; domain= uid; events } in

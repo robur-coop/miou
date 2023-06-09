@@ -44,8 +44,6 @@ issue
   $ ./t11.exe
   Fatal error: exception Miou.Still_has_children
   [2]
-t12 shows a simple usage of _variables_
-  $ ./t12.exe
-t13 shows that [cancel] does not make a transition state when a promise is
+t12 shows that [cancel] does not make a transition state when a promise is
 already resolved
-  $ ./t13.exe
+  $ ./t12.exe

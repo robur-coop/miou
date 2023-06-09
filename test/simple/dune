@@ -56,11 +56,6 @@
 (executable
  (name t12)
  (modules t12)
- (libraries unix miou))
-
-(executable
- (name t13)
- (modules t13)
  (libraries miou))
 
 (cram
@@ -77,5 +72,4 @@
   t09.exe
   t10.exe
   t11.exe
-  t12.exe
-  t13.exe))
+  t12.exe))

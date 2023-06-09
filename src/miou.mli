@@ -17,9 +17,16 @@ module Tq : sig
 end
 
 module Id : sig
+  (** A unique identifier for promises. *)
+
   type t
+  (** The type of identifiers. *)
 
   val null : t
+  (** [null] is an {i impossible} value of {!type:t}. Actually, {!type:t} is
+      used to identify {!type:Prm.t} and they will {b never} have such
+      value as their identifiers. *)
+
   val equal : t -> t -> bool
   val compare : t -> t -> int
   val pp : Format.formatter -> t -> unit
@@ -102,17 +109,63 @@ module Prm : sig
   val state : 'a t -> 'a state
 end
 
-module Var : sig
-  type !-'a t
-
-  val make : unit -> 'a Prm.t * 'a t
-  val resolve : 'a t -> 'a -> unit
-end
-
 module Sysc : sig
+  (** Syscalls
+
+      [miou] does not interact with the system, only with the OCaml runtime. As
+      a result, it does not implement the usual input/output operations.
+      Nevertheless, it offers a fairly simple API for using functions that
+      interact with the system (and that can, above all, block).
+
+      One of the rules of [miou] is never to give him blocking functions to eat
+      (in fact, he has very strict - but very simple - nutritional constraints).
+
+      On the other hand, the system can inform you when a function is
+      non-blocking (and can therefore be given to [miou]). The idea is to inform
+      [miou] of the existence of a {i promise}, which it will then try to
+      resolve. Of course, it won't be able to, but as a last resort, [miou] will
+      come back to you to ask for a possible task to resolve this promise. It
+      will do this via an user's defined function, which you can specify using
+      the {!val:run} function (see [events] argument).
+
+      This user's defined function return a {!type:syscall} which is a promise
+      associated with a {b non-blocking} task ([unit -> 'a]) that would resolve
+      it. At last, [miou] will be able to fulfil your promise!
+
+      For more information on this API, a tutorial is available on how to
+      implement {i sleepers}: tasks that block your process for a time.
+   *)
+
   type !-'a t
+  (** Type of syscalls. *)
 
   val make : unit -> 'a t
+  (** [make ()] creates a {i promise} (something like {!type:Prm.t}) that
+      will {b never} be resolved. For the example, this code does not terminate:
+
+      {[
+        # Miou.(run @@ fun () -> let v = Sysc.make () in Sysc.await v) ;;
+      ]}
+
+      However, if you keep this promise somewhere and specify an "events"
+      function that proposes a task to resolve it, the program should
+      then terminate:
+
+      {[
+        # let global = ref None ;;
+        # let events () = match !global with
+          | Some prm -> Some [ Miou.syscall prm (Fun.const ()) ]
+          | None -> None
+          ;;
+        # Miou.(run ~events @@ fun () ->
+          let v = Sysc.make () in
+          global := Some v; Sysc.await v)
+        - : (unit, exn) result = Ok ()
+      ]}
+
+      As you can see, the use of {!val:make} is very intrinsic to the creation
+      of the [events] function. *)
+
   val await : 'a t -> ('a, exn) result
   val uid : 'a t -> Id.t
 end
@@ -122,4 +175,7 @@ type syscall
 val syscall : 'a Sysc.t -> (unit -> 'a) -> syscall
 
 val run :
-  ?g:Random.State.t -> ?events:(unit -> syscall option) -> (unit -> 'a) -> 'a
+     ?g:Random.State.t
+  -> ?events:(unit -> syscall list option)
+  -> (unit -> 'a)
+  -> 'a
