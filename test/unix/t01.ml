@@ -2,6 +2,7 @@ open Miou
 open Miouu
 
 let () = Random.self_init ()
+let () = Printexc.record_backtrace true
 
 let rec random_float ?not_equal_to max =
   match not_equal_to with
@@ -15,8 +16,8 @@ let rec random_float ?not_equal_to max =
         m
 
 let () =
-  let a = random_float 5. in
-  let b = random_float ~not_equal_to:a 5. in
+  let a = random_float 10. in
+  let b = random_float ~not_equal_to:a 10. in
   let t0 = Unix.gettimeofday () in
   let () =
     Miouu.run @@ fun () ->

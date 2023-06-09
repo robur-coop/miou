@@ -109,15 +109,17 @@ module Var : sig
   val resolve : 'a t -> 'a -> unit
 end
 
-module Sys : sig
+module Sysc : sig
   type !-'a t
 
   val make : unit -> 'a t
-  val syscall : 'a t -> ('a, exn) result
+  val await : 'a t -> ('a, exn) result
   val uid : 'a t -> Id.t
 end
 
-type syscall = Syscall : 'a Sys.t * (unit -> 'a) -> syscall
+type syscall
+
+val syscall : 'a Sysc.t -> (unit -> 'a) -> syscall
 
 val run :
   ?g:Random.State.t -> ?events:(unit -> syscall option) -> (unit -> 'a) -> 'a

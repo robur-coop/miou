@@ -252,7 +252,7 @@ module Var = struct
     Effect.perform (Var promise)
 end
 
-module Sys = struct
+module Sysc = struct
   type 'a syscall = 'a Prm.promise
   type -!'a t
 
@@ -275,12 +275,12 @@ module Sys = struct
 
   type _ Effect.t += Syscall : 'a Prm.promise -> ('a, exn) result Effect.t
 
-  let syscall prm = Effect.perform (Syscall (of_public prm))
+  let await prm = Effect.perform (Syscall (of_public prm))
   let uid { Prm.uid; _ } = uid
   let uid syscall = uid (of_public syscall)
 end
 
-type syscall = Syscall : 'a Sys.t * (unit -> 'a) -> syscall
+type syscall = Syscall : 'a Sysc.t * (unit -> 'a) -> syscall
 
 type process =
   | Fiber : 'a Prm.promise * (unit -> 'a) -> process
@@ -323,7 +323,7 @@ let runner dom go =
   | Fiber _ | Domain _ | (exception Rlist.Empty) -> (
       match dom.events () with
       | Some (Syscall (prm, fn)) ->
-          Rlist.push (Fiber (Sys.of_public prm, fn)) dom.todo
+          Rlist.push (Fiber (Sysc.of_public prm, fn)) dom.todo
       | None -> Domain.cpu_relax ())
 
 let get_uid dom k = Effect.Deep.continue k dom.domain
@@ -361,22 +361,7 @@ let var ~parent prm k =
   Tq.enqueue parent.Prm.children (Prm.Prm prm);
   Effect.Deep.continue k (Prm.to_public prm, Var.to_public prm)
 
-(* Here, we verify that we await a children of the current [parent] and run
-   [until_is_resolved]. The [dom] contains a list of tasks (see [dom.todo])
-   which should only resolve parent's children. So we must check that we want to
-   [await] a true child because we only have the ability to run tasks from
-   [dom.todo]. *)
-let rec await ~parent dom go prm k =
-  let res = ref false in
-  Tq.iter
-    ~f:(fun (Prm.Prm child) -> res := !res || child.uid = prm.Prm.uid)
-    parent.Prm.children;
-  if !res = false then
-    Effect.Deep.discontinue k Not_a_child
-  else
-    until_is_resolved dom go prm k
-
-and until_is_resolved dom go prm k =
+let rec until_is_resolved dom go (prm : 'a Prm.promise) k =
   (* NOTE(dinosaure): we do this loop until [prm] is resolved regardless the
      [prm]'s kind. Indeed, even for a [Domain], we set [prm.state] at the final
      stage (see [retc]). *)
@@ -393,6 +378,21 @@ and until_is_resolved dom go prm k =
          can probably set our current [prm] to [Resolved]. *)
       runner dom go;
       until_is_resolved dom go prm k
+
+(* Here, we verify that we await a children of the current [parent] and run
+   [until_is_resolved]. The [dom] contains a list of tasks (see [dom.todo])
+   which should only resolve parent's children. So we must check that we want to
+   [await] a true child because we only have the ability to run tasks from
+   [dom.todo]. *)
+let await ~parent dom go prm k =
+  let res = ref false in
+  Tq.iter
+    ~f:(fun (Prm.Prm child) -> res := !res || child.uid = prm.Prm.uid)
+    parent.Prm.children;
+  if !res = false then
+    Effect.Deep.discontinue k Not_a_child
+  else
+    until_is_resolved dom go prm k
 
 let syscall ~parent dom go prm k =
   assert (prm.Prm.kind = Prm.Syscall);
@@ -442,7 +442,7 @@ let run ?g ?(events = Fun.const None) fn =
          appear when the parent was cancelled. [cancel] set our state to [Failed Cancelled]
          and we must [discontinue] the current process. *)
       match (Atomic.get cur.state, eff) with
-      | Prm.Failed exn, _ ->
+      | Prm.Consumed (Error exn), _ | Prm.Failed exn, _ ->
           let continuation k =
             (* NOTE(dinosaure): children's children should be cancelled too. *)
             assert (collect_pending_children cur = []);
@@ -451,7 +451,7 @@ let run ?g ?(events = Fun.const None) fn =
           Some continuation
       | _, Uid.Uid -> Some (get_uid dom0)
       | _, Prm.Spawn (prm, fn) -> Some (spawn ~parent:cur dom0 { go } prm fn)
-      | _, Sys.Syscall prm -> Some (syscall ~parent:cur dom0 { go } prm)
+      | _, Sysc.Syscall prm -> Some (syscall ~parent:cur dom0 { go } prm)
       | _, Var.Var prm -> Some (var ~parent:cur prm)
       | _, Prm.Yield ->
           let continuation k =
@@ -481,3 +481,5 @@ let run ?g ?(events = Fun.const None) fn =
 
 let run ?g ?events fn =
   match run ?events ?g fn with Ok v -> v | Error exn -> raise exn
+
+let syscall sys fn = Syscall (sys, fn)
