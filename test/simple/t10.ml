@@ -6,7 +6,7 @@ let () =
   let a =
     Prm.call (fun () ->
         let prm = Prm.call_cc (Fun.const ()) in
-        Atomic.set v (Some prm))
+        Atomic.set v (Some prm); Prm.await_exn prm)
   in
   let b =
     Prm.call (fun () ->

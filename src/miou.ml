@@ -1,5 +1,3 @@
-[@@@warning "-37"]
-
 module Tq = Tq
 
 module Id = struct
@@ -48,7 +46,7 @@ module Prm = struct
     | Consumed res -> res
 
   type kind = Task | Domain | Syscall
-  type resource = Resource : 'a * ('a -> unit) -> resource
+  type resource = Resource : 'a * ('a -> unit) -> resource [@@warning "-37"]
 
   type 'a promise = {
       domain: Uid.t
@@ -262,6 +260,7 @@ and dom = {
   ; todo: process Rlist.t
   ; domain: Uid.t
   ; events: unit -> syscall list option
+  ; wait: Mutex.t * Condition.t
 }
 
 type go = { go: 'a. dom -> 'a Prm.promise -> (unit -> 'a) -> ('a, exn) result }
@@ -273,7 +272,13 @@ let runner dom go prm =
     | Fiber (prm, fn) when Prm.is_pending (Prm.to_public prm) -> (
         let g = Random.State.copy dom.g in
         let dom' =
-          { g; todo= Rlist.make g; domain= prm.domain; events= dom.events }
+          {
+            g
+          ; todo= Rlist.make g
+          ; domain= prm.domain
+          ; events= dom.events
+          ; wait= dom.wait
+          }
         in
         assert (dom.domain = prm.Prm.domain);
         (* TODO(dinosaure): check that! We mention that [yield] gives other
@@ -295,8 +300,10 @@ let runner dom go prm =
     | Domain (_, prm, _) as process when Prm.is_pending (Prm.to_public prm) ->
         Domain.cpu_relax ();
         Rlist.push process dom.todo
-    | Domain (_, prm, domain) when Prm.is_resolved prm ->
-        ignore (Domain.join domain)
+    | Domain (_, prm, domain) when Prm.is_resolved prm -> (
+        (* TODO(dinosaure): [Domain.join] can raise an exception, should we
+           reraise them? *)
+        try ignore (Domain.join domain) with _ -> ())
     | Fiber _ | Domain _ | (exception Rlist.Empty) -> (
         match dom.events () with
         | Some tasks ->
@@ -316,15 +323,25 @@ let spawn ~parent dom { go } prm fn k =
     | Prm.Task -> Fiber (prm, fn)
     | Prm.Domain ->
         let g = Random.State.copy dom.g in
+        let c = snd dom.wait in
         let dom' =
-          { g; todo= Rlist.make g; domain= prm.Prm.domain; events= dom.events }
+          {
+            g
+          ; todo= Rlist.make g
+          ; domain= prm.Prm.domain
+          ; events= dom.events
+          ; wait= (Mutex.create (), Condition.create ())
+          }
         in
         let value =
           Domain.spawn (fun () ->
-              try go dom' prm fn
+              try
+                let v = go dom' prm fn in
+                Condition.signal c; v
               with (Not_a_child | Still_has_children) as exn ->
                 ignore
                   (Atomic.compare_and_set prm.Prm.state Pending (Failed exn));
+                Condition.signal c;
                 reraise exn)
         in
         (* NOTE(dinosaure): in parallel! *)
@@ -335,6 +352,15 @@ let spawn ~parent dom { go } prm fn k =
   Tq.enqueue parent.Prm.children (Prm.Prm prm);
   Rlist.push process dom.todo;
   Effect.Deep.continue k (Prm.to_public prm)
+
+let all_tasks_are_domains dom =
+  let res = ref (not (Rlist.is_empty dom.todo)) in
+  Rlist.iter
+    ~f:(function
+      | Domain (_, prm, _) -> res := !res && Prm.is_pending (Prm.to_public prm)
+      | _ -> res := false)
+    dom.todo;
+  !res
 
 let rec until_is_resolved dom go (prm : 'a Prm.promise) k =
   (* NOTE(dinosaure): we do this loop until [prm] is resolved regardless the
@@ -352,6 +378,9 @@ let rec until_is_resolved dom go (prm : 'a Prm.promise) k =
       (* NOTE(dinosaure): here, we give a chance to do another task which
          can probably set our current [prm] to [Resolved]. *)
       runner dom go prm;
+      if all_tasks_are_domains dom then (
+        let m, c = dom.wait in
+        Mutex.lock m; Condition.wait c m; Mutex.unlock m);
       until_is_resolved dom go prm k
 
 (* NOTE(dinosaure): here, we verify that we await a children of the current
@@ -369,19 +398,6 @@ let await ~parent dom go prm k =
   else
     until_is_resolved dom go prm k
 
-(* NOTE(dinosaure): actually, we implement a busy-wait loop which is not really
-   nice because it consumes cpu. How to fix that? The main issue is when we
-   [await_first] two domains:
-   - we can not [Domain.join] randomly one
-   - these domains should be aware when we cancel them (how?)
-     - if the domain sleeps ([Unix.sleep] or [Unix.select]), it's hard to look
-       at the same time that the domain was cancelled...
-   - we should wait _an interrupt_ instead of busy-wait a resolved promise
-
-   A mechanism with [futex] will be nice where we can communicate between
-   processes and replace our busy-wait loop by a [futex_wait]. However, it's
-   a system-dependent call...
-*)
 let await_first ~parent dom go prms k =
   let f prm =
     let res = ref false in
@@ -399,7 +415,17 @@ let await_first ~parent dom go prms k =
       | [] ->
           let len = List.length unresolved in
           let prm = List.nth unresolved (Random.State.int dom.g len) in
-          runner dom go prm; wait prms
+          (* NOTE(dinosaure): that's a special case here! If we only have
+             domains, that mostly means that we busy-wait that states are
+             updated. We put a [condition] into all [dom]s and children
+             (as domains) should notify via this condition that they finished
+             their job (all children). By this way, we replace the busy-wait
+             loop by an interrupt-driven process. *)
+          if all_tasks_are_domains dom then (
+            let m, c = dom.wait in
+            Mutex.lock m; Condition.wait c m; Mutex.unlock m);
+          runner dom go prm;
+          wait prms
       | _ :: _ ->
           let len = List.length resolved in
           let prm = List.nth resolved (Random.State.int dom.g len) in
@@ -510,7 +536,15 @@ let run ?g ?(events = Fun.const None) fn =
     ; resources= Tq.make ()
     }
   in
-  let dom0 = { g; todo= Rlist.make g; domain= uid; events } in
+  let dom0 =
+    {
+      g
+    ; todo= Rlist.make g
+    ; domain= uid
+    ; events
+    ; wait= (Mutex.create (), Condition.create ())
+    }
+  in
   go dom0 prm fn
 
 let run ?g ?events fn =

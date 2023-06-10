@@ -7,6 +7,7 @@ type 'a node = {
   ; mutable prev: 'a t
   ; mutable next: 'a t
   ; mutable data: 'a
+  ; mutable active: bool
 }
 
 external t_of_node : 'a node -> 'a t = "%identity"
@@ -19,19 +20,22 @@ let make g =
   t
 
 let remove node =
-  let t = t_of_node node in
-  t.prev.next <- t.next;
-  t.next.prev <- t.prev
+  if node.active then begin
+    node.active <- false;
+    let t = t_of_node node in
+    t.prev.next <- t.next;
+    t.next.prev <- t.prev
+  end
 
 let is_empty (t : 'a t) = t.next == t
 
 let add_l data (t : 'a t) =
-  let node = { g= t.g; prev= t; next= t.next; data } in
+  let node = { g= t.g; prev= t; next= t.next; data; active= true } in
   t.next.prev <- t_of_node node;
   t.next <- t_of_node node
 
 let add_r data (t : 'a t) =
-  let node = { g= t.g; prev= t.prev; next= t; data } in
+  let node = { g= t.g; prev= t.prev; next= t; data; active= true } in
   t.prev.next <- t_of_node node;
   t.prev <- t_of_node node
 
@@ -65,3 +69,13 @@ let take t =
     take_l t
   else
     take_r t
+
+let iter ~f t =
+  let rec go cur =
+    if cur != t then begin
+      let node = node_of_t cur in
+      if node.active then f node.data;
+      go node.next
+    end
+  in
+  go t.next
