@@ -301,9 +301,9 @@ let runner dom go prm =
         Domain.cpu_relax ();
         Rlist.push process dom.todo
     | Domain (_, prm, domain) when Prm.is_resolved prm -> (
-        (* TODO(dinosaure): [Domain.join] can raise an exception, should we
-           reraise them? *)
-        try ignore (Domain.join domain) with _ -> ())
+        try ignore (Domain.join domain) with
+        | (Still_has_children | Not_a_child) as exn -> reraise exn
+        | _ -> ())
     | Fiber _ | Domain _ | (exception Rlist.Empty) -> (
         match dom.events () with
         | Some tasks ->
@@ -337,6 +337,8 @@ let spawn ~parent dom { go } prm fn k =
           Domain.spawn (fun () ->
               try
                 let v = go dom' prm fn in
+                (* NOTE(dinosaure): [signal] should be enough when only the
+                   **uniq** parent should waits something from its children. *)
                 Condition.signal c; v
               with (Not_a_child | Still_has_children) as exn ->
                 ignore
@@ -353,7 +355,7 @@ let spawn ~parent dom { go } prm fn k =
   Rlist.push process dom.todo;
   Effect.Deep.continue k (Prm.to_public prm)
 
-let all_tasks_are_domains dom =
+let all_tasks_are_pending_domains dom =
   let res = ref (not (Rlist.is_empty dom.todo)) in
   Rlist.iter
     ~f:(function
@@ -378,7 +380,7 @@ let rec until_is_resolved dom go (prm : 'a Prm.promise) k =
       (* NOTE(dinosaure): here, we give a chance to do another task which
          can probably set our current [prm] to [Resolved]. *)
       runner dom go prm;
-      if all_tasks_are_domains dom then (
+      if all_tasks_are_pending_domains dom then (
         let m, c = dom.wait in
         Mutex.lock m; Condition.wait c m; Mutex.unlock m);
       until_is_resolved dom go prm k
@@ -421,7 +423,7 @@ let await_first ~parent dom go prms k =
              (as domains) should notify via this condition that they finished
              their job (all children). By this way, we replace the busy-wait
              loop by an interrupt-driven process. *)
-          if all_tasks_are_domains dom then (
+          if all_tasks_are_pending_domains dom then (
             let m, c = dom.wait in
             Mutex.lock m; Condition.wait c m; Mutex.unlock m);
           runner dom go prm;
