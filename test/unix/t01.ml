@@ -16,8 +16,9 @@ let rec random_float ?not_equal_to max =
         m
 
 let () =
-  let a = random_float 10. in
-  let b = random_float ~not_equal_to:a 10. in
+  let a = 10. +. random_float 10. in
+  let b = random_float ~not_equal_to:a 20. in
+  let a, b = if a < b then (a, b +. 1.) else (a +. 1., b) in
   let t0 = Unix.gettimeofday () in
   let () =
     Miouu.run @@ fun () ->

@@ -167,7 +167,11 @@ module Sysc : sig
       of the [events] function. *)
 
   val await : 'a t -> ('a, exn) result
+  (** [await syscall] waits for the promise to be resolved and returns its
+      value. *)
+
   val uid : 'a t -> Id.t
+  (** [uid syscall] returns a unique identifier of the promise. *)
 end
 
 type syscall

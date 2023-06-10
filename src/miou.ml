@@ -63,7 +63,7 @@ module Prm = struct
   and +!'a t
 
   (* NOTE(dinosaure): this is a bit ugly but we must expose [+!'a] to the user
-     and provide, by this way, a type-safe usafe of promises and [Var.t]. *)
+     and provide, by this way, a type-safe usafe of promises and [Sysc.t]. *)
   let to_public : 'a promise -> 'a t = Obj.magic
   let of_public : 'a t -> 'a promise = Obj.magic
 
@@ -130,13 +130,16 @@ module Prm = struct
   let cancel prm = failed_with prm Cancelled
 
   (* [is_terminated] means that the task finished with [Resolved] **or**
-     [Failed]. *)
+     [Failed]. This function is **not** exposed. *)
   let is_terminated { state; _ } =
     match Atomic.get state with
     | Resolved _ | Failed _ | Consumed _ -> true
     | Pending -> false
 
-  let is_terminated prm = is_terminated (of_public prm)
+  let is_resolved { state; _ } =
+    match Atomic.get state with
+    | Resolved _ | Consumed (Ok _) -> true
+    | _ -> false
 
   let is_consumed { state; _ } =
     match Atomic.get state with Consumed _ -> true | _ -> false
@@ -156,31 +159,22 @@ module Prm = struct
   let await_exn prm =
     match await prm with Ok value -> value | Error exn -> reraise exn
 
+  type _ Effect.t += Await_first : 'a promise list -> ('a, exn) result Effect.t
+
   let await_first = function
     | [] -> invalid_arg "Prm.await_first"
-    | prms ->
-        let rec go pending = function
-          | [] -> go [] prms
-          | prm :: rest when is_terminated prm ->
-              (* TODO(dinosaure): we probably should aggregate resolved promises
-                 and randomly take one! *)
-              List.iter cancel (List.rev_append pending rest);
-              await prm
-          | prm :: rest ->
-              yield ();
-              go (prm :: pending) rest
-        in
-        go [] prms
+    | prms -> Effect.perform (Await_first (List.map of_public prms))
 
   let await_first_exn lst =
     match await_first lst with Ok v -> v | Error exn -> raise exn
 
+  (* TODO(dinosaure): perform an effect. *)
   let await_one = function
     | [] -> invalid_arg "Prm.await_one"
     | prms ->
         let rec go pending = function
-          | [] -> go [] prms
-          | prm :: _ when is_terminated prm -> await prm
+          | [] -> go [] pending
+          | prm :: _ when is_terminated (of_public prm) -> await prm
           | prm :: rest ->
               yield ();
               go (prm :: pending) rest
@@ -273,38 +267,44 @@ and dom = {
 type go = { go: 'a. dom -> 'a Prm.promise -> (unit -> 'a) -> ('a, exn) result }
 [@@unboxed]
 
-let runner dom go =
-  match Rlist.take dom.todo with
-  | Fiber (prm, fn) when Prm.is_pending (Prm.to_public prm) -> (
-      let g = Random.State.copy dom.g in
-      let dom' =
-        { g; todo= Rlist.make g; domain= prm.domain; events= dom.events }
-      in
-      assert (dom.domain = prm.Prm.domain);
-      (* TODO(dinosaure): check that! We mention that [yield] gives other
-         promises of the **same uid** a chance to run. *)
-      match go.go dom' prm fn with
-      | Ok value ->
-          (* NOTE(dinosaure): here, we set the promise to [Resolved] **only if**
-             nobody set it to [Failed]. [is_resolved] confirms (if it's [true])
-             that we set our promise to [Resolved]. *)
-          ignore (Atomic.compare_and_set prm.Prm.state Pending (Resolved value))
-      | Error exn ->
-          ignore (Atomic.compare_and_set prm.Prm.state Pending (Failed exn))
-      | exception ((Not_a_child | Still_has_children) as exn) ->
-          ignore
-            (Atomic.compare_and_set prm.Prm.state Pending (Failed Prm.Cancelled));
-          reraise exn)
-  | Domain (_, prm, _) as process when Prm.is_pending (Prm.to_public prm) ->
-      Rlist.push process dom.todo
-  | Fiber _ | Domain _ | (exception Rlist.Empty) -> (
-      match dom.events () with
-      | Some tasks ->
-          List.iter
-            (fun (Syscall (prm, fn)) ->
-              Rlist.push (Fiber (Sysc.of_public prm, fn)) dom.todo)
-            tasks
-      | None -> Domain.cpu_relax ())
+let runner dom go prm =
+  if Atomic.get prm.Prm.state = Pending then
+    match Rlist.take dom.todo with
+    | Fiber (prm, fn) when Prm.is_pending (Prm.to_public prm) -> (
+        let g = Random.State.copy dom.g in
+        let dom' =
+          { g; todo= Rlist.make g; domain= prm.domain; events= dom.events }
+        in
+        assert (dom.domain = prm.Prm.domain);
+        (* TODO(dinosaure): check that! We mention that [yield] gives other
+           promises of the **same uid** a chance to run. *)
+        match go.go dom' prm fn with
+        | Ok value ->
+            (* NOTE(dinosaure): here, we set the promise to [Resolved] **only if**
+               nobody set it to [Failed]. [is_resolved] confirms (if it's [true])
+               that we set our promise to [Resolved]. *)
+            ignore
+              (Atomic.compare_and_set prm.Prm.state Pending (Resolved value))
+        | Error exn ->
+            ignore (Atomic.compare_and_set prm.Prm.state Pending (Failed exn))
+        | exception ((Not_a_child | Still_has_children) as exn) ->
+            ignore
+              (Atomic.compare_and_set prm.Prm.state Pending
+                 (Failed Prm.Cancelled));
+            reraise exn)
+    | Domain (_, prm, _) as process when Prm.is_pending (Prm.to_public prm) ->
+        Domain.cpu_relax ();
+        Rlist.push process dom.todo
+    | Domain (_, prm, domain) when Prm.is_resolved prm ->
+        ignore (Domain.join domain)
+    | Fiber _ | Domain _ | (exception Rlist.Empty) -> (
+        match dom.events () with
+        | Some tasks ->
+            List.iter
+              (fun (Syscall (prm, fn)) ->
+                Rlist.push (Fiber (Sysc.of_public prm, fn)) dom.todo)
+              tasks
+        | None -> Domain.cpu_relax ())
 
 let get_uid dom k = Effect.Deep.continue k dom.domain
 
@@ -351,7 +351,7 @@ let rec until_is_resolved dom go (prm : 'a Prm.promise) k =
   | Pending ->
       (* NOTE(dinosaure): here, we give a chance to do another task which
          can probably set our current [prm] to [Resolved]. *)
-      runner dom go;
+      runner dom go prm;
       until_is_resolved dom go prm k
 
 (* NOTE(dinosaure): here, we verify that we await a children of the current
@@ -369,6 +369,45 @@ let await ~parent dom go prm k =
   else
     until_is_resolved dom go prm k
 
+(* NOTE(dinosaure): actually, we implement a busy-wait loop which is not really
+   nice because it consumes cpu. How to fix that? The main issue is when we
+   [await_first] two domains:
+   - we can not [Domain.join] randomly one
+   - these domains should be aware when we cancel them (how?)
+     - if the domain sleeps ([Unix.sleep] or [Unix.select]), it's hard to look
+       at the same time that the domain was cancelled...
+   - we should wait _an interrupt_ instead of busy-wait a resolved promise
+
+   A mechanism with [futex] will be nice where we can communicate between
+   processes and replace our busy-wait loop by a [futex_wait]. However, it's
+   a system-dependent call...
+*)
+let await_first ~parent dom go prms k =
+  let f prm =
+    let res = ref false in
+    Tq.iter
+      ~f:(fun (Prm.Prm child) -> res := !res || child.uid = prm.Prm.uid)
+      parent.Prm.children;
+    !res
+  in
+  if not (List.for_all f prms) then
+    Effect.Deep.discontinue k Not_a_child
+  else
+    let rec wait prms =
+      let resolved, unresolved = List.partition Prm.is_terminated prms in
+      match resolved with
+      | [] ->
+          let len = List.length unresolved in
+          let prm = List.nth unresolved (Random.State.int dom.g len) in
+          runner dom go prm; wait prms
+      | _ :: _ ->
+          let len = List.length resolved in
+          let prm = List.nth resolved (Random.State.int dom.g len) in
+          List.iter (fun prm -> Prm.cancel (Prm.to_public prm)) unresolved;
+          until_is_resolved dom go prm k
+    in
+    wait prms
+
 let syscall ~parent dom go prm k =
   assert (prm.Prm.kind = Prm.Syscall);
   Tq.enqueue parent.Prm.children (Prm.Prm prm);
@@ -383,6 +422,23 @@ let collect_pending_children prm =
   in
   go []
 
+(* NOTE(dinosaure): we must [Domain.join] only promises which are resolved. In
+   the case of a cancelled domain, it is probably not aware of its state.
+   It probably still continues to do something and it is _unjoined_. Even the
+   [Consumed] state lie to us because the cancellation _consumes_ the promise
+   (if a parent cancels a child, we set the state to [Consumed (Error Failed)]).
+*)
+let join_resolved_domains dom =
+  let rec go () =
+    match Rlist.take dom.todo with
+    | Domain (_, prm, domain) when Prm.is_resolved prm ->
+        ignore (Domain.join domain);
+        go ()
+    | _ -> go ()
+    | exception Rlist.Empty -> ()
+  in
+  go ()
+
 let run ?g ?(events = Fun.const None) fn =
   let rec go : type a. dom -> a Prm.promise -> (unit -> a) -> (a, exn) result =
    fun dom0 cur fn ->
@@ -393,6 +449,7 @@ let run ?g ?(events = Fun.const None) fn =
       let _ = Atomic.compare_and_set cur.Prm.state Pending (Resolved value) in
       match collect_pending_children cur with
       | [] ->
+          join_resolved_domains dom0;
           (* NOTE(dinosaure): it's safe to use [to_result_exn]. At least,
              [cur.Prm.state] was set to [Resolved _] or the state is different
              than [Pending]. [to_result_exn] fails only when we have the
@@ -429,11 +486,13 @@ let run ?g ?(events = Fun.const None) fn =
       | _, Sysc.Syscall prm -> Some (syscall ~parent:cur dom0 { go } prm)
       | _, Prm.Yield ->
           let continuation k =
-            runner dom0 { go };
+            runner dom0 { go } cur;
             Effect.Deep.continue k ()
           in
           Some continuation
       | _, Prm.Await prm -> Some (await ~parent:cur dom0 { go } prm)
+      | _, Prm.Await_first prms ->
+          Some (await_first ~parent:cur dom0 { go } prms)
       | _ -> None
     in
     Effect.Deep.match_with fn () { Effect.Deep.retc; exnc; effc }
