@@ -18,6 +18,8 @@ exception Still_has_children
 
 external reraise : exn -> 'a = "%reraise"
 
+let really_ignore fn = match fn () with _ -> () | exception _ -> ()
+
 module Prm = struct
   exception Cancelled
 
@@ -261,10 +263,14 @@ and dom = {
   ; domain: Uid.t
   ; events: unit -> syscall list option
   ; wait: Mutex.t * Condition.t
+  ; parent: (Mutex.t * Condition.t) option
 }
 
 type go = { go: 'a. dom -> 'a Prm.promise -> (unit -> 'a) -> ('a, exn) result }
 [@@unboxed]
+
+let signal =
+  Option.iter (fun (m, c) -> Mutex.lock m; Condition.signal c; Mutex.unlock m)
 
 let runner dom go prm =
   if Atomic.get prm.Prm.state = Pending then
@@ -278,6 +284,7 @@ let runner dom go prm =
           ; domain= prm.domain
           ; events= dom.events
           ; wait= dom.wait
+          ; parent= dom.parent
           }
         in
         assert (dom.domain = prm.Prm.domain);
@@ -298,12 +305,10 @@ let runner dom go prm =
                  (Failed Prm.Cancelled));
             reraise exn)
     | Domain (_, prm, _) as process when Prm.is_pending (Prm.to_public prm) ->
-        Domain.cpu_relax ();
         Rlist.push process dom.todo
-    | Domain (_, prm, domain) when Prm.is_resolved prm -> (
-        try ignore (Domain.join domain) with
-        | (Still_has_children | Not_a_child) as exn -> reraise exn
-        | _ -> ())
+    | Domain (_, prm, domain) when Prm.is_resolved prm ->
+        really_ignore (fun () -> Domain.join domain);
+        signal dom.parent
     | Fiber _ | Domain _ | (exception Rlist.Empty) -> (
         match dom.events () with
         | Some tasks ->
@@ -323,7 +328,7 @@ let spawn ~parent dom { go } prm fn k =
     | Prm.Task -> Fiber (prm, fn)
     | Prm.Domain ->
         let g = Random.State.copy dom.g in
-        let c = snd dom.wait in
+        let c = dom.wait in
         let dom' =
           {
             g
@@ -331,20 +336,14 @@ let spawn ~parent dom { go } prm fn k =
           ; domain= prm.Prm.domain
           ; events= dom.events
           ; wait= (Mutex.create (), Condition.create ())
+          ; parent= Some c
           }
         in
         let value =
           Domain.spawn (fun () ->
-              try
-                let v = go dom' prm fn in
-                (* NOTE(dinosaure): [signal] should be enough when only the
-                   **uniq** parent should waits something from its children. *)
-                Condition.signal c; v
-              with (Not_a_child | Still_has_children) as exn ->
-                ignore
-                  (Atomic.compare_and_set prm.Prm.state Pending (Failed exn));
-                Condition.signal c;
-                reraise exn)
+              let finally () = signal (Some c) in
+              let fn () = Fun.protect ~finally fn in
+              go dom' prm fn)
         in
         (* NOTE(dinosaure): in parallel! *)
         Domain (dom', prm, value)
@@ -364,6 +363,13 @@ let all_tasks_are_pending_domains dom =
     dom.todo;
   !res
 
+let await_domains dom =
+  let m, c = dom.wait in
+  Mutex.lock m;
+  if all_tasks_are_pending_domains dom then
+    Condition.wait c m;
+  Mutex.unlock m
+
 let rec until_is_resolved dom go (prm : 'a Prm.promise) k =
   (* NOTE(dinosaure): we do this loop until [prm] is resolved regardless the
      [prm]'s kind. Indeed, even for a [Domain], we set [prm.state] at the final
@@ -371,18 +377,16 @@ let rec until_is_resolved dom go (prm : 'a Prm.promise) k =
   match Atomic.get prm.state with
   | Consumed res -> Effect.Deep.continue k res
   | Resolved v as res ->
-      ignore (Atomic.compare_and_set prm.state res (Consumed (Ok v)));
+      ignore (Atomic.compare_and_set prm.Prm.state res (Consumed (Ok v)));
       Effect.Deep.continue k (Ok v)
   | Failed exn as res ->
-      ignore (Atomic.compare_and_set prm.state res (Consumed (Error exn)));
+      ignore (Atomic.compare_and_set prm.Prm.state res (Consumed (Error exn)));
       Effect.Deep.continue k (Error exn)
   | Pending ->
       (* NOTE(dinosaure): here, we give a chance to do another task which
          can probably set our current [prm] to [Resolved]. *)
       runner dom go prm;
-      if all_tasks_are_pending_domains dom then (
-        let m, c = dom.wait in
-        Mutex.lock m; Condition.wait c m; Mutex.unlock m);
+      await_domains dom;
       until_is_resolved dom go prm k
 
 (* NOTE(dinosaure): here, we verify that we await a children of the current
@@ -395,8 +399,9 @@ let await ~parent dom go prm k =
   Tq.iter
     ~f:(fun (Prm.Prm child) -> res := !res || child.uid = prm.Prm.uid)
     parent.Prm.children;
-  if !res = false then
-    Effect.Deep.discontinue k Not_a_child
+  if !res = false then (
+    signal dom.parent;
+    Effect.Deep.discontinue k Not_a_child)
   else
     until_is_resolved dom go prm k
 
@@ -423,11 +428,7 @@ let await_first ~parent dom go prms k =
              (as domains) should notify via this condition that they finished
              their job (all children). By this way, we replace the busy-wait
              loop by an interrupt-driven process. *)
-          if all_tasks_are_pending_domains dom then (
-            let m, c = dom.wait in
-            Mutex.lock m; Condition.wait c m; Mutex.unlock m);
-          runner dom go prm;
-          wait prms
+          runner dom go prm; await_domains dom; wait prms
       | _ :: _ ->
           let len = List.length resolved in
           let prm = List.nth resolved (Random.State.int dom.g len) in
@@ -460,8 +461,7 @@ let join_resolved_domains dom =
   let rec go () =
     match Rlist.take dom.todo with
     | Domain (_, prm, domain) when Prm.is_resolved prm ->
-        ignore (Domain.join domain);
-        go ()
+        really_ignore (fun () -> Domain.join domain) |> go
     | _ -> go ()
     | exception Rlist.Empty -> ()
   in
@@ -469,30 +469,44 @@ let join_resolved_domains dom =
 
 let run ?g ?(events = Fun.const None) fn =
   let rec go : type a. dom -> a Prm.promise -> (unit -> a) -> (a, exn) result =
-   fun dom0 cur fn ->
+   fun dom cur fn ->
     let retc value =
       (* NOTE(dinosaure): here, we set the current promise to [Resolved] but
          someone else (the parent) must consume (via [await] or [cancel]) the
          value. *)
-      let _ = Atomic.compare_and_set cur.Prm.state Pending (Resolved value) in
+      ignore (Atomic.compare_and_set cur.Prm.state Pending (Resolved value));
       match collect_pending_children cur with
       | [] ->
-          join_resolved_domains dom0;
+          join_resolved_domains dom;
           (* NOTE(dinosaure): it's safe to use [to_result_exn]. At least,
              [cur.Prm.state] was set to [Resolved _] or the state is different
              than [Pending]. [to_result_exn] fails only when we have the
              [Pending] case. *)
+          signal (Some dom.wait);
+          signal dom.parent;
           Prm.to_result_exn (Atomic.get cur.Prm.state)
-      | _ -> raise Still_has_children
+      | _ ->
+          ignore
+            (Atomic.compare_and_set cur.Prm.state Pending
+               (Failed Still_has_children));
+          signal (Some dom.wait);
+          signal dom.parent;
+          raise Still_has_children
     in
     let exnc = function
-      | (Not_a_child | Still_has_children) as exn -> reraise exn
+      | (Not_a_child | Still_has_children) as exn ->
+          ignore (Atomic.compare_and_set cur.Prm.state Pending (Failed exn));
+          signal (Some dom.wait);
+          signal dom.parent;
+          reraise exn
       | exn ->
           (* NOTE(dinosaure): here, we must set the promise to [Failed] and
              expect that the user [cancel]led or [await]ed the task.
              TODO(dinosaure): we probably should use [compare_and_set] instead
              of [set] to be sure to not overlap a [Failed]/[Resolved] state. *)
-          Atomic.set cur.Prm.state (Failed exn);
+          ignore (Atomic.compare_and_set cur.Prm.state Pending (Failed exn));
+          signal (Some dom.wait);
+          signal dom.parent;
           Error exn
     in
     let effc :
@@ -509,18 +523,15 @@ let run ?g ?(events = Fun.const None) fn =
             Effect.Deep.discontinue k exn
           in
           Some continuation
-      | _, Uid.Uid -> Some (get_uid dom0)
-      | _, Prm.Spawn (prm, fn) -> Some (spawn ~parent:cur dom0 { go } prm fn)
-      | _, Sysc.Syscall prm -> Some (syscall ~parent:cur dom0 { go } prm)
+      | _, Uid.Uid -> Some (get_uid dom)
+      | _, Prm.Spawn (prm, fn) -> Some (spawn ~parent:cur dom { go } prm fn)
+      | _, Sysc.Syscall prm -> Some (syscall ~parent:cur dom { go } prm)
       | _, Prm.Yield ->
-          let continuation k =
-            runner dom0 { go } cur;
-            Effect.Deep.continue k ()
-          in
-          Some continuation
-      | _, Prm.Await prm -> Some (await ~parent:cur dom0 { go } prm)
+          let c k = runner dom { go } cur |> Effect.Deep.continue k in
+          Some c
+      | _, Prm.Await prm -> Some (await ~parent:cur dom { go } prm)
       | _, Prm.Await_first prms ->
-          Some (await_first ~parent:cur dom0 { go } prms)
+          Some (await_first ~parent:cur dom { go } prms)
       | _ -> None
     in
     Effect.Deep.match_with fn () { Effect.Deep.retc; exnc; effc }
@@ -545,6 +556,7 @@ let run ?g ?(events = Fun.const None) fn =
     ; domain= uid
     ; events
     ; wait= (Mutex.create (), Condition.create ())
+    ; parent= None
     }
   in
   go dom0 prm fn
