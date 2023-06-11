@@ -1,7 +1,7 @@
 # Miou, a simple scheduler for OCaml 5
 
 Work-In-Progress
-- [ ] a basic skeleton with effects
+- [x] a basic skeleton with effects
 - [ ] be able to build `miou` without dependencies (be dependencies free for the code)
 - [ ] implement some basic tests
 - [ ] documentation
@@ -11,6 +11,6 @@ Work-In-Progress
 - [x] *children can only be awaited by their direct parent. This excludes grandpas, grandmas, cousins, brothers and sisters*
       a test was made, see t07
 - [ ] add a test about our lock-free queue (like two domains which fill the queue and see the result)
-- [ ] implement `sleep`
+- [x] implement `sleep`
 - [ ] implement `yield` à la `affect`
-- [ ] properly `Domain.join` domains at the end
+- [x] properly `Domain.join` domains at the end

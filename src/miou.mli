@@ -47,6 +47,10 @@ module Prm : sig
   type !+'a t
   (** Type of promises. *)
 
+  val pp : Format.formatter -> 'a t -> unit
+  (** A simple pretty-printer of a promise which shows you the domain where
+      the promise run and its unique ID. *)
+
   (** {2 Launch a promise.} *)
 
   val call_cc : (unit -> 'a) -> 'a t
@@ -117,8 +121,8 @@ module Sysc : sig
       Nevertheless, it offers a fairly simple API for using functions that
       interact with the system (and that can, above all, block).
 
-      One of the rules of [miou] is never to give him blocking functions to eat
-      (in fact, he has very strict - but very simple - nutritional constraints).
+      One of the rules of [miou] is never to give it blocking functions to eat
+      (in fact, it has very strict - but very simple - nutritional constraints).
 
       On the other hand, the system can inform you when a function is
       non-blocking (and can therefore be given to [miou]). The idea is to inform

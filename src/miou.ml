@@ -39,7 +39,12 @@ module Prm = struct
      promise. The rule is: in this implementation nobody can set the state
      to [Consumed] except [await] and [cancel]. The [Consumed] is of interest
      only to us. We provide a _public_ [state] and a _private_ [internal_state].
-     The public one will only informs our usual states. *)
+     The public one will only informs our usual states.
+
+     The state should only be modified using [Atomic.compare_and_set] in order
+     to make clear the possible transitions between states. For the example, the
+     [Resolved] state can only appear if we had the [Pending] state - in any
+     other case, we shouldn't make any state transitions. *)
 
   let to_result_exn = function
     | Pending -> invalid_arg "Prm.to_result_exn"
@@ -62,13 +67,19 @@ module Prm = struct
   and w = Prm : 'a promise -> w
   and +!'a t
 
-  (* NOTE(dinosaure): this is a bit ugly but we must expose [+!'a] to the user
-     and provide, by this way, a type-safe usafe of promises and [Sysc.t]. *)
+  (* NOTE(dinosaure): this hack relates to sub-typing and to what has already
+     been explained for lwt (see ocsigen/lwt#458) between promises and "wakers".
+     However, we should highlight such a use case in our tests to confirm the
+     usefulness of such a hack. *)
   let to_public : 'a promise -> 'a t = Obj.magic
   let of_public : 'a t -> 'a promise = Obj.magic
 
   type 'a fn = unit -> 'a
   type _ Effect.t += Spawn : 'a promise * 'a fn -> 'a t Effect.t
+
+  let pp ppf prm =
+    let { domain; uid; _ } = of_public prm in
+    Format.fprintf ppf "[%a:%a]" Uid.pp domain Id.pp uid
 
   let call_cc fn =
     let domain = Uid.concurrent () in
@@ -100,25 +111,36 @@ module Prm = struct
     in
     Effect.perform (Spawn (promise, fn))
 
+  (* NOTE(dinosaure): Semantically, cancellation 'consumes' the promise. This is
+     because, when used in this way, we don't expect the user to then [await] a
+     promise that they have cancelled. For instance, this code works:
+
+     {[
+       Miou.run @@ fun () ->
+       let a = Prm.call{,_cc} (Fun.const ()) in
+       Prm.cancel a
+     ]}
+
+     However, as we said earlier, only the [Consumed] state allows us to check
+     that the promise has indeed been consumed. In this way, [cancel] makes a
+     transition from [Pending] to [Consumed (Error exn)] instead of
+     [Failed exn]. However, this semantics **does not** apply to the children of
+     the promise. The tasks will indeed be "cancelled", but we still expect the
+     user to consume such a state for the children.
+
+     Note the use of [Atomic.compare_and_set], which ensures a valid transition
+     of states. If we can't move from the [Pending] state to the [Consumed]
+     state, it's because the promise is either in a [Resolved] or [Failed]
+     state, which we need to change to the [Consumed] state. *)
   let rec failed_with : type a. a promise -> exn -> unit =
    fun { state; children; _ } exn ->
     Tq.iter ~f:(fun (Prm p) -> cancelled p) children;
-
-    (* NOTE(dinosaure): in some cases, we want to [cancel] a promise which is
-       already resolved. In this situation, the user will **not** really await
-       this cancelled task and we will trigger the [Still_has_children]. In the
-       case where the task was not pending and we want to cancel it, we must set
-       the [state] to [Consumed] and assume that even if nobody consumed the
-       value, the asked cancellation _consumed_ it in a certain way.
-
-       There is, however, one subtlety concerning children. The cancellation
-       must be propagated, but without confirming that they have been
-       [Consumed] by someone. [cancelled] does the propagation with [Failed]
-       instead of [Consumed]. *)
     if not (Atomic.compare_and_set state Pending (Consumed (Error exn))) then
       match Atomic.get state with
-      | Resolved value -> Atomic.set state (Consumed (Ok value))
-      | Failed exn -> Atomic.set state (Consumed (Error exn))
+      | Resolved value as seen ->
+          ignore (Atomic.compare_and_set state seen (Consumed (Ok value)))
+      | Failed exn as seen ->
+          ignore (Atomic.compare_and_set state seen (Consumed (Error exn)))
       | _ -> ()
 
   and cancelled : type a. a promise -> unit =
@@ -129,8 +151,10 @@ module Prm = struct
   let failed_with prm = failed_with (of_public prm)
   let cancel prm = failed_with prm Cancelled
 
-  (* [is_terminated] means that the task finished with [Resolved] **or**
-     [Failed]. This function is **not** exposed. *)
+  (* NOTE(dinosaure): [is_terminated] means that the task finished with
+     [Resolved] **or** [Failed]. This function is **not** exposed. It is only of
+     interest for internal use in order to transit to the [Consumed] state if
+     necessary. In other words, [terminated != consumed]. *)
   let is_terminated { state; _ } =
     match Atomic.get state with
     | Resolved _ | Failed _ | Consumed _ -> true
@@ -148,6 +172,15 @@ module Prm = struct
     match Atomic.get state with Pending -> true | _ -> false
 
   let is_pending prm = is_pending (of_public prm)
+
+  (* This is the result of `is_*` functions according to the state:
+
+                   | Pending | Failed | Resolved | Consumed |
+     is_terminated |         |   x    |    x     |     x    |
+     is_resolved   |         |        |    x     |     x    |
+     is_consumed   |         |        |          |     x    |
+     is_pending    |    x    |        |          |          |
+  *)
 
   type _ Effect.t += Yield : unit Effect.t
   type _ Effect.t += Await : 'a promise -> ('a, exn) result Effect.t
@@ -211,6 +244,9 @@ module Prm = struct
   let await_all_ign lst =
     match await_all_exn lst with Ok () -> () | Error exn -> raise exn
 
+  (* NOTE(dinosaure): This is the public API for the internal states of a
+     promise. *)
+
   type 'a state = Pending | Resolved of 'a | Failed of exn
 
   let state { state; _ } =
@@ -269,6 +305,21 @@ and dom = {
 type go = { go: 'a. dom -> 'a Prm.promise -> (unit -> 'a) -> ('a, exn) result }
 [@@unboxed]
 
+(* NOTE(dinosaure): This function signals to the parent that the domain has just
+   ended. The parent may be in a state where it is waiting for one of the
+   domains to finish. The only way to unblock this waiting state is to send a
+   signal.
+
+   The use of the mutex to launch the signal is very important to exclude (in
+   terms of execution flow) the wait ([Condition.wait]) and the signal between
+   the two domains (parent and child). This avoids waiting and signalling "at
+   the same time".
+
+   There is, however, a rather specific and anomalous case with exception where
+   the signal must be made to the parent and from the parent itself. You can see
+   this type of alert in the exnc function. For a concrete example of such a
+   case, the [test/simple/t10.exe] test shows the handling of an exception with
+   a pending domain. *)
 let signal =
   Option.iter (fun (m, c) -> Mutex.lock m; Condition.signal c; Mutex.unlock m)
 
@@ -288,13 +339,11 @@ let runner dom go prm =
           }
         in
         assert (dom.domain = prm.Prm.domain);
-        (* TODO(dinosaure): check that! We mention that [yield] gives other
-           promises of the **same uid** a chance to run. *)
+        (* NOTE(dinosaure): We should only perform tasks and resolve promises
+           whose domain is the one we use. In another case, something is wrong.
+        *)
         match go.go dom' prm fn with
         | Ok value ->
-            (* NOTE(dinosaure): here, we set the promise to [Resolved] **only if**
-               nobody set it to [Failed]. [is_resolved] confirms (if it's [true])
-               that we set our promise to [Resolved]. *)
             ignore
               (Atomic.compare_and_set prm.Prm.state Pending (Resolved value))
         | Error exn ->
@@ -345,15 +394,19 @@ let spawn ~parent dom { go } prm fn k =
               let fn () = Fun.protect ~finally fn in
               go dom' prm fn)
         in
-        (* NOTE(dinosaure): in parallel! *)
         Domain (dom', prm, value)
   in
-  (* NOTE(dinosaure): add the promise into parent's [children]
-     and into our [todo] list. *)
+  (* NOTE(dinosaure): We add the promise into parent's [children] and into our
+     [todo] list. *)
   Tq.enqueue parent.Prm.children (Prm.Prm prm);
   Rlist.push process dom.todo;
   Effect.Deep.continue k (Prm.to_public prm)
 
+(* NOTE(dinosaure): This function lets you know if you are expecting **only**
+   domains. In this particular case, we should not enter a _busy-waiting_ state
+   where we introspect our promises, but we should use [Condition.wait] to wait
+   for a signal from one of the domains. Note that [Condition.wait] only runs if
+   we have only domains running in parallel. *)
 let all_tasks_are_pending_domains dom =
   let res = ref (not (Rlist.is_empty dom.todo)) in
   Rlist.iter
@@ -363,6 +416,8 @@ let all_tasks_are_pending_domains dom =
     dom.todo;
   !res
 
+(* NOTE(dinosaure): Finally, if we only had domains, here's the function that
+   will wait for a signal from one of them. *)
 let await_domains dom =
   let m, c = dom.wait in
   Mutex.lock m;
