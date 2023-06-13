@@ -246,9 +246,9 @@ let step domain go =
       match Atomic.get prm.Prm.state with
       | Prm.Pending -> go.go domain prm fn
       | _ -> ())
-  | Domain (_domain', prm, _value) as process ->
-      if Atomic.get prm.Prm.state = Pending then
-        L.push process domain.glist
+  | Domain (_, prm, _) as process when Prm.is_pending prm ->
+      L.push process domain.glist
+  | Domain (_, _, value) -> ignore (Domain.join value)
   | Unblock { prm; fn; return; k } -> (
       go.go domain prm (fun () -> fn (); return ());
       match Atomic.get prm.Prm.state with
@@ -461,11 +461,6 @@ let run ?(g = Random.State.make_self_init ()) ?(events = always_none) fn =
     ; children= Tq.make ()
     }
   in
-  go dom0 prm fn;
-  match Atomic.get prm.Prm.state with
-  | Prm.Resolved value -> Ok value
-  | Prm.Failed exn -> Error exn
-  | Prm.Consumed value -> value
-  | Prm.Pending -> raise Unresolvable
+  go dom0 prm fn; Prm.to_result_exn prm
 
 let run ?g ?events fn = or_raise (run ?g ?events fn)

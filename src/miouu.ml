@@ -55,7 +55,9 @@ let events () =
   let dom = dom () in
   let timeout = next_sleeper dom.sleepers in
   match Unix.select [] [] [] timeout with
-  | exception Unix.(Unix_error (EINTR, _, _)) -> None
+  | exception Unix.(Unix_error (EINTR, _, _)) ->
+      Format.eprintf ">>> EINTR\n%!";
+      None
   | [], [], _ -> resolve_sleeper ()
   | _ -> assert false
 

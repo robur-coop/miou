@@ -48,3 +48,7 @@ issue
 t12 shows that [cancel] does not make a transition state when a promise is
 already resolved
   $ ./t12.exe
+t13 shows the bad way to use [miou] with [Unix.sleepf]
+  $ ./t13.exe
+t14 is the opposite of t13, the good way to implement [sleep]
+  $ ./t14.exe

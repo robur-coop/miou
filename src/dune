@@ -1,7 +1,7 @@
 (library
  (name miou)
  (public_name miou)
- (modules miou tq uid l base))
+ (modules miou tq l))
 
 (library
  (name miouu)
