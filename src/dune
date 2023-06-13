@@ -1,8 +1,10 @@
 (library
  (name miou)
- (modules miou tq uid rlist base))
+ (public_name miou)
+ (modules miou tq uid l base))
 
 (library
  (name miouu)
+ (public_name miouu)
  (modules miouu)
  (libraries miou unix bheap))

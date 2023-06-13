@@ -28,6 +28,7 @@ let remove node =
   end
 
 let is_empty (t : 'a t) = t.next == t
+let data { data; _ } = data
 
 let add_l data (t : 'a t) =
   let node = { g= t.g; prev= t; next= t.next; data; active= true } in
@@ -54,27 +55,42 @@ let length t =
 
 (* NOTE(dinosaure): [take_{r,l}] are unsafe. *)
 
-let take_l (t : 'a t) =
+let[@warning "-32"] take_l (t : 'a t) =
   let node = node_of_t t.next in
   remove node; node.data
 
-let take_r (t : 'a t) =
+let[@warning "-32"] take_r (t : 'a t) =
   let node = node_of_t t.prev in
   remove node; node.data
 
 let take t =
   if is_empty t then
     raise Empty
-  else if Random.State.bool t.g then
-    take_l t
   else
-    take_r t
+    let nth = Random.State.int t.g (length t) in
+    let rec go cur = function
+      | 0 ->
+          let node = node_of_t cur in
+          remove node; node.data
+      | n -> go cur.next (pred n)
+    in
+    go t.next nth
 
 let iter ~f t =
   let rec go cur =
     if cur != t then begin
       let node = node_of_t cur in
       if node.active then f node.data;
+      go node.next
+    end
+  in
+  go t.next
+
+let iter_on ~f t =
+  let rec go cur =
+    if cur != t then begin
+      let node = node_of_t cur in
+      if node.active then f node;
       go node.next
     end
   in

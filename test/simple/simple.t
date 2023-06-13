@@ -28,6 +28,7 @@ t07 shows that it is not possible to await a task that is not our children
 t08 shows that we execute 2 [Unix.sleep] in parallel and we should spend only
 1 second for both of them
   $ ./t08.exe
+  3
 t09 is like t03 but for domains, we must wait all children
   $ ./t09.exe
   Launched!

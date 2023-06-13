@@ -16,8 +16,8 @@ let () =
 
          NOTE(dinosaure): We handle domains now! The [print_endline] ensures that
          we execute our task. It should appears in any cases. *)
-      let a = Prm.call (fun () -> print_endline "Launched!"; Unix.sleep 10) in
-      Unix.sleep 1;
+      let a = Prm.call (fun () -> print_endline "Launched!"; Unix.sleepf 10.) in
+      Unix.sleepf 0.5;
       (* NOTE(dinosaure): be sure that [Launched!] was printed out! *)
       Prm.cancel a;
       match Prm.await a with Error Miou.Prm.Cancelled -> () | _ -> exit 1);
