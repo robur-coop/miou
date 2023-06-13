@@ -1,0 +1,126 @@
+{1 Sleepers: how to inject syscalls into Miou?}
+
+This tutorial shows how to inject a new syscall to Miou and extend the API of it
+with {i blocking} operations. For the example, we're going to implement the
+sleepers. [Unix.sleepf] is a blocking operation. The fundamental problem with
+[miou] is that it performs operations in the background (scheduling). So using a
+blocking operation with [miou] prevents it from managing other tasks
+concurrently (manage tasks entered with {!val:Miou.Prm.call_cc}) or in parallel
+(wait for parallel process tasks introduced by {!val:Miou.Prm.call}). 
+
+As stated in the documentation, and this is a fundamental rule:
+> you should never give [miou] blocking tasks (such as [Unix.sleepf])
+
+That said, how do you manage blocking tasks? [miou] offers an API that allows
+you to extend its API with such tasks. The idea is to inform Miou of a promise
+that is {b not} associated with a task (because the latter would be blocking)
+and to notify it of the task that we would like to do as soon as we are {b sure}
+that it is a non-blocking task.
+
+This notification is possible because [miou] lets you inject such a function
+which will notify it. This is the [events] function expected as a parameter to
+the {!val:Miou.run} function.
+
+{2 What we want to do?}
+
+So let's get down to business. The aim of this tutorial is to enable you to
+write this code:
+
+{[
+open Miou
+
+let program () = Miou.run @@ fun () ->
+  let a = Prm.call_cc (fun () -> sleep 1.) in
+  let b = Prm.call_cc (fun () -> sleep 2.) in
+  Prm.await_all_ign [ a; b ]
+
+let () =
+  let t0 = Unix.gettimeofday () in
+  program ();
+  let t1 = Unix.gettimeofday () in
+  assert (t1 -. t0 < 3.)
+]}
+
+This code explains simple behaviour: our tasks [a] and [b] should run
+concurrently. In other words, in the end, we should consume strictly less than 3
+seconds (about 2 seconds) to complete this little program.
+
+You can have fun replacing [sleep] with [Unix.sleepf] and you'll see that we're
+back to a simple sequential execution where we need 3 seconds to finish the
+program. And that's normal, [miou] doesn't know that [Unix.sleepf] is blocking,
+so it will execute the two tasks one after the other without scheduling them
+correctly.
+
+So we've got our test, which will validate what we're expecting.
+
+{2 The [Sysc] module.}
+
+The {!module:Miou.Sysc} module is fairly straightforward about what can (and
+cannot) be done about {i promises} not associated with a task. You can create
+such a promise ({val:Miou.Sysc.make}), wait for its result
+({!val:Miou.Sysc.await}) and obtain its unique identifier
+({!val:Miou.Sysc.uid}). And that's it!
+
+The first function allows us to create our [sleep] "syscall". The second will
+allow us to specify the point at which we would like to obtain the result of our
+blocking operation and the third function will allow us to {b keep}
+(and {b store}) this {i promise} so that we can find it again later.
+
+{[
+open Miou
+
+let sleepers = Hashtbl.create 0x100
+
+let sleep until =
+  let promise = Sysc.make () in
+  Hashtbl.add sleepers (Sysc.uid promise) (promise, until);
+  Sysc.await promise
+]}
+
+As you can see, the implementation of a 'syscall' is relatively simple, but it
+is always associated with the implementation or extension of another function:
+the [events] function.
+
+[miou] is quite stupid, trying to carry out all the tasks we give it in the hope
+that they will solve our promises. And it does this as long as it has at least
+one unresolved promise. In our case, the promise we've just created will never
+be resolved by any task. To clarify [miou]'s behaviour in this situation, you
+can run this code:
+
+{[
+let () = Miou.(run ~events:(Fun.const None) @@ fun () -> sleep 1.; ())
+]}
+
+This code will never end because:
+1) a promise (our [sleep]) exists and is still unresolved
+2) there is no task associated with our [sleep]
+3) [miou] will simply try indefinitely to wait for this promise to be resolved
+
+But as you can see, I've specified an [events] function here which always
+returns [None]. In truth, if [miou] has no more tasks to do and there are still
+promises, it will try one last thing: execute our [events] function. This can
+return a new task (always non-blocking) that could resolve a given promise. And
+it's here that we'll be able to inject the tasks that will resolve our sleepers.
+
+Contrary to what we have just said, this [events] function (and only this one)
+{b can block}! And, in reality, this is not a problem as all the tasks have been
+executed. We can therefore be in a {i busy waiting} state for the next event to
+unblock our execution flow.
+
+In our case, it's a case of taking the {b smallest} sleeper, waiting and then
+returning a task that resolves that same sleeper.
+
+{[
+let events () =
+  let min = Hashtbl.fold (fun uid (prm, until) -> function
+    | Some (_uid', _prm', until') when until < until' ->
+        Some (uid, prm, until)
+    | Some _ as acc -> acc
+    | None -> Some (uid, prm, until) sleepers None in
+  match min with
+  | None -> None
+  | Some (uid, prm, until) ->
+    Hashtbl.remove sleepers uid;
+    Unix.sleepf until;
+    Some [ Miou.syscall prm (Fun.const ()) ]
+]}
