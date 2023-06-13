@@ -21,7 +21,9 @@ let philosopher uid ma mb mo =
 open Miou
 
 let () =
-  let ts = int_of_string Sys.argv.(1) in
+  let ts =
+    match int_of_string Sys.argv.(1) with value -> value | exception _ -> 30
+  in
   Miou.run @@ fun () ->
   let m1 = Mutex.create ()
   and m2 = Mutex.create ()

@@ -168,7 +168,7 @@ end
 
 val yield : unit -> unit
 (** Suspends and schedules the current task, this gives other promises of the
-    same {!type:Uid.t} a chance to run, useful to be called in cpu-intensive
+    same {!type:Did.t} a chance to run, useful to be called in cpu-intensive
     paths. *)
 
 type syscall

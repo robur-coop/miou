@@ -8,12 +8,10 @@ let sleep until =
   Prm.await promise
 
 let events () =
-  Format.eprintf "sleepers: %d\n%!" (Hashtbl.length sleepers);
   let min =
     Hashtbl.fold
       (fun uid (prm, until) -> function
         | Some (_uid', _prm', until') when until < until' ->
-            Format.eprintf ">>> %f < %f\n%!" until until';
             Some (uid, prm, until)
         | Some _ as acc -> acc
         | None -> Some (uid, prm, until))
@@ -26,7 +24,6 @@ let events () =
       Hashtbl.filter_map_inplace
         (fun _ (prm, until') -> Some (prm, Float.min 0. (until' -. until)))
         sleepers;
-      Format.eprintf ">>> sleep %f\n%!" until;
       Unix.sleepf until;
       Some [ Miou.syscall prm (Fun.const ()) ]
 

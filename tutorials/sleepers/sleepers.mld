@@ -53,13 +53,12 @@ correctly.
 
 So we've got our test, which will validate what we're expecting.
 
-{2 The [Sysc] module.}
+{2 Syscalls.}
 
-The {!module:Miou.Sysc} module is fairly straightforward about what can (and
+The {!module:Miou.Prm} module is fairly straightforward about what can (and
 cannot) be done about {i promises} not associated with a task. You can create
-such a promise ({val:Miou.Sysc.make}), wait for its result
-({!val:Miou.Sysc.await}) and obtain its unique identifier
-({!val:Miou.Sysc.uid}). And that's it!
+such a promise ({!val:Miou.Prm.make}), wait for its result {!val:Miou.Prm.await})
+and obtain its unique identifier ({!val:Miou.Prm.uid}). And that's it!
 
 The first function allows us to create our [sleep] "syscall". The second will
 allow us to specify the point at which we would like to obtain the result of our
@@ -72,14 +71,17 @@ open Miou
 let sleepers = Hashtbl.create 0x100
 
 let sleep until =
-  let promise = Sysc.make () in
-  Hashtbl.add sleepers (Sysc.uid promise) (promise, until);
-  Sysc.await promise
+  let promise = Prm.make ~return:(Fun.const ()) in
+  Hashtbl.add sleepers (Prm.uid promise) (promise, until);
+  Prm.await promise
 ]}
 
 As you can see, the implementation of a 'syscall' is relatively simple, but it
 is always associated with the implementation or extension of another function:
-the [events] function.
+the [events] function. The [return] value is the function that is called as
+soon as the promise {b is} resolved. In our case, we would like to return
+[() : unit] but we could very well return the value of a reference that the task
+of resolving our promise will modify correctly.
 
 [miou] is quite stupid, trying to carry out all the tasks we give it in the hope
 that they will solve our promises. And it does this as long as it has at least
@@ -108,7 +110,8 @@ executed. We can therefore be in a {i busy waiting} state for the next event to
 unblock our execution flow.
 
 In our case, it's a case of taking the {b smallest} sleeper, waiting and then
-returning a task that resolves that same sleeper.
+returning a task that resolves that same sleeper. We also need to update the
+other sleepers because we're going to consume time.
 
 {[
 let events () =
@@ -121,6 +124,40 @@ let events () =
   | None -> None
   | Some (uid, prm, until) ->
     Hashtbl.remove sleepers uid;
+    Hashtbl.filter_map_inplace
+      (fun _ (prm, until') -> Some (prm, Float.max 0. (until' -. until)))
+      sleepers;
     Unix.sleepf until;
     Some [ Miou.syscall prm (Fun.const ()) ]
+]}
+
+{2 Usage.}
+
+Now that we have our [events] function and our {i syscall} [sleep], we can use
+them:
+
+{[
+let prgm () =
+  Miou.run ~events @@ fun () ->
+  let a = Prm.call_cc (fun () -> sleep 1.) in
+  let b = Prm.call_cc (fun () -> sleep 2.) in
+  ignore (Prm.await a);
+  ignore (Prm.await b)
+
+let () =
+  let t0 = Unix.gettimeofday () in
+  prgm ();
+  let t1 = Unix.gettimeofday () in
+  assert (t1 -. t0 < 3.)
+]}
+
+Note that our [events] function has been transferred to {!val:Miou.run}! Without
+it, our code wouldn't work. And that's it! Our program did not fail to run,
+which means that we used {b less} than 3 seconds (about 2).
+
+{[
+$ ocamlfind opt -linkpkg -package miou main.ml
+$ ./a.out
+$ echo $?
+0
 ]}

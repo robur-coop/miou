@@ -2,7 +2,6 @@ open Miou
 open Miouu
 
 let () = Random.self_init ()
-let () = Printexc.record_backtrace true
 
 let rec random_float ?not_equal_to max =
   match not_equal_to with
