@@ -17,4 +17,4 @@ let () =
         in
         go ())
   in
-  Prm.await_exn a; Prm.await_exn b
+  Prm.await_all_ign [ a; b ]

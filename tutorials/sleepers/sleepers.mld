@@ -94,9 +94,9 @@ let () = Miou.(run ~events:(Fun.const None) @@ fun () -> sleep 1.; ())
 ]}
 
 This code will never end because:
-1) a promise (our [sleep]) exists and is still unresolved
-2) there is no task associated with our [sleep]
-3) [miou] will simply try indefinitely to wait for this promise to be resolved
++ a promise (our [sleep]) exists and is still unresolved
++ there is no task associated with our [sleep]
++ [miou] will simply try indefinitely to wait for this promise to be resolved
 
 But as you can see, I've specified an [events] function here which always
 returns [None]. In truth, if [miou] has no more tasks to do and there are still
@@ -161,3 +161,28 @@ $ ./a.out
 $ echo $?
 0
 ]}
+
+And now we have proof that our 2 processes ran "at the same time". We say that
+they ran cooperatively. Sleepers are a good example for understanding the
+syscalls mechanism with [miou], but of course you can extend this yourself with
+[read], [write] and [select] as functions notifying us of system events.
+
+{2 The reason behind this API.}
+
+The notion of "injection" was mentioned a few times, which consists of giving
+the user the possibility of implementing the syscalls they want. The main reason
+for this API is that it is not dependent on the [Unix] module. In fact, apart
+from being particularly consistent, we believe that the I/O issue is not an
+issue that fits into the {i scheduling} problem, but is intrinsic to scheduling.
+In other words, we can make a library about {i scheduling} that does not require
+and provide I/O solutions.
+
+What's more, the I/O is actually quite subtle from one system to another. The
+behaviour of [connect()], for example, bears witness to this between {b Linux}
+and {b *BSD}. This means that we have to come up with an implementation that
+behaves in the same way regardless of the system - as you can imagine, this is a
+tedious and difficult job. Above all, it's work that may have nothing to do with
+scheduling.
+
+So the aim is to transfer all this complexity away from what [miou] does best:
+scheduling.

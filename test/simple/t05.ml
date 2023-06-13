@@ -1,7 +1,5 @@
 open Miou
 
-let () = Printexc.record_backtrace true
-
 let () =
   let a = Unix.gettimeofday () in
   Miou.run (fun () ->

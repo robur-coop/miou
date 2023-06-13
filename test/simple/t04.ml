@@ -1,6 +1,5 @@
 open Miou
 
-let () = Printexc.record_backtrace true
 let () = Random.self_init ()
 
 exception Basic_failure
@@ -21,4 +20,4 @@ let () =
   |> function
   | Ok 1 -> ()
   | Error Basic_failure -> ()
-  | _ -> exit 1 (* XXX(dinosaure): unexpected behavior. *)
+  | _ -> exit 1

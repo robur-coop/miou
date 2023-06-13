@@ -52,3 +52,10 @@ t13 shows the bad way to use [miou] with [Unix.sleepf]
   $ ./t13.exe
 t14 is the opposite of t13, the good way to implement [sleep]
   $ ./t14.exe
+t15 shows that **if** we add a new [yield] point into a cancelled task (even if
+it is a domain), we stop the process
+  $ ./t15.exe
+  Terminated
+t16 shows that even if we cancelled a task, we actually sleep due to our weak
+synchronisation mechanism between parents and children
+  $ ./t16.exe

@@ -96,8 +96,24 @@ module Prm : sig
 
       If you cancel a task, all the children in that task will be cancelled too.                                               
       Be careful, though, as cancelling them requires you to somehow observe the                                               
-      transition of state of these children. If you follow Miou's rules, you                                                   
-      should be looking after your children anyway. *)
+      transition of state of these children. If you follow [miou]'s rules, you                                                   
+      should be looking after your children anyway.
+
+      The cancellation mechanism does not actually destroy the task associated
+      with the promise {b immediately}. In fact, the task can understand that it
+      is being cancelled only if it interacts with [miou] (in other words, if it
+      uses functions such as {!val:await} or {!val:yield}). For example, this
+      code really consumes 1 second.
+
+      {[
+        # let sleep n = Unix.sleep 1 ;;
+        # Miou.(run @@ fun () -> let a = Prm.call_cc (sleep 1) in
+                yield ();
+                Prm.cancel a) ;;
+        - : unit = ()
+      ]}
+
+      The same applies to domains. *)
 
   (** {2 Await a promise.} *)
 
@@ -131,7 +147,7 @@ module Prm : sig
       resolve it. At last, [miou] will be able to fulfil your promise!                                                                 
 
       For more information on this API, a tutorial is available on how to                                                      
-      implement {i sleepers}: tasks that block your process for a time.                                                        
+      implement {!page:sleepers}: tasks that block your process for a time.                                                        
    *)
 
   val make : return:(unit -> 'a) -> 'a t

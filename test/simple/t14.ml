@@ -1,7 +1,6 @@
 open Miou
 
 let sleepers = Hashtbl.create 0x100
-let () = Printexc.record_backtrace true
 
 let sleep until =
   let promise = Prm.make ~return:(Fun.const ()) in

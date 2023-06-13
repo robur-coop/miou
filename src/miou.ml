@@ -162,14 +162,21 @@ module Prm = struct
     ignore (Atomic.compare_and_set prm.state Pending (Resolved value))
 
   let rec failed_with : type a. a t -> exn -> unit =
-   fun { state; children; _ } exn ->
-    Tq.iter ~f:(fun (Prm p) -> cancelled p) children;
-    ignore (Atomic.compare_and_set state Pending (Consumed (Error exn)))
+   fun prm exn ->
+    Tq.iter ~f:(fun (Prm p) -> cancelled p) prm.children;
+    if not (Atomic.compare_and_set prm.state Pending (Consumed (Error exn)))
+    then
+      match Atomic.get prm.state with
+      | Resolved v as seen ->
+          ignore (Atomic.compare_and_set prm.state seen (Consumed (Ok v)))
+      | Failed exn as seen ->
+          ignore (Atomic.compare_and_set prm.state seen (Consumed (Error exn)))
+      | _ -> ()
 
   and cancelled : type a. a t -> unit =
-   fun { state; children; _ } ->
-    Tq.iter ~f:(fun (Prm p) -> cancelled p) children;
-    ignore (Atomic.compare_and_set state Pending (Failed Cancelled))
+   fun prm ->
+    Tq.iter ~f:(fun (Prm p) -> cancelled p) prm.children;
+    ignore (Atomic.compare_and_set prm.state Pending (Failed Cancelled))
 
   let cancel prm = failed_with prm Cancelled
 
@@ -428,13 +435,15 @@ let run ?(g = Random.State.make_self_init ()) ?(events = always_none) fn =
         type a.
         a Effect.t -> ((a, unit) Effect.Deep.continuation -> unit) option =
      fun eff ->
-      match eff with
-      | Did.Domain_id -> Some (do_domain_id domain)
-      | Yield -> Some (do_yield domain { go })
-      | Prm.Await prm' -> Some (do_await domain ~parent:prm { go } prm')
-      | Prm.Await_first prms -> Some (do_await_first domain { go } prms)
-      | Prm.Await_all prms -> Some (do_await_all domain { go } prms)
-      | Prm.Spawn (prm', fn) ->
+      match (Atomic.get prm.Prm.state, eff) with
+      | Prm.(Failed exn | Consumed (Error exn)), _ ->
+          Some (fun k -> Effect.Deep.discontinue k exn)
+      | _, Did.Domain_id -> Some (do_domain_id domain)
+      | _, Yield -> Some (do_yield domain { go })
+      | _, Prm.Await prm' -> Some (do_await domain ~parent:prm { go } prm')
+      | _, Prm.Await_first prms -> Some (do_await_first domain { go } prms)
+      | _, Prm.Await_all prms -> Some (do_await_all domain { go } prms)
+      | _, Prm.Spawn (prm', fn) ->
           Some (do_spawn domain ~parent:prm { go } prm' fn)
       | _ -> None
     in

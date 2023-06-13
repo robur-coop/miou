@@ -1,6 +1,5 @@
 open Miou
 
-(* XXX(dinosaure): this code prints out [1] or [2]. *)
 let () =
   Miou.run (fun () ->
       let one = Prm.call_cc (Fun.const 1) in
