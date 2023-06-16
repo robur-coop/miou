@@ -113,7 +113,47 @@ module Prm : sig
         - : unit = ()
       ]}
 
-      The same applies to domains. *)
+      The same applies to domains.
+
+      Cancellation is quite strict on the management of promises, since the user
+      explicitly cancels the promise, and is just as responsible for the
+      "sub"-children: if the user cancels a promise, he/she must have a
+      mechanism for properly waiting for or cancelling the children of this
+      promise.
+
+      {[
+        # let () =
+            Miou.run @@ fun () ->
+            let a =
+              Prm.call_cc @@ fun () ->
+              let b = Prm.call_cc (Fun.const ()) in
+              sleep 1.;
+              Prm.await_exn b
+            in
+            yield (); Prm.cancel a ;;
+        Exception: Miou.Still_has_childre.
+      ]}
+
+
+      For the example, this is a bad code because promise [b] always remains
+      alive while at the same time cancelling its parent [a]. There must be a
+      mechanism in which all the sub-promises must be cancelled before
+      cancelling [a].
+
+      The only case where such an approach is not necessary is in the
+      {i abnormal} case: if the parent promise does not end normally (because of
+      an exception). Here is an example of such a situation:
+
+      {[
+        # let () = Miou.run @@ fun () ->
+            let p = Prm.call_cc @@ fun () ->
+              let p' = Prm.call_cc (Fun.const ()) in
+              if Random.bool ()
+              then raise (Failure "p");
+              Prm.await_exn p' in
+            Prm.await_exn p
+        Exception : Failure "p"
+      ]} *)
 
   (** {2 Await a promise.} *)
 

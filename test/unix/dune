@@ -3,6 +3,11 @@
  (modules t01)
  (libraries miouu))
 
+(executable
+ (name t02)
+ (modules t02)
+ (libraries miouu))
+
 (cram
  (package miouu)
- (deps t01.exe))
+ (deps t01.exe t02.exe))

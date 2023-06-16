@@ -155,8 +155,16 @@ module Prm = struct
   let is_pending prm =
     match Atomic.get prm.state with Pending -> true | _ -> false
 
-  let is_consumed prm =
-    match Atomic.get prm.state with Consumed _ -> true | _ -> false
+  let rec is_consumed : type a. a t -> bool =
+   fun prm ->
+    match Atomic.get prm.state with
+    | Consumed _ ->
+        let res = ref true in
+        Tq.iter
+          ~f:(fun (Prm prm) -> res := is_consumed prm && !res)
+          prm.children;
+        !res
+    | _ -> false
 
   let to_resolved prm value =
     ignore (Atomic.compare_and_set prm.state Pending (Resolved value))
@@ -183,6 +191,18 @@ module Prm = struct
   let to_failed prm exn =
     Tq.iter ~f:(fun (Prm p) -> cancelled p) prm.children;
     ignore (Atomic.compare_and_set prm.state Pending (Failed exn))
+
+  let rec abnormal : type a. a t -> exn -> unit =
+   fun prm exn ->
+    Tq.iter ~f:(fun (Prm p) -> abnormal p exn) prm.children;
+    if not (Atomic.compare_and_set prm.state Pending (Consumed (Error exn)))
+    then
+      match Atomic.get prm.state with
+      | Resolved v as seen ->
+          ignore (Atomic.compare_and_set prm.state seen (Consumed (Ok v)))
+      | Failed exn as seen ->
+          ignore (Atomic.compare_and_set prm.state seen (Consumed (Error exn)))
+      | _ -> ()
 
   let to_result_exn prm =
     match Atomic.get prm.state with
@@ -354,7 +374,7 @@ let do_await_first domain go prms k =
         let len = List.length resolved in
         let idx = Random.State.int domain.g len in
         let prm = List.nth resolved idx in
-        List.iter Prm.cancel unresolved;
+        List.iter (fun prm -> Prm.abnormal prm Prm.Cancelled) unresolved;
         Effect.Deep.continue k (Prm.to_result_exn prm)
   in
   until prms
@@ -428,7 +448,7 @@ let run ?(g = Random.State.make_self_init ()) ?(events = always_none) fn =
           Option.iter Cond.signal domain.parent
     in
     let exnc exn =
-      Prm.to_failed prm exn;
+      Prm.abnormal prm exn;
       Option.iter Cond.signal domain.parent
     in
     let effc :
