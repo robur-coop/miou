@@ -55,8 +55,7 @@ let dequeue t =
         if Atomic.compare_and_set t.head p next then
           let[@warning "-8"] (Some node) = Atomic.get p.next in
           node.value
-        else
-          go ()
+        else go ()
   in
   go ()
 

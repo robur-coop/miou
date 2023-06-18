@@ -8,10 +8,7 @@ let rec random_float ?not_equal_to max =
   | Some n ->
       if n >= max then invalid_arg "random_float";
       let m = Random.float max in
-      if n = m then
-        random_float ~not_equal_to:n max
-      else
-        m
+      if n = m then random_float ~not_equal_to:n max else m
 
 let () =
   let a = random_float 1. in

@@ -7,4 +7,6 @@ break-infix-before-func=false
 dock-collection-brackets=true
 break-separators=before
 field-space=tight
-if-then-else=fit-or-vertical
+if-then-else=compact
+break-sequences=false
+sequence-blank-line=compact

@@ -42,6 +42,12 @@ module Id : sig
   val pp : Format.formatter -> t -> unit
 end
 
+module Pool : sig
+  type t
+
+  val make : ?maximum:int -> unit -> t
+end
+
 module Prm : sig
   (** A promise for a better futur.                                                                                            
 
@@ -67,9 +73,9 @@ module Prm : sig
   (** [call_cc fn] (for Call with Current Continuation) returns a promise which                                                
       will be executed {b cooperatively} with other promises. *)
 
-  val call : (unit -> 'a) -> 'a t
-  (** [call fn] returns a promise which will be executed {b in parallel} with                                                  
-      other promises. *)
+  val call : ?pool:Pool.t -> (unit -> 'a) -> 'a t
+  (** [call ?pool fn] returns a promise which will be executed {b in parallel}
+      with other promises. *)
 
   (* {2 Cancellation.} *)
 

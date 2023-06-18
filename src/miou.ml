@@ -46,16 +46,37 @@ module Cond = struct
     if
       res := predicate ();
       !res
-    then
-      Condition.wait c m;
+    then Condition.wait c m;
     Mutex.unlock m;
     !res
 
   let make () = (Mutex.create (), Condition.create ())
 end
 
+module Pool = struct
+  type t = { mutable running: int; maximum: int; wait: Cond.t }
+
+  let make ?(maximum = Domain.recommended_domain_count () - 1) () =
+    { running= 0; maximum; wait= Cond.make () }
+
+  let rec wait t =
+    let predicate () = t.running >= t.maximum in
+    if Cond.wait ~predicate t.wait then wait t
+
+  let unsafe_add t =
+    Mutex.lock (fst t.wait);
+    t.running <- t.running + 1;
+    Mutex.unlock (fst t.wait)
+
+  let unsafe_del t =
+    Mutex.lock (fst t.wait);
+    t.running <- t.running - 1;
+    Condition.signal (snd t.wait);
+    Mutex.unlock (fst t.wait)
+end
+
 module Ty = struct
-  type 'a t = Domain | Task | Block of (unit -> 'a)
+  type 'a t = Domain of Pool.t option | Task | Block of (unit -> 'a)
 end
 
 module Prm = struct
@@ -98,18 +119,20 @@ module Prm = struct
     in
     Effect.perform (Spawn (prm, fn))
 
-  let call fn =
+  let call ?pool fn =
     let domain = Did.parallel () in
     let uid = Id.gen () in
     let prm =
       {
         domain
       ; uid
-      ; ty= Domain
+      ; ty= Domain pool
       ; state= Atomic.make Pending
       ; children= Tq.make ()
       }
     in
+    Option.iter Pool.wait pool;
+    Option.iter Pool.unsafe_add pool;
     Effect.perform (Spawn (prm, fn))
 
   let make ~return =
@@ -295,7 +318,8 @@ let rec run domain go =
   | false -> step domain go; run domain go
   | true -> (
       match domain.events () with
-      | Some [] | None -> Domain.cpu_relax ()
+      | Some [] -> Domain.cpu_relax (); run domain go
+      | None -> ()
       | Some tasks -> transfer domain tasks; run domain go)
 
 let is_a_child ~parent prm =
@@ -334,14 +358,13 @@ let consumed ?k prm =
       true
 
 let do_await domain ~parent go prm k =
-  if not (is_a_child ~parent prm) then
-    Effect.Deep.discontinue k Not_a_child
+  if not (is_a_child ~parent prm) then Effect.Deep.discontinue k Not_a_child
   else if not (consumed ~k prm) then
     match (Atomic.get prm.Prm.state, prm.Prm.ty) with
     | Prm.Pending, Ty.Task ->
         run domain go;
         ignore (consumed ~k prm)
-    | Prm.Pending, Ty.Domain ->
+    | Prm.Pending, Ty.Domain _ ->
         let rec until_is_resolved () =
           await_domains_or_tasks domain go;
           match Atomic.get prm.Prm.state with
@@ -401,7 +424,7 @@ let do_spawn domain ~parent go prm fn k =
   | Ty.Task ->
       L.push (Task (prm, fn)) domain.glist;
       Effect.Deep.continue k prm
-  | Ty.Domain ->
+  | Ty.Domain pool ->
       let g = Random.State.copy domain.g in
       let domain' =
         {
@@ -416,7 +439,10 @@ let do_spawn domain ~parent go prm fn k =
       in
       let value =
         Domain.spawn @@ fun () ->
-        let finally () = Cond.signal domain.busy in
+        let finally () =
+          Option.iter Pool.unsafe_del pool;
+          Cond.signal domain.busy
+        in
         let fn () = Fun.protect ~finally fn in
         go.go domain' prm fn
       in
@@ -486,7 +512,7 @@ let run ?(g = Random.State.make_self_init ()) ?(events = always_none) fn =
       Prm.uid= Id.gen ()
     ; domain= dom0.uid
     ; state= Atomic.make Prm.Pending
-    ; ty= Ty.Domain
+    ; ty= Ty.Domain None
     ; children= Tq.make ()
     }
   in

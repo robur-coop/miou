@@ -45,8 +45,7 @@ let push data (t : 'a t) =
 
 let length t =
   let rec go curr len =
-    if curr == t then
-      len
+    if curr == t then len
     else
       let node = node_of_t curr in
       go node.next (len + 1)
@@ -64,8 +63,7 @@ let[@warning "-32"] take_r (t : 'a t) =
   remove node; node.data
 
 let take t =
-  if is_empty t then
-    raise Empty
+  if is_empty t then raise Empty
   else
     let nth = Random.State.int t.g (length t) in
     let rec go cur = function
