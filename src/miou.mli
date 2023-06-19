@@ -83,14 +83,77 @@ module Pool : sig
 end
 
 module Own : sig
+  (** This module lets you associate resources with a current task. The aim is
+      to establish invariants that will be respected even if the current task
+      fails abnormally (only if an exception is raised).
+
+      The most obvious example is {!type:Unix.file_descr} management. Their
+      creation is often associated with the use of {!val:Unix.close}. However,
+      raising an exception can interrupt the entire task (and ultimately prevent
+      us from being able to close our {!type:Unix.file_descr}).
+
+      This is where this module can describe the invariant that: despite the
+      exception raised, our {!type:Unix.file_descr} are closed.
+
+      Let's take a simple example:
+
+      {[
+        # Miou.(run @@ fun () ->
+          let ic = open_in filename in
+          let _  = Own.own ~finally:close_in ic in
+          if Random.bool () then raise (Failure "dom0");
+          close_in ic) ;;
+        Exception: Failure "dom0"
+      ]}
+
+      In this example, the process may be terminated abnormally by the [Failure]
+      exception. In this case, the last [close_in] will {b not} be executed.
+      However, by using our {!module:Own} module, we can still close our file
+      despite the exception.
+
+      The example also shows that despite using our module, the user {b still}
+      has to manage his/her resources if everything goes well.
+
+      {b NOTE}: This function may seem similar to {!val:Fun.protect}. However,
+      in our case, [finally] is {b only} invoked if the task terminates
+      abnormally - whereas {!val:Fun.protect} invokes [finally] in all cases.
+    *)
+
   type t
+  (** Type of a {i finalizer} owned by the current task. *)
 
   exception Not_owner
+  (** Exception raised when a resource does not belong to the current task. *)
 
   val own : finally:('a -> unit) -> 'a -> t
+  (** [own ~finally v] associates the {i finalizer} [finally] with a value [v]
+      and the current task. If the current task fails abnormally, the finalizer
+      is called at the end. If the finalizer raises an exception,
+      {!val:Fun.Finally_raised} is raised. *)
+
   val check : t -> unit
+  (** [check r] checks that the resource [r] is being managed by the current
+      task. If this is not the case, this function raises the
+      {!exception:Not_owner} exception. *)
+
   val disown : t -> unit
+  (** [disown resource] removes the ownership of a value from the current task.
+      It can be useful to do this when we have properly freed the resource:
+
+      {[
+        let res = Own.own ~finally:close_in ic in
+        close_in ic;
+        Own.disown res;
+        ...
+      ]} *)
+
   val transmit : t -> unit
+  (** The task that creates the resource may not be the one that manages it (and
+      it would probably be the parent of that task to do such a job). In this
+      specific case, it may be worth passing ownership to the parent task.
+      [transmit] does just that. If the current task is the main task (and
+      therefore has no parent) or if the resource does not belong to the current
+      task, nothing happens. *)
 end
 
 module Prm : sig
