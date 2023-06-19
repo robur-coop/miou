@@ -181,4 +181,4 @@ let sleep until =
   let dom = dom () in
   let prm = Prm.make ~return:(Fun.const ()) in
   Hashtbl.add dom.sleepers (Prm.uid prm) (until, prm);
-  Prm.await prm
+  Prm.await_exn prm

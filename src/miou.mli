@@ -252,11 +252,13 @@ module Prm : sig
         Exception: Miou.Still_has_childre.
       ]}
 
-
       For the example, this is a bad code because promise [b] always remains
       alive while at the same time cancelling its parent [a]. There must be a
       mechanism in which all the sub-promises must be cancelled before
-      cancelling [a].
+      cancelling [a]. Be careful, however, when using {!val:Prm.call} in the
+      example above. It may happen that the main domain is {i faster} than the
+      spawn of [b] (and cancel [a] before that), in which case the exception is
+      not raised.
 
       The only case where such an approach is not necessary is in the
       {i abnormal} case: if the parent promise does not end normally (because of

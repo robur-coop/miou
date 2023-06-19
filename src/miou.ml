@@ -137,8 +137,15 @@ module Prm = struct
 
   let uid { uid; _ } = uid
 
-  let pp ppf { domain; uid; _ } =
-    Format.fprintf ppf "[%a:%a]" Did.pp domain Id.pp uid
+  let pp ppf { domain; uid; state; _ } =
+    let pp_state ppf = function
+      | Pending -> Format.pp_print_string ppf "pending"
+      | Resolved _ -> Format.pp_print_string ppf "resolved"
+      | Failed _ -> Format.pp_print_string ppf "failed"
+      | Consumed _ -> Format.pp_print_string ppf "consumed"
+    in
+    Format.fprintf ppf "[%a:%a](%a)" Did.pp domain Id.pp uid pp_state
+      (Atomic.get state)
 
   type _ Effect.t += Spawn : 'a t * (unit -> 'a) -> 'a t Effect.t
 
@@ -235,11 +242,8 @@ module Prm = struct
   let to_resolved prm value =
     ignore (Atomic.compare_and_set prm.state Pending (Resolved value))
 
-  let rec failed_with : type a. a t -> exn -> unit =
-   fun prm exn ->
-    Tq.iter ~f:(fun (Prm p) -> cancelled p) prm.children;
-    if not (Atomic.compare_and_set prm.state Pending (Consumed (Error exn)))
-    then
+  let to_consumed prm res =
+    if not (Atomic.compare_and_set prm.state Pending (Consumed res)) then
       match Atomic.get prm.state with
       | Resolved v as seen ->
           ignore (Atomic.compare_and_set prm.state seen (Consumed (Ok v)))
@@ -247,10 +251,17 @@ module Prm = struct
           ignore (Atomic.compare_and_set prm.state seen (Consumed (Error exn)))
       | _ -> ()
 
+  let rec failed_with : type a. a t -> exn -> unit =
+   fun prm exn ->
+    Tq.iter ~f:(fun (Prm p) -> cancelled p) prm.children;
+    to_consumed prm (Error exn)
+
   and cancelled : type a. a t -> unit =
    fun prm ->
     Tq.iter ~f:(fun (Prm p) -> cancelled p) prm.children;
-    ignore (Atomic.compare_and_set prm.state Pending (Failed Cancelled))
+    match prm.ty with
+    | Ty.Block _ -> to_consumed prm (Error Cancelled)
+    | _ -> ignore (Atomic.compare_and_set prm.state Pending (Failed Cancelled))
 
   let cancel prm = failed_with prm Cancelled
 
@@ -341,7 +352,7 @@ let step domain go =
       | _ -> ())
   | Domain (_, prm, _) as process when Prm.is_pending prm ->
       L.push process domain.glist
-  | Domain (_, _, value) -> ignore (Domain.join value)
+  | Domain (_, _, _) -> ()
   | Unblock { prm; fn; return; k } -> (
       go.go domain prm (fun () -> fn (); return ());
       match Atomic.get prm.Prm.state with
@@ -356,8 +367,16 @@ let step domain go =
       | Pending -> raise Unresolvable
       | Consumed _ -> ())
 
+let all_processes_are_pending_domains domain =
+  let res = ref (not (L.is_empty domain.glist)) in
+  let f = function
+    | Domain (_, prm, _) -> res := !res && Prm.is_pending prm
+    | _ -> res := false
+  in
+  L.iter ~f domain.glist; !res
+
 let rec run domain go =
-  match L.is_empty domain.glist with
+  match L.is_empty domain.glist || all_processes_are_pending_domains domain with
   | false -> step domain go; run domain go
   | true -> (
       match domain.events () with
@@ -383,6 +402,12 @@ let await_domains_or_tasks domain go =
   let predicate () = all_processes_are_pending_domains domain in
   if not (Cond.wait ~predicate domain.busy) then step domain go
 
+let[@warning "-32"] join_all_domains domain =
+  let domains = ref [] in
+  let f = function Domain (_, _, v) -> domains := v :: !domains | _ -> () in
+  L.iter ~f domain.glist;
+  List.iter (fun domain -> try Domain.join domain with _ -> ()) !domains
+
 (* TODO(dinosaure): it exists a case where children are not consumed and we mark
    the current [prm] as [Consumed]. We should not and wait that all children are
    consumed before to set our [prm] to the [Consumed] state. *)
@@ -392,14 +417,14 @@ let consumed ?k prm =
   | Prm.Pending -> false
   | Prm.Resolved value as seen ->
       let res = Ok value in
-      ignore (Atomic.compare_and_set prm.Prm.state seen (Consumed res));
+      let set = Atomic.compare_and_set prm.Prm.state seen (Consumed res) in
       Option.iter (fun k -> Effect.Deep.continue k res) k;
-      true
+      set
   | Prm.Failed exn as seen ->
       let res = Error exn in
-      ignore (Atomic.compare_and_set prm.Prm.state seen (Consumed res));
+      let set = Atomic.compare_and_set prm.Prm.state seen (Consumed res) in
       Option.iter (fun k -> Effect.Deep.continue k res) k;
-      true
+      set
   | Prm.Consumed res ->
       Option.iter (fun k -> Effect.Deep.continue k res) k;
       true
@@ -430,8 +455,15 @@ let do_await domain ~parent go prm k =
     | Prm.Pending, Ty.Block return ->
         L.push (Block (prm, return, k)) domain.blist;
         run domain go
-    | Prm.(Resolved _ | Failed _ | Consumed _), _ ->
-        (* NOTE(dinosaure): this case is already handled by [consumed]. *) ()
+    | (Prm.Resolved value as seen), _ ->
+        let res = Ok value in
+        ignore (Atomic.compare_and_set prm.Prm.state seen (Consumed res));
+        Effect.Deep.continue k res
+    | (Prm.Failed exn as seen), _ ->
+        let res = Error exn in
+        ignore (Atomic.compare_and_set prm.Prm.state seen (Consumed res));
+        Effect.Deep.continue k res
+    | Consumed res, _ -> Effect.Deep.continue k res
 
 let do_await_first domain go prms k =
   let rec until prms =
@@ -539,14 +571,17 @@ let do_transmit prm uid k =
       Effect.Deep.continue k ()
   | _ -> Effect.Deep.continue k ()
 
-let collect_pending_children prm =
+let collect_pending_children domain prm =
   let rec go pending =
     match Tq.dequeue prm.Prm.children with
     | Prm.Prm prm when Prm.is_consumed prm -> go pending
     | Prm.Prm prm -> go (Prm.Prm prm :: pending)
     | exception Tq.Empty -> pending
   in
-  go []
+  Mutex.lock (fst domain.busy);
+  let res = go [] in
+  Mutex.unlock (fst domain.busy);
+  res
 
 let finalize_resources prm =
   let rec go () =
@@ -585,7 +620,7 @@ let run ?(g = Random.State.make_self_init ()) ?(events = always_none) fn =
   let rec go : type a. domain -> a Prm.t -> (unit -> a) -> unit =
    fun domain prm fn ->
     let retc value =
-      match collect_pending_children prm with
+      match collect_pending_children domain prm with
       | [] ->
           Prm.to_resolved prm value;
           Option.iter Cond.signal domain.parent

@@ -76,3 +76,9 @@ let iter ~f t =
     | Some next -> f next.value; go next
   in
   go (Atomic.get t.head)
+
+let drop ~f t =
+  let rec go () =
+    match dequeue t with v -> f v; go () | exception Empty -> ()
+  in
+  go ()

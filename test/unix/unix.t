@@ -7,3 +7,8 @@ mechanism to properly await or cancel these children
   $ ./t02.exe
   Fatal error: exception Miou.Still_has_children
   [2]
+It shows the cancellation mechanism between domains and blocking operations
+  $ ./t04.exe
+  $ ./t05.exe
+  Fatal error: exception Miou.Still_has_children
+  [2]

@@ -1,4 +1,4 @@
-val sleep : float -> (unit, exn) result
+val sleep : float -> unit
 (** [sleep n] sleeps [n] second(s). *)
 
 type file_descr
