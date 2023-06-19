@@ -12,7 +12,7 @@ to do. `Domain.recommended_domain_count` gives you a limit based on your
 resources (the number of cpu you have). You can run the programme in this way:
 ```shell-session
 $ dune exec examples/digest/main.exe -- examples/digest/main.ml
-examples/digest/main.ml: 64670d9a6b1e6d3639a9356d0ee583545db3187d83d975b535476a8c4a41e824
+examples/digest/main.ml: 28cfc08ddef2d9f0bd78bdd2d5e5f5e33d77f1eab5d8d61d482cbd18df9adb87
 ```
 
 The program expects a list of files which can be given on the command line or

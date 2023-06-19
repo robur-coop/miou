@@ -38,8 +38,7 @@ let run filenames () =
   let pool = Pool.make ~maximum:2 () in
   let fold acc filename = Prm.call ~pool (digest filename) :: acc in
   List.fold_left fold [] filenames
-  |> List.rev
-  |> List.map Prm.await
+  |> List.rev_map Prm.await
   |> List.map Result.join
   |> List.mapi (fun idx ->
          Result.map_error (fun exn -> (List.nth filenames idx, exn)))

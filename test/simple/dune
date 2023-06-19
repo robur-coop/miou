@@ -78,6 +78,16 @@
  (modules t16)
  (libraries unix miou))
 
+(executable
+ (name t17)
+ (modules t17)
+ (libraries miou))
+
+(executable
+ (name t18)
+ (modules t18)
+ (libraries miou))
+
 (cram
  (package miou)
  (deps
@@ -96,4 +106,6 @@
   t13.exe
   t14.exe
   t15.exe
-  t16.exe))
+  t16.exe
+  t17.exe
+  t18.exe))

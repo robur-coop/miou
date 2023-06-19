@@ -59,3 +59,15 @@ it is a domain), we stop the process
 t16 shows that even if we cancelled a task, we actually sleep due to our weak
 synchronisation mechanism between parents and children
   $ ./t16.exe
+t17 shows a basic usage of resources and the call to their finalizers
+  $ ./t17.exe
+  Resource released
+  Fatal error: exception Failure("p")
+  [2]
+t18 shows how we can transmit a resource to our parent which will release it if
+it fails
+  $ ./t18.exe
+  Resource transmitted
+  Resource released
+  Fatal error: exception Failure("dom0")
+  [2]

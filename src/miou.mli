@@ -43,9 +43,54 @@ module Id : sig
 end
 
 module Pool : sig
+  (** The domain allocation policy is a central element in any application and
+      can be intrinsic to task management. We have decided to leave this aspect
+      to the user's discretion. In fact, depending on the case and your
+      objectives, domain allocation management may not be in line with your
+      expectations.
+
+      This is why {!val:Prm.call} {b always} allocates {b a new} domain.
+
+      However, it may be useful to limit this allocation for certain tasks
+      (for example, allocate only 2 domains for managing HTTP clients and 2
+      domains for making HTTP requests). And that's what this module is all
+      about.
+
+      It works very simply: a {!type:t} contains a maximum number and a counter
+      of domains. As soon as this maximum number is exceeded, the use of
+      {!val:Prm.call} with this {!type:t} becomes {b blocked}. It will only be
+      unlocked if one of the tasks that has been allocated with this same
+      {!type:t} finishes.
+
+      For the example, this code only allocates 2 cpu and gradually performs the
+      tasks assigned to it (even if it is given more than 2 tasks):
+
+      {[
+        let run tasks =
+          let pool = Pool.make ~maximum:2 () in
+          let fold acc arg = Prm.call ~pool (do_something arg) :: acc in
+          List.fold_left fold [] tasks
+          |> List.rev_map Prm.await
+      ]} *)
+
   type t
+  (** The type of pools. *)
 
   val make : ?maximum:int -> unit -> t
+  (** [make ?maximum ()] makes a pool with a maximum number of domains that it
+      can allocates (defaults to [Domain.recommended_domain_count - 1]) when
+      used with {!val:Prm.call}. *)
+end
+
+module Own : sig
+  type t
+
+  exception Not_owner
+
+  val own : finally:('a -> unit) -> 'a -> t
+  val check : t -> unit
+  val disown : t -> unit
+  val transmit : t -> unit
 end
 
 module Prm : sig
@@ -75,7 +120,11 @@ module Prm : sig
 
   val call : ?pool:Pool.t -> (unit -> 'a) -> 'a t
   (** [call ?pool fn] returns a promise which will be executed {b in parallel}
-      with other promises. *)
+      with other promises. On the subject of the argument [pool], we refer you
+      to its documentation ({!module:Pool}) to help you understand how it works
+      and its benefits. [miou] {b does not} limit the number of domains you can
+      allocate. This makes the [pool] argument an interesting way of limiting
+      the use of resources. *)
 
   (* {2 Cancellation.} *)
 
@@ -234,6 +283,7 @@ val yield : unit -> unit
     paths. *)
 
 type syscall
+(** Type of tasks that solve {i syscall} promises. *)
 
 val syscall : 'a Prm.t -> (unit -> unit) -> syscall
 

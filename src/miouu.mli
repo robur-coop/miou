@@ -14,23 +14,16 @@ val write : file_descr -> string -> off:int -> len:int -> unit
 (** [write fd str ~off ~len] tries to {b fully} write [len] bytes starting at
     [off] from [str] into the given [fd] . *)
 
-val accept : ?cloexec:bool -> file_descr -> file_descr * Unix.sockaddr
-(** [accept ?cloexec fd] is a [miou] friendly {!Unix.accept} which returns a
-    new {!type:file_descr} (in a non-blocking mode). *)
+val accept :
+  ?cloexec:bool -> file_descr -> Miou.Own.t * file_descr * Unix.sockaddr
+(** [accept ?cloexec fd] is a [miou] friendly {!val:Unix.accept} which returns a
+    new {!type:file_descr} (in a non-blocking mode). It also returns the address
+    to which the socket is linked and an {!module:Miou.Own} value (to close the
+    socket if the current task ends abnormally). *)
 
 val connect : file_descr -> Unix.sockaddr -> unit
-(** [connect fd sockaddr] is a [miou] friendly {!Unix.connect}. The given [fd]
-    must be in a non-blocking mode. *)
-
-(*
-val socket :
-     Unix.socket_type
-  -> [ `Host of string * int | `Sockaddr of Unix.sockaddr ]
-  -> (file_descr, exn) result
-(** [socket c edn] allocates a new socket according to the given [edn] and the
-    {!type:Unix.socket_type}. It {b set} the file descriptor in the non-blocking
-    mode. *)
-*)
+(** [connect fd sockaddr] is a [miou] friendly {!val:Unix.connect}. The given
+    [fd] must be in a non-blocking mode. *)
 
 val of_file_descr : ?non_blocking:bool -> Unix.file_descr -> file_descr
 (** [of_file_descr ?non_blocking fd] returns a {!type:file_descr} and set it to

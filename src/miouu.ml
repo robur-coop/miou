@@ -109,14 +109,22 @@ let rec accept ?cloexec ({ fd; non_blocking } as file_descr) =
         blocking_read fd; accept ?cloexec file_descr
     | fd, sockaddr ->
         Unix.set_nonblock fd;
-        ({ fd; non_blocking= true }, sockaddr))
+        let file_descr = { fd; non_blocking= true } in
+        let res =
+          Own.own ~finally:(fun { fd; _ } -> Unix.close fd) file_descr
+        in
+        (res, file_descr, sockaddr))
   else
     let rec go () =
       match Unix.accept ?cloexec fd with
       | exception Unix.(Unix_error (EINTR, _, _)) -> go ()
       | fd, sockaddr ->
           Unix.set_nonblock fd;
-          ({ fd; non_blocking= true }, sockaddr)
+          let file_descr = { fd; non_blocking= true } in
+          let res =
+            Own.own ~finally:(fun { fd; _ } -> Unix.close fd) file_descr
+          in
+          (res, file_descr, sockaddr)
     in
     blocking_read fd; go ()
 

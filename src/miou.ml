@@ -79,6 +79,41 @@ module Ty = struct
   type 'a t = Domain of Pool.t option | Task | Block of (unit -> 'a)
 end
 
+module Own = struct
+  type t =
+    | Resource : {
+          uid: < >
+        ; finalizer: 'a -> unit
+        ; value: 'a
+        ; active: bool Atomic.t
+      }
+        -> t
+
+  let abnormal (Resource { finalizer; value; active; _ }) =
+    if Atomic.get active then
+      try finalizer value with exn -> raise (Fun.Finally_raised exn)
+
+  exception Not_owner
+
+  type _ Effect.t += Own : t -> t Effect.t
+  type _ Effect.t += Verify : < > -> unit Effect.t
+  type _ Effect.t += Disown : < > -> unit Effect.t
+  type _ Effect.t += Transmit : < > -> unit Effect.t
+
+  let own ~finally:finalizer value =
+    let resource =
+      Resource { finalizer; value; active= Atomic.make true; uid= object end }
+    in
+    Effect.perform (Own resource)
+
+  let check (Resource { uid; _ }) = Effect.perform (Verify uid)
+  let disown (Resource { uid; _ }) = Effect.perform (Disown uid)
+  let transmit (Resource { uid; _ }) = Effect.perform (Transmit uid)
+
+  let copy (Resource { uid; finalizer; value; _ }) =
+    Resource { uid; finalizer; value; active= Atomic.make true }
+end
+
 module Prm = struct
   exception Cancelled
 
@@ -94,6 +129,8 @@ module Prm = struct
     ; ty: 'a Ty.t
     ; state: 'a state Atomic.t
     ; children: w Tq.t
+    ; resources: Own.t Tq.t
+    ; mutable parent: w option
   }
 
   and w = Prm : 'a t -> w
@@ -115,6 +152,8 @@ module Prm = struct
       ; ty= Task
       ; state= Atomic.make Pending
       ; children= Tq.make ()
+      ; resources= Tq.make ()
+      ; parent= None
       }
     in
     Effect.perform (Spawn (prm, fn))
@@ -129,6 +168,8 @@ module Prm = struct
       ; ty= Domain pool
       ; state= Atomic.make Pending
       ; children= Tq.make ()
+      ; resources= Tq.make ()
+      ; parent= None
       }
     in
     Option.iter Pool.wait pool;
@@ -145,6 +186,8 @@ module Prm = struct
       ; ty= Block return
       ; state= Atomic.make Pending
       ; children= Tq.make ()
+      ; resources= Tq.make ()
+      ; parent= None
       }
     in
     Effect.perform (Spawn (prm, return))
@@ -340,6 +383,10 @@ let await_domains_or_tasks domain go =
   let predicate () = all_processes_are_pending_domains domain in
   if not (Cond.wait ~predicate domain.busy) then step domain go
 
+(* TODO(dinosaure): it exists a case where children are not consumed and we mark
+   the current [prm] as [Consumed]. We should not and wait that all children are
+   consumed before to set our [prm] to the [Consumed] state. *)
+
 let consumed ?k prm =
   match Atomic.get prm.Prm.state with
   | Prm.Pending -> false
@@ -419,6 +466,7 @@ let do_domain_id domain k = Effect.Deep.continue k domain.uid
 let do_yield domain go k = run domain go; Effect.Deep.continue k ()
 
 let do_spawn domain ~parent go prm fn k =
+  prm.Prm.parent <- Some (Prm.Prm parent);
   Tq.enqueue parent.Prm.children (Prm.Prm prm);
   match prm.Prm.ty with
   | Ty.Task ->
@@ -450,6 +498,47 @@ let do_spawn domain ~parent go prm fn k =
       Effect.Deep.continue k prm
   | Ty.Block _ -> Effect.Deep.continue k prm
 
+let do_own prm (Own.Resource { uid; _ } as resource) k =
+  let res = ref true in
+  let check (Own.Resource { uid= uid'; _ }) = res := !res && uid <> uid' in
+  Tq.iter ~f:check prm.Prm.resources;
+  if !res then Tq.enqueue prm.Prm.resources resource;
+  Effect.Deep.continue k resource
+
+let do_verify prm uid k =
+  let res = ref false in
+  let check (Own.Resource { uid= uid'; active; _ }) =
+    if Atomic.get active then res := !res || uid = uid'
+  in
+  Tq.iter ~f:check prm.Prm.resources;
+  if not !res then Effect.Deep.discontinue k Own.Not_owner
+  else Effect.Deep.continue k ()
+
+let do_disown prm uid k =
+  let disown (Own.Resource { uid= uid'; active; _ }) =
+    if uid = uid' then Atomic.set active false
+  in
+  Tq.iter ~f:disown prm.Prm.resources;
+  Effect.Deep.continue k ()
+
+let do_transmit prm uid k =
+  let res = ref None in
+  let get (Own.Resource { uid= uid'; active; _ } as resource) =
+    if uid = uid' && Atomic.get active then begin
+      Atomic.set active false;
+      res := Some resource
+    end
+  in
+  Tq.iter ~f:get prm.Prm.resources;
+  match (!res, prm.Prm.parent) with
+  | Some resource, Some (Prm.Prm parent) ->
+      let res = ref true in
+      let check (Own.Resource { uid= uid'; _ }) = res := !res && uid <> uid' in
+      Tq.iter ~f:check parent.Prm.resources;
+      if !res then Tq.enqueue parent.Prm.resources (Own.copy resource);
+      Effect.Deep.continue k ()
+  | _ -> Effect.Deep.continue k ()
+
 let collect_pending_children prm =
   let rec go pending =
     match Tq.dequeue prm.Prm.children with
@@ -459,9 +548,40 @@ let collect_pending_children prm =
   in
   go []
 
+let finalize_resources prm =
+  let rec go () =
+    match Tq.dequeue prm.Prm.resources with
+    | resource -> Own.abnormal resource; go ()
+    | exception Tq.Empty -> ()
+  in
+  go ()
+
 let syscall prm fn = Syscall (prm, fn)
 
 let run ?(g = Random.State.make_self_init ()) ?(events = always_none) fn =
+  Did.reset ();
+  let dom0 =
+    {
+      g
+    ; uid= Did.parallel ()
+    ; glist= L.make g
+    ; blist= L.make g
+    ; events
+    ; busy= Cond.make ()
+    ; parent= None
+    }
+  in
+  let prm0 =
+    {
+      Prm.uid= Id.gen ()
+    ; domain= dom0.uid
+    ; state= Atomic.make Prm.Pending
+    ; ty= Ty.Domain None
+    ; children= Tq.make ()
+    ; resources= Tq.make ()
+    ; parent= None
+    }
+  in
   let rec go : type a. domain -> a Prm.t -> (unit -> a) -> unit =
    fun domain prm fn ->
     let retc value =
@@ -474,6 +594,7 @@ let run ?(g = Random.State.make_self_init ()) ?(events = always_none) fn =
           Option.iter Cond.signal domain.parent
     in
     let exnc exn =
+      finalize_resources prm;
       Prm.abnormal prm exn;
       Option.iter Cond.signal domain.parent
     in
@@ -491,31 +612,15 @@ let run ?(g = Random.State.make_self_init ()) ?(events = always_none) fn =
       | _, Prm.Await_all prms -> Some (do_await_all domain { go } prms)
       | _, Prm.Spawn (prm', fn) ->
           Some (do_spawn domain ~parent:prm { go } prm' fn)
+      | _, Own.Own resource -> Some (do_own prm resource)
+      | _, Own.Verify uid -> Some (do_verify prm uid)
+      | _, Own.Disown uid -> Some (do_disown prm uid)
+      | _, Own.Transmit uid when prm.Prm.uid <> prm0.Prm.uid ->
+          Some (do_transmit prm uid)
       | _ -> None
     in
     Effect.Deep.match_with fn () { Effect.Deep.retc; exnc; effc }
   in
-  Did.reset ();
-  let dom0 =
-    {
-      g
-    ; uid= Did.parallel ()
-    ; glist= L.make g
-    ; blist= L.make g
-    ; events
-    ; busy= Cond.make ()
-    ; parent= None
-    }
-  in
-  let prm =
-    {
-      Prm.uid= Id.gen ()
-    ; domain= dom0.uid
-    ; state= Atomic.make Prm.Pending
-    ; ty= Ty.Domain None
-    ; children= Tq.make ()
-    }
-  in
-  go dom0 prm fn; Prm.to_result_exn prm
+  go dom0 prm0 fn; Prm.to_result_exn prm0
 
 let run ?g ?events fn = or_raise (run ?g ?events fn)
