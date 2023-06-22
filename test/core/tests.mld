@@ -1,0 +1,98 @@
+{1 Core tests of Miou.}
+
+These tests show the cases that confirm our rules and describe Miou's behaviour.
+This document is an exhaustive description of the tests in order to have a
+specified description of Miou's behaviour.
+
+{4 t01 - a simple example.}
+
+This test should always display 3. This is a very simple example of how to use
+Miou (specially the {!val:Prm.call_cc} function):
+{[
+$ ./t01.exe
+3
+]}
+
+{4 t02 - randomized order of tasks's execution.}
+
+This test shows that Miou takes on a task in a random order. So the program can
+return 1 or 2. The program is run until the value is 1 and then repeated until
+the value is 2.
+
+{4 t03 - a task must await all of its children.}
+
+This test shows that we can't ignore the creation of a promise and that we have
+to wait for (or cancel) our children.
+{[
+$ ./t03.exe
+Fatal error: exception Miou.Still_has_children
+]}
+
+{4 t04 - the abnormal termination.}
+
+This test fails randomly. It can therefore finish correctly (and last 1 second)
+or fail (and not last one second). Above all, it shows that in the event of an
+exception, the children of the failed task are cancelled.
+
+{4 t05 - the cancellation.}
+
+This test shows Miou's cancellation mechanism. This mechanism applies equally to
+parallel tasks. In this test, we have a task that sleeps for 10 seconds and our
+main task cancels the first one. We check that:
+1) the task has been cancelled
+2) we have lasted less than 10 seconds
+
+{4 t06 - parallelism.}
+
+This test shows that our 2 tasks work well in parallel. They each last 0.1
+seconds and we should last less than 0.2 seconds.
+
+{4 t07 - children can be awaited only by their direct parent.}
+
+This test shows that we can't wait for our children to be direct. This test
+should always fail.
+{[
+$ ./t07.exe
+Fatal error: exception Miou.Not_a_child
+]}
+
+{4 t09 - even a parallel task must await all of its children.}
+
+This test reaffirms our rule that we must wait for all our children, but it also
+checks that this type of error does not block the program and fails as soon as
+possible. In our case, a task should wait 10 seconds and the domain creating
+this child (but not waiting for it) will:
+1) quit everything cleanly
+2) raise the exception [Still_has_children]
+
+{4 t10 - even parallel tasks can wait only their children.}
+
+This test shows that even with parallel tasks, we cannot transfer a promise to
+another domain to wait for it:
+{[
+$ ./t10.exe
+Fatal error: exception Miou.Not_a_child
+]}
+
+{4 t12 - [cancel] does not do a state transition if the promise is resolved.}
+
+This test assumes a design that consists of not marking an already resolved
+promise as a cancel even if the user wishes to do so.
+
+{4 t14 - sleepers, concurrency and parallelism.}
+
+This test shows the different behaviours when using {!val:Prm.call_cc},
+{!val:Prm.call} and {!val:Miouu.sleep}. We check the time spent for each of
+these programs according to how we have composed the tasks.
+{[
+$ ./t14.exe
+call_cc + Unix.sleepf: ok
+call + Unix.sleepf:    ok
+call_cc + Miouu.sleep: ok
+]}
+
+{4 t15 - asynchronous cancellation.}
+
+This test shows some of the limitations of cancel. You can't cancel everything
+and, in this case, our task sleeping for 0.2 seconds will really sleep for 0.2
+seconds even if you try to cancel it.

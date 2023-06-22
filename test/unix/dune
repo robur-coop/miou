@@ -1,28 +1,4 @@
 (executable
- (name t01)
- (modules t01)
- (libraries miouu))
-
-(executable
- (name t02)
- (modules t02)
- (libraries miouu))
-
-(executable
  (name t03)
  (modules t03)
  (libraries miouu))
-
-(executable
- (name t04)
- (modules t04)
- (libraries miouu))
-
-(executable
- (name t05)
- (modules t05)
- (libraries miouu))
-
-(cram
- (package miouu)
- (deps t01.exe t02.exe t04.exe t05.exe))
