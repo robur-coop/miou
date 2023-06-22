@@ -1,0 +1,87 @@
+(executable
+ (name t01)
+ (modules t01)
+ (libraries miou))
+
+(executable
+ (name t02)
+ (modules t02)
+ (libraries miou))
+
+(executable
+ (name t03)
+ (modules t03)
+ (libraries miou))
+
+(executable
+ (name t04)
+ (modules t04)
+ (libraries miouu))
+
+(executable
+ (name t05)
+ (modules t05)
+ (libraries miouu))
+
+(executable
+ (name t06)
+ (modules t06)
+ (libraries unix miou))
+
+(executable
+ (name t07)
+ (modules t07)
+ (libraries unix miou))
+
+(executable
+ (name t09)
+ (modules t09)
+ (libraries miouu))
+
+(executable
+ (name t10)
+ (modules t10)
+ (libraries miou))
+
+(executable
+ (name t12)
+ (modules t12)
+ (libraries miou))
+
+(executable
+ (name t13)
+ (modules t13)
+ (libraries unix miou))
+
+(executable
+ (name t14)
+ (modules t14)
+ (libraries miouu))
+
+(executable
+ (name t15)
+ (modules t15)
+ (libraries unix miou))
+
+(executable
+ (name t17)
+ (modules t17)
+ (libraries miou))
+
+(cram
+ (package miouu)
+ (deps
+  t01.exe
+  t02.exe
+  t03.exe
+  t04.exe
+  t05.exe
+  t06.exe
+  t07.exe
+  t09.exe
+  t10.exe
+  t12.exe
+  t13.exe
+  t14.exe
+  t15.exe
+  t17.exe))

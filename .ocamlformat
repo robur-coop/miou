@@ -1,0 +1,12 @@
+version=0.25.1
+exp-grouping=preserve
+break-infix=wrap-or-vertical
+break-collection-expressions=wrap
+break-sequences=false
+break-infix-before-func=false
+dock-collection-brackets=true
+break-separators=before
+field-space=tight
+if-then-else=compact
+break-sequences=false
+sequence-blank-line=compact
