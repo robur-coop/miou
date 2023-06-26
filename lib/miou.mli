@@ -62,9 +62,41 @@ module Own : sig
       ]} *)
 
   type t
+  (** The type of ownerships. *)
 
   val own : finally:('a -> unit) -> 'a -> t
+  (** [own ~finally value] associates the value and this finaliser with the
+      current promise. This way, if the current promise fails abnormally, the
+      finally function will be called.
+
+      {[
+        # let show () = print_endline "Resource released"
+        # Miou.(run @@ fun () ->
+          let p = Prm.call_cc @@ fun () ->
+            let _ = Own.own ~finally:show () in
+            failwith "p" in
+          Prm.await_exn p) ;;
+        Resource released!
+        Exception: Failure "p".
+      ]} *)
+
   val disown : t -> unit
+  (** [disown t] informs [miou] that you have properly released the resource. If
+      the current promise ends well and the user has not [disown] the resource,
+      [miou] raises the exception: [Resource_leak]:
+
+      {[
+        # let show () = print_endline "Resource released"
+        # Miou.(run @@ fun () ->
+          let p = Prm.call_cc @@ fun () ->
+            let _ = Own.own ~finally:show () in
+            () in
+          Prm.await_exn p) ;;
+        Resource released!
+        Exception: Miou.Resource_leak.
+      ]}
+
+      Note that even in this situation, [miou] calls the finaliser. *)
 end
 
 module Prm : sig
@@ -82,14 +114,31 @@ module Prm : sig
   type 'a t
   (** Type of promises. *)
 
+  val pp : Format.formatter -> 'a t -> unit
+  (** A simple pretty-printer of a promise which shows you the domain where
+      the promise run and its unique ID. *)
+
+  (** {2 Daemon and orphan tasks.}
+
+      The prerogative of absolutely expecting all of its direct children limits
+      the user to considering certain anti-patterns. The best known is the
+      {i background} task: this consists of running a task that we would like to
+      'detach' from the main task so that it can continue its life in autonomy.
+
+      Not that we want to impose an authoritarian family approach, but the fact
+      remains that these {i orphaned} tasks have resources that we need to
+      manage and free up (even in an abnormal situation). And we'd like to sleep
+      easy tonight.
+
+      So a promise can be associated with an {!type:orphans}. The latter will
+      then collect the results of the associated promise tasks and give you back
+      the promises (via {!val:care} in a 'non-blocking' mode: applying
+      {!val:await} to them will give you the results directly. *)
+
   type 'a orphans
 
   val orphans : unit -> 'a orphans
   val care : 'a orphans -> 'a t option
-
-  val pp : Format.formatter -> 'a t -> unit
-  (** A simple pretty-printer of a promise which shows you the domain where
-      the promise run and its unique ID. *)
 
   (** {2 Launch a promise.} *)
 
