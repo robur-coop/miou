@@ -1,3 +1,4 @@
+open Miou
 open Miouu
 
 let listen sockaddr =
@@ -27,12 +28,13 @@ let handler fd =
   go
 
 let prgm sockaddr =
-  let rec server fd =
+  let rec server tasks fd =
     let fd', sockaddr = Miouu.accept fd in
     Format.printf "- new connection from %s\n%!" (sockaddr_to_string sockaddr);
-    handler fd' ();
-    server fd
+    let give = Option.to_list (Miouu.owner fd') in
+    let task = Prm.call_cc ~give (handler fd') in
+    server (task :: tasks) fd
   in
-  fun () -> server (listen sockaddr)
+  fun () -> server [] (listen sockaddr)
 
 let () = Miouu.run (prgm (Unix.ADDR_INET (Unix.inet_addr_loopback, 9000)))

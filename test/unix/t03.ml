@@ -25,7 +25,7 @@ let rec cat (fd, buf) =
 
 let prgm sockaddr =
   let rec server fd =
-    let _, fd', _ = Miouu.accept fd in
+    let fd', _ = Miouu.accept fd in
     cat (fd', Bytes.create 0x100);
     server fd
   in

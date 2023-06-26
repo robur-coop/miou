@@ -1,4 +1,7 @@
+exception File_not_found of string
+
 let with_ic filename fn =
+  if not (Sys.file_exists filename) then raise (File_not_found filename);
   try
     let ic = open_in filename in
     let rs = Fun.protect ~finally:(fun () -> close_in ic) (fn ic) in
@@ -18,11 +21,20 @@ let digest filename () =
   with_ic filename (digest Digestif.SHA256.empty (Bytes.create 0x100))
   |> Result.map (fun hash -> (filename, hash))
 
-let print = function
-  | Ok (filename, hash) ->
-      Format.printf "%s: %a\n%!" filename Digestif.SHA256.pp hash
-  | Error (filename, exn) ->
-      Format.printf "%s: %S\n%!" filename (Printexc.to_string exn)
+let output = Mutex.create ()
+
+let print result =
+  Mutex.lock output;
+  begin
+    match result with
+    | Ok (filename, hash) ->
+        Format.printf "%s: %a\n%!" filename Digestif.SHA256.pp hash
+    | Error (filename, File_not_found _) ->
+        Format.printf "%s: No such file\n%!" filename
+    | Error (filename, exn) ->
+        Format.printf "%s: %S\n%!" filename (Printexc.to_string exn)
+  end;
+  Mutex.unlock output
 
 let filenames_of_stdin () =
   let rec go acc =
@@ -35,8 +47,7 @@ let filenames_of_stdin () =
 open Miou
 
 let run filenames () =
-  let pool = Pool.make ~maximum:2 () in
-  let fold acc filename = Prm.call ~pool (digest filename) :: acc in
+  let fold acc filename = Prm.call (digest filename) :: acc in
   List.fold_left fold [] filenames
   |> List.rev_map Prm.await
   |> List.map Result.join
@@ -50,4 +61,4 @@ let () =
   | _ ->
       let filenames = Array.sub Sys.argv 1 (Array.length Sys.argv - 1) in
       let filenames = Array.to_list filenames in
-      Miou.run (run filenames)
+      Miou.run ~domains:2 (run filenames)

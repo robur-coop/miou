@@ -1,6 +1,6 @@
-{1 Sleepers: how to inject syscalls into Miou?}
+{1 Sleepers: how to inject syscalls into [miou]?}
 
-This tutorial shows how to inject a new syscall to Miou and extend the API of it
+This tutorial shows how to inject a new syscall to [miou] and extend the API of it
 with {i blocking} operations. For the example, we're going to implement the
 sleepers. [Unix.sleepf] is a blocking operation. The fundamental problem with
 [miou] is that it performs operations in the background (scheduling). So using a
@@ -12,7 +12,7 @@ As stated in the documentation, and this is a fundamental rule:
 > you should never give [miou] blocking tasks (such as [Unix.sleepf])
 
 That said, how do you manage blocking tasks? [miou] offers an API that allows
-you to extend its API with such tasks. The idea is to inform Miou of a promise
+you to extend its API with such tasks. The idea is to inform [miou] of a promise
 that is {b not} associated with a task (because the latter would be blocking)
 and to notify it of the task that we would like to do as soon as we are {b sure}
 that it is a non-blocking task.
@@ -57,13 +57,14 @@ So we've got our test, which will validate what we're expecting.
 
 The {!module:Miou.Prm} module is fairly straightforward about what can (and
 cannot) be done about {i promises} not associated with a task. You can create
-such a promise ({!val:Miou.Prm.make}), wait for its result {!val:Miou.Prm.await})
-and obtain its unique identifier ({!val:Miou.Prm.uid}). And that's it!
+such a promise ({!val:Miou.Prm.make}), {b suspend} and wait for its result
+{!val:Miou.Prm.suspend}) and obtain its unique identifier ({!val:Miou.Prm.uid}).
+And that's it!
 
 The first function allows us to create our [sleep] "syscall". The second will
 allow us to specify the point at which we would like to obtain the result of our
-blocking operation and the third function will allow us to {b keep}
-(and {b store}) this {i promise} so that we can find it again later.
+blocking operation and the third function will allow us to {b keep} (and
+{b store}) this {i promise} so that we can find it again later.
 
 {[
 open Miou
@@ -73,7 +74,9 @@ let sleepers = Hashtbl.create 0x100
 let sleep until =
   let promise = Prm.make ~return:(Fun.const ()) in
   Hashtbl.add sleepers (Prm.uid promise) (promise, until);
-  Prm.await promise
+  match Prm.suspend promise with
+  | Ok () -> ()
+  | Error exn -> raise exn
 ]}
 
 As you can see, the implementation of a 'syscall' is relatively simple, but it
@@ -90,19 +93,26 @@ be resolved by any task. To clarify [miou]'s behaviour in this situation, you
 can run this code:
 
 {[
-let () = Miou.(run ~events:(Fun.const None) @@ fun () -> sleep 1.; ())
+let dummy _ =
+  { select= Fun.const []
+  ; interrupt= ignore }
+
+let () = Miou.(run ~events:dummy @@ fun () -> sleep 1.; ())
+Exception: Miou.Still_has_children
 ]}
 
-This code will never end because:
+This code will finish with an exception [Still_has_children]:
 + a promise (our [sleep]) exists and is still unresolved
 + there is no task associated with our [sleep]
-+ [miou] will simply try indefinitely to wait for this promise to be resolved
++ [miou] will simply try to finish your task but, remember our rules, all
+  of our children must be resolved {b before} the end of our task
 
 But as you can see, I've specified an [events] function here which always
-returns [None]. In truth, if [miou] has no more tasks to do and there are still
-promises, it will try one last thing: execute our [events] function. This can
-return a new task (always non-blocking) that could resolve a given promise. And
-it's here that we'll be able to inject the tasks that will resolve our sleepers.
+returns an empty list. In truth, if [miou] has no more tasks to do and there are
+still promises, it will try one last thing: execute our [events] function. This
+can return a new task (always non-blocking) that could resolve a given promise.
+And it's here that we'll be able to inject the tasks that will resolve our
+sleepers.
 
 Contrary to what we have just said, this [events] function (and only this one)
 {b can block}! And, in reality, this is not a problem as all the tasks have been
@@ -114,7 +124,7 @@ returning a task that resolves that same sleeper. We also need to update the
 other sleepers because we're going to consume time.
 
 {[
-let events () =
+let select () =
   let min = Hashtbl.fold (fun uid (prm, until) -> function
     | Some (_uid', _prm', until') when until < until' ->
         Some (uid, prm, until)
@@ -129,6 +139,9 @@ let events () =
       sleepers;
     Unix.sleepf until;
     Some [ Miou.syscall prm (Fun.const ()) ]
+
+let events =
+  { select; interrupt= ignore }
 ]}
 
 {2 Usage.}
@@ -185,4 +198,17 @@ tedious and difficult job. Above all, it's work that may have nothing to do with
 scheduling.
 
 So the aim is to transfer all this complexity away from what [miou] does best:
-scheduling.
+scheduling. Of course, we're not leaving the user as it is, and we're offering
+an extension to [miou] with the implemented I/O cleverly called [miouu] ([miou]
+with [U]nix).
+
+{2 Events & domains.}
+
+As you can imagine, this little introduction is not complete if we take into
+account [interrupt] and {!val:Prm.call}. This is where we'll explain another
+rule: a syscall is always local to a domain.
+
+Above all, this means that I/O operations will always be cooperative. There may
+be more complex tasks which can run in parallel and which may contain some I/O,
+but the suspension ({!val:Prm.suspend}) of a syscall will always be local to the
+current domain executing the suspension.

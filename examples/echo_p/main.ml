@@ -1,3 +1,4 @@
+open Miou
 open Miouu
 
 let listen sockaddr =
@@ -26,13 +27,20 @@ let handler fd =
   in
   go
 
+let rec clean orphans =
+  match Prm.care orphans with
+  | Some prm -> Prm.await_exn prm; clean orphans
+  | None -> ()
+
 let prgm sockaddr =
-  let rec server fd =
+  let rec server orphans fd =
+    clean orphans;
     let fd', sockaddr = Miouu.accept fd in
     Format.printf "- new connection from %s\n%!" (sockaddr_to_string sockaddr);
-    handler fd' ();
-    server fd
+    let give = Option.to_list (Miouu.owner fd') in
+    ignore (Prm.call ~orphans ~give (handler fd'));
+    server orphans fd
   in
-  fun () -> server (listen sockaddr)
+  fun () -> server (Prm.orphans ()) (listen sockaddr)
 
 let () = Miouu.run (prgm (Unix.ADDR_INET (Unix.inet_addr_loopback, 9000)))

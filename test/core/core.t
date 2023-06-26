@@ -25,3 +25,15 @@
   call_cc + Miouu.sleep: ok
   $ ./t15.exe
   $ ./t17.exe
+  $ ./t18.exe
+  Fatal error: exception Miou.No_domain_available
+  [2]
+  $ ./t19.exe
+  Resource released
+  Fatal error: exception Failure("p")
+  [2]
+  $ ./t20.exe
+  Resource released
+  Fatal error: exception Miou.Resource_leak
+  [2]
+  $ ./t21.exe

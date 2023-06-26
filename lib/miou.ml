@@ -1,3 +1,5 @@
+[@@@warning "-37"] (* Dedicated_task *)
+
 module Tq = Tq
 
 module Did = struct
@@ -38,11 +40,46 @@ module Ty = struct
   type 'a t = Task | Block of (unit -> 'a)
 end
 
+module Own = struct
+  type t =
+    | Resource : {
+          uid: int
+        ; value: 'a
+        ; finally: 'a -> unit
+        ; active: bool Atomic.t
+      }
+        -> t
+
+  let gen =
+    let value = Atomic.make 0 in
+    fun () -> Atomic.fetch_and_add value 1
+
+  let make ~finally value =
+    let uid = gen () in
+    Resource { uid; value; finally; active= Atomic.make true }
+
+  let finalise (Resource { value; finally; active; _ }) =
+    if Atomic.get active then
+      try finally value with exn -> raise (Fun.Finally_raised exn)
+
+  type _ Effect.t += Own : t -> t Effect.t
+  type _ Effect.t += Disown : t -> unit Effect.t
+
+  let own ~finally v =
+    let resource = make ~finally v in
+    Effect.perform (Own resource)
+
+  let disown resource = Effect.perform (Disown resource)
+
+  let copy (Resource { uid; value; finally; _ }) =
+    Resource { uid; value; finally; active= Atomic.make true }
+end
+
 module Prm = struct
   exception Cancelled
   exception Unresolvable_promise
 
-  type 'a state =
+  type 'a pstate =
     | Pending
     | Resolved of 'a
     | Failed of exn
@@ -54,8 +91,9 @@ module Prm = struct
       uid: Id.t
     ; domain: domain Atomic.t
     ; ty: 'a Ty.t
-    ; state: 'a state Atomic.t
+    ; state: 'a pstate Atomic.t
     ; children: w Tq.t
+    ; resources: Own.t Tq.t
     ; mutable parent: w option
   }
   (* NOTE(dinosaure): we can do a transition state on [state] only into the
@@ -81,6 +119,8 @@ module Prm = struct
      impossible to use [await_{first,one,all}] on such value because we can only
      suspend it. *)
 
+  and 'a orphans = 'a t L.t
+
   let pp ppf { domain; uid; state; _ } =
     let pp_domain ppf = function
       | On_hold -> Format.pp_print_string ppf "?"
@@ -94,20 +134,34 @@ module Prm = struct
     Format.fprintf ppf "[%a:%a](%a)" pp_domain (Atomic.get domain) Id.pp uid
       pp_state (Atomic.get state)
 
-  type _ Effect.t += Local_spawn : (unit -> 'a) -> 'a t Effect.t
-  type _ Effect.t += Parallel_spawn : (unit -> 'a) -> 'a t Effect.t
-  type _ Effect.t += Syscall_spawn : (unit -> 'a) -> 'a syscall Effect.t
+  type _ Effect.t +=
+    | Local_spawn :
+        'a orphans option * Own.t list * (unit -> 'a)
+        -> 'a t Effect.t
+
+  type _ Effect.t +=
+    | Parallel_spawn :
+        'a orphans option * Own.t list * (unit -> 'a)
+        -> 'a t Effect.t
+
+  type _ Effect.t +=
+    | Syscall_spawn : Own.t list * (unit -> 'a) -> 'a syscall Effect.t
+
   type _ Effect.t += Await : 'a t -> ('a, exn) result Effect.t
   type _ Effect.t += Cancel : 'a t -> unit Effect.t
   type _ Effect.t += Await_one : bool * 'a t list -> ('a, exn) result Effect.t
   type _ Effect.t += Await_all : 'a t list -> ('a, exn) result list Effect.t
   type _ Effect.t += Suspend : 'a syscall -> ('a, exn) result Effect.t
 
-  let call_cc fn = Effect.perform (Local_spawn fn)
-  let call fn = Effect.perform (Parallel_spawn fn)
+  let call_cc ?orphans ?(give = []) fn =
+    Effect.perform (Local_spawn (orphans, give, fn))
+
+  let call ?orphans ?(give = []) fn =
+    Effect.perform (Parallel_spawn (orphans, give, fn))
+
   let await prm = Effect.perform (Await prm)
   let await_exn prm = or_raise (await prm)
-  let make ~return = Effect.perform (Syscall_spawn return)
+  let make ?(give = []) return = Effect.perform (Syscall_spawn (give, return))
   let suspend prm = Effect.perform (Suspend prm)
   let cancel prm = Effect.perform (Cancel prm)
 
@@ -175,11 +229,35 @@ module Prm = struct
 
   let is_pending prm = Atomic.get prm.state = Pending
   let uid { uid; _ } = uid
+  let orphans () = L.make (Random.State.make_self_init ())
+
+  let care orphans =
+    let res = ref None in
+    let f node =
+      let prm = L.data node in
+      match (is_pending prm, !res) with
+      | false, None ->
+          res := Some prm;
+          L.remove node
+      | _ -> ()
+    in
+    L.iter_on ~f orphans; !res
+
+  type 'a state = Resolved of 'a | Failed of exn | Pending
+
+  let state prm =
+    match Atomic.get prm.state with
+    | Consumed (Ok v) | Resolved v -> Resolved v
+    | Consumed (Error exn) | Failed exn -> Failed exn
+    | Pending -> Pending
 end
 
 type 'a continuation = (('a, exn) result, unit) Effect.Deep.continuation
 
 module Local = struct
+  (* XXX(dinosaure): a local {task,unblock,cancel} is a task which was taken
+     by a specific domain. An invariant exists: [prm.Prm.domain = Chose _]. *)
+
   type 'a unblock = {
       prm: 'a Prm.t
     ; fn: unit -> unit
@@ -201,7 +279,13 @@ module Local = struct
 end
 
 module Shared = struct
-  type t = Task : 'a Prm.t * (unit -> 'a) -> t
+  (* XXX(dinosaure): a shared {task,cancel} is a task which exists into our pool
+     and was not taken yet by a domain. *)
+
+  type t =
+    | Task : 'a Prm.t * (unit -> 'a) -> t
+    | Dedicated_task : Did.t * 'a Prm.t * (unit -> 'a) -> t
+
   type cancel = Cancel : 'a Prm.t -> cancel
 end
 
@@ -234,7 +318,41 @@ type go = { go: 'a. pool -> domain -> 'a Prm.t -> (unit -> 'a) -> unit }
 
 let really_ignore fn = try ignore (fn ()) with _ -> ()
 
+let interrupt_domain ~uid pool =
+  Array.iter
+    (fun domain -> if domain.uid = uid then domain.events.interrupt ())
+    pool.domains
+
+let await_any_domains domain pool =
+  Mutex.lock (fst pool.step);
+  let uid = ref 0 in
+  let is_sleeping value =
+    incr uid;
+    if !uid = domain.uid then true else value
+  in
+  if not (Array.for_all is_sleeping pool.idle) then
+    Condition.wait (snd pool.step) (fst pool.step);
+  Mutex.unlock (fst pool.step)
+(* XXX(dinosaure): if all domains sleep, we don't wait something from them.
+   Otherwise, we wait a signal from one of them. We must be sure that we don't
+   wait a signal from ouselves so we consider our current domain as a sleeping
+   domain (even if it's probably false). *)
+
+let rec until_children_are_cancelled pool domain = function
+  | [] -> ()
+  | unresolved ->
+      let unresolved, _ =
+        List.partition (fun (Prm.Prm prm) -> Prm.is_pending prm) unresolved
+      in
+      await_any_domains domain pool;
+      until_children_are_cancelled pool domain unresolved
+
 module Run = struct
+  (* NOTE(dinosaure): even if we [really_ignore] the result of a task (even its
+     exception), [go] cares about such result - we don't want that our domain
+     fails randomly when it tries to execute a task. So we can [really_ignore]
+     because [go] cares about the result. *)
+
   let rec step pool domain go = function
     | Local.Task (prm, fn) ->
         if Atomic.get prm.Prm.state = Pending then (
@@ -245,6 +363,10 @@ module Run = struct
     | Local.Unblock { prm; fn; return; k } ->
         really_ignore (fun () ->
             go.go pool domain prm (fun () -> fn (); return ()));
+        (* NOTE(dinosaure): it's safe to consider that the user [await]/[suspend]
+           the promise. The apparition of [Unblock] is only due to an explicit
+           call to [suspend] - the user is actually waiting for a result, and
+           we resume the continuation with the result. *)
         let res = Prm.to_consumed prm in
         Effect.Deep.continue k res
     | Local.Cancel prm ->
@@ -265,8 +387,23 @@ module Run = struct
            [cancel] its children again (knowing that it is impossible for the
            user code to add new ones). *)
         Tq.iter
-          ~f:(fun (Prm.Prm prm) -> step pool domain go (Local.Cancel prm))
+          ~f:(fun (Prm.Prm prm) ->
+            match Atomic.get prm.Prm.domain with
+            | Prm.Chosen uid when uid = domain.uid ->
+                step pool domain go (Local.Cancel prm)
+            | Prm.Chosen uid ->
+                Mutex.lock (fst pool.work);
+                L.push (Shared.Cancel prm) pool.clist;
+                interrupt_domain ~uid pool;
+                Condition.broadcast (snd pool.work);
+                Mutex.unlock (fst pool.work)
+            | Prm.On_hold ->
+                Mutex.lock (fst pool.work);
+                L.push (Shared.Cancel prm) pool.clist;
+                Condition.broadcast (snd pool.work);
+                Mutex.unlock (fst pool.work))
           prm.Prm.children;
+        until_children_are_cancelled pool domain (Tq.to_list prm.Prm.children);
         Prm.to_consumed_with prm (Error Prm.Cancelled)
 
   let transfer domain processes =
@@ -310,11 +447,26 @@ end
 
 exception Still_has_children
 exception Not_a_child
+exception No_domain_available
+exception Resource_leak
 
 module Pool = struct
   let assign_domain domain prm =
     Atomic.compare_and_set prm.Prm.domain Prm.On_hold (Prm.Chosen domain.uid)
     |> fun set -> assert set
+
+  let remove_prm_from_pool pool prm =
+    let f node =
+      let (Prm.Prm prm') =
+        match L.data node with
+        | Shared.Task (prm', _) -> Prm.Prm prm'
+        | Shared.Dedicated_task (_, prm', _) -> Prm.Prm prm'
+      in
+      if prm'.Prm.uid = prm.Prm.uid then L.remove node
+    in
+    L.iter_on ~f pool.glist;
+    Prm.to_consumed_with prm (Error Prm.Cancelled)
+  (* XXX(dinosaure): [remove_prm_from_pool] must be used with a mutex. *)
 
   let nothing_to_do pool = L.is_empty pool.glist && L.is_empty pool.clist
   (* XXX(dinosaure): [nothing_to_do] must be used with a mutex. *)
@@ -324,7 +476,7 @@ module Pool = struct
     let f node =
       let (Shared.Cancel prm) = L.data node in
       match (Atomic.get prm.Prm.domain, !to_cancel) with
-      | Prm.On_hold, _ -> ()
+      | Prm.On_hold, _ -> remove_prm_from_pool pool prm
       | Prm.Chosen uid, None when uid = domain.uid ->
           L.remove node;
           to_cancel := Some (Prm.Prm prm)
@@ -338,6 +490,9 @@ module Pool = struct
         | Shared.Task (prm, fn) ->
             assign_domain domain prm;
             Some (Local.Task (prm, fn))
+        | Shared.Dedicated_task (did, prm, fn) as task ->
+            if did = domain.uid then Some (Local.Task (prm, fn))
+            else (L.push task pool.glist; None)
         | exception L.Empty -> None)
   (* XXX(dinosaure): [locate] must be used with a mutex. *)
 
@@ -396,8 +551,14 @@ module Pool = struct
     Mutex.unlock (fst pool.work);
     wait pool
 
-  let domain ~events ?(g = Random.State.make_self_init ()) _ =
-    { g; llist= L.make g; blist= L.make g; uid= Did.gen (); events= events () }
+  let domain ~events ?(g = Random.State.make_self_init ()) idx =
+    {
+      g
+    ; llist= L.make g
+    ; blist= L.make g
+    ; uid= Did.gen ()
+    ; events= events (succ idx)
+    }
 
   let make ?(g = Random.State.make_self_init ())
       ?(domains = max 0 (Domain.recommended_domain_count () - 1)) ~events go =
@@ -424,56 +585,60 @@ type _ Effect.t += Yield : unit Effect.t
 
 let yield () = Effect.perform Yield
 
-let do_local_spawn domain ~parent fn k =
+let do_local_spawn domain ress ?orphans ~parent fn k =
+  let resources = Tq.make () in
+  let f (Own.Resource { active; _ } as resource) =
+    Tq.enqueue resources (Own.copy resource);
+    Atomic.set active false
+  in
+  List.iter f ress;
   let prm =
     {
       Prm.uid= Id.gen ()
     ; domain= Atomic.make (Prm.Chosen domain.uid)
-    ; state= Atomic.make Prm.Pending
+    ; state= Atomic.make (Prm.Pending : _ Prm.pstate)
     ; ty= Ty.Task
     ; children= Tq.make ()
+    ; resources
     ; parent= Some (Prm.Prm parent)
     }
   in
+  Option.iter (L.push prm) orphans;
   Tq.enqueue parent.Prm.children (Prm.Prm prm);
   L.push (Local.Task (prm, fn)) domain.llist;
   Effect.Deep.continue k prm
 
-let do_parallel_spawn pool ~parent fn k =
-  let prm =
-    {
-      Prm.uid= Id.gen ()
-    ; domain= Atomic.make Prm.On_hold
-    ; state= Atomic.make Prm.Pending
-    ; ty= Ty.Task
-    ; children= Tq.make ()
-    ; parent= Some (Prm.Prm parent)
-    }
-  in
-  Tq.enqueue parent.Prm.children (Prm.Prm prm);
-  Pool.push pool ~fn prm;
-  Effect.Deep.continue k prm
+let do_parallel_spawn pool ress ?orphans ~parent fn k =
+  if Array.length pool.domains <= 0 then
+    Effect.Deep.discontinue k No_domain_available
+  else
+    let resources = Tq.make () in
+    let f (Own.Resource { active; _ } as resource) =
+      Tq.enqueue resources (Own.copy resource);
+      Atomic.set active false
+    in
+    List.iter f ress;
+    let prm =
+      {
+        Prm.uid= Id.gen ()
+      ; domain= Atomic.make Prm.On_hold
+      ; state= Atomic.make (Prm.Pending : _ Prm.pstate)
+      ; ty= Ty.Task
+      ; children= Tq.make ()
+      ; resources
+      ; parent= Some (Prm.Prm parent)
+      }
+    in
+    Option.iter (L.push prm) orphans;
+    Tq.enqueue parent.Prm.children (Prm.Prm prm);
+    Pool.push pool ~fn prm;
+    Effect.Deep.continue k prm
 
 let is_a_child_of ~parent prm =
   let res = ref false in
   let f (Prm.Prm child) = res := !res || child.uid = prm.Prm.uid in
   Tq.iter ~f parent.Prm.children;
   !res
-
-let await_any_domains domain pool =
-  Mutex.lock (fst pool.step);
-  let uid = ref 0 in
-  let is_sleeping value =
-    incr uid;
-    if !uid = domain.uid then true else value
-  in
-  if not (Array.for_all is_sleeping pool.idle) then
-    Condition.wait (snd pool.step) (fst pool.step);
-  Mutex.unlock (fst pool.step)
-(* XXX(dinosaure): if all domains sleep, we don't wait something from them.
-   Otherwise, we wait a signal from one of them. We must be sure that we don't
-   wait a signal from ouselves so we consider our current domain as a sleeping
-   domain (even if it's probably false). *)
 
 let rec until_is_resolved pool domain go ~parent prm k =
   match (prm.Prm.ty, Atomic.get prm.Prm.state) with
@@ -513,11 +678,6 @@ let do_yield pool domain go k =
   Run.run_local pool domain go;
   Effect.Deep.continue k ()
 
-let interrupt_domain ~uid pool =
-  Array.iter
-    (fun domain -> if domain.uid = uid then domain.events.interrupt ())
-    pool.domains
-
 let rec until_is_cancelled pool domain go prm =
   match (prm.Prm.ty, Atomic.get prm.Prm.state) with
   | _, Prm.Consumed _ -> ()
@@ -532,15 +692,6 @@ let rec until_is_cancelled pool domain go prm =
           await_any_domains domain pool;
           until_is_cancelled pool domain go prm)
 
-let remove_prm_from_pool pool prm =
-  let f node =
-    let (Shared.Task (prm', _)) = L.data node in
-    if prm'.Prm.uid = prm.Prm.uid then L.remove node
-  in
-  L.iter_on ~f pool.glist;
-  Prm.to_consumed_with prm (Error Prm.Cancelled)
-(* XXX(dinosaure): [remove_prm_from_pool] must be used with a mutex. *)
-
 let rec cancel : type a. pool -> domain -> go -> a Prm.t -> unit =
  fun pool domain go prm ->
   Tq.iter ~f:(fun (Prm.Prm prm) -> cancel pool domain go prm) prm.children;
@@ -548,7 +699,7 @@ let rec cancel : type a. pool -> domain -> go -> a Prm.t -> unit =
   begin
     match (Atomic.get prm.Prm.state, Atomic.get prm.Prm.domain) with
     | Prm.Consumed _, _ -> ()
-    | _, Prm.On_hold -> remove_prm_from_pool pool prm
+    | _, Prm.On_hold -> Pool.remove_prm_from_pool pool prm
     | _, Prm.Chosen uid when uid = domain.uid ->
         (* XXX(dinosaure): this code is safe because we are surrounded by a
            lock and the task can only be executed in the current domain, which
@@ -579,14 +730,21 @@ let do_cancel pool domain go ~parent prm k =
   cancel pool domain go prm;
   Effect.Deep.continue k ()
 
-let do_syscall_spawn domain ~parent ~return k =
+let do_syscall_spawn domain ress ~parent ~return k =
+  let resources = Tq.make () in
+  let f (Own.Resource { active; _ } as resource) =
+    Tq.enqueue resources (Own.copy resource);
+    Atomic.set active false
+  in
+  List.iter f ress;
   let prm =
     {
       Prm.uid= Id.gen ()
     ; domain= Atomic.make (Prm.Chosen domain.uid)
-    ; state= Atomic.make Prm.Pending
+    ; state= Atomic.make (Prm.Pending : _ Prm.pstate)
     ; ty= Ty.Block return
     ; children= Tq.make ()
+    ; resources= Tq.make ()
     ; parent= Some (Prm.Prm parent)
     }
   in
@@ -644,6 +802,20 @@ let do_await_all pool domain go ~parent prms k =
   in
   until prms
 
+let do_own prm (Own.Resource { uid; _ } as resource) k =
+  let exists = ref false in
+  let f (Own.Resource { uid= uid'; _ }) = exists := !exists || uid = uid' in
+  Tq.iter ~f prm.Prm.resources;
+  if not !exists then Tq.enqueue prm.Prm.resources resource;
+  Effect.Deep.continue k resource
+
+let do_disown prm (Own.Resource { uid; _ }) k =
+  let f (Own.Resource { uid= uid'; active; _ }) =
+    if uid = uid' then Atomic.set active false
+  in
+  Tq.iter ~f prm.Prm.resources;
+  Effect.Deep.continue k ()
+
 let collect_pending_children prm =
   let res = ref [] in
   let f (Prm.Prm prm) =
@@ -652,22 +824,36 @@ let collect_pending_children prm =
   Tq.iter ~f prm.Prm.children;
   !res
 
+let collect_pending_resources prm =
+  let res = ref [] in
+  let f (Own.Resource { active; _ } as resource) =
+    if Atomic.get active then res := resource :: !res
+  in
+  Tq.iter ~f prm.Prm.resources;
+  !res
+
 let run ?(g = Random.State.make_self_init ()) ?domains ~events fn =
   let rec go : type a. pool -> domain -> a Prm.t -> (unit -> a) -> unit =
    fun pool domain prm fn ->
     let retc value =
-      match collect_pending_children prm with
-      | [] -> Prm.to_resolved prm value
-      | prms ->
+      match (collect_pending_children prm, collect_pending_resources prm) with
+      | [], [] -> Prm.to_resolved prm value
+      | prms, [] ->
           List.iter (fun (Prm.Prm prm) -> cancel pool domain { go } prm) prms;
           Prm.to_consumed_with prm (Error Still_has_children)
+      | _, resources ->
+          List.iter (fun resource -> Own.finalise resource) resources;
+          Prm.to_consumed_with prm (Error Resource_leak)
     in
     let exnc exn =
       Tq.iter
         ~f:(fun (Prm.Prm prm) -> cancel pool domain { go } prm)
-        prm.children;
+        prm.Prm.children;
+      Tq.iter ~f:(fun resource -> Own.finalise resource) prm.Prm.resources;
       Prm.to_failed prm exn;
-      raise exn
+      match exn with
+      | (Still_has_children | Not_a_child | Resource_leak) as exn -> raise exn
+      | _ -> ()
     in
     let effc :
         type a.
@@ -677,10 +863,12 @@ let run ?(g = Random.State.make_self_init ()) ?domains ~events fn =
       | Prm.(Failed exn | Consumed (Error exn)), _ ->
           Some (fun k -> Effect.Deep.discontinue k exn)
       | _, Did.Did -> Some (fun k -> Effect.Deep.continue k domain.uid)
-      | _, Prm.Local_spawn fn -> Some (do_local_spawn domain ~parent:prm fn)
-      | _, Prm.Parallel_spawn fn -> Some (do_parallel_spawn pool ~parent:prm fn)
-      | _, Prm.Syscall_spawn return ->
-          Some (do_syscall_spawn domain ~parent:prm ~return)
+      | _, Prm.Local_spawn (orphans, ress, fn) ->
+          Some (do_local_spawn domain ress ?orphans ~parent:prm fn)
+      | _, Prm.Parallel_spawn (orphans, ress, fn) ->
+          Some (do_parallel_spawn pool ress ?orphans ~parent:prm fn)
+      | _, Prm.Syscall_spawn (ress, return) ->
+          Some (do_syscall_spawn domain ress ~parent:prm ~return)
       | _, Prm.Await prm' -> Some (do_await pool domain { go } ~parent:prm prm')
       | _, Prm.Suspend prm' -> Some (do_suspend domain ~parent:prm prm')
       | _, Prm.Await_one (and_cancel, prms) ->
@@ -690,6 +878,8 @@ let run ?(g = Random.State.make_self_init ()) ?domains ~events fn =
       | _, Yield -> Some (do_yield pool domain { go })
       | _, Prm.Cancel prm' ->
           Some (do_cancel pool domain { go } ~parent:prm prm')
+      | _, Own.Own resource -> Some (do_own prm resource)
+      | _, Own.Disown resource -> Some (do_disown prm resource)
       | _ -> None
     in
     Effect.Deep.match_with fn () { Effect.Deep.retc; exnc; effc }
@@ -704,16 +894,17 @@ let run ?(g = Random.State.make_self_init ()) ?domains ~events fn =
     ; llist= L.make g
     ; blist= L.make g
     ; uid= Did.gen ()
-    ; events= events ()
+    ; events= events 0
     }
   in
   let prm0 =
     {
       Prm.uid= Id.gen ()
     ; domain= Atomic.make (Prm.Chosen dom0.uid)
-    ; state= Atomic.make Prm.Pending
+    ; state= Atomic.make (Prm.Pending : _ Prm.pstate)
     ; ty= Task
     ; children= Tq.make ()
+    ; resources= Tq.make ()
     ; parent= None
     }
   in
@@ -723,7 +914,7 @@ let run ?(g = Random.State.make_self_init ()) ?domains ~events fn =
   List.iter Domain.join domains;
   Prm.to_result_exn prm0
 
-let always_no_events () = { interrupt= Fun.const (); select= Fun.const [] }
+let always_no_events _ = { interrupt= Fun.const (); select= Fun.const [] }
 let task prm fn = Task (prm, fn)
 
 let run ?g ?domains ?(events = always_no_events) fn =

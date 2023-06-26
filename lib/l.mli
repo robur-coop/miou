@@ -1,6 +1,6 @@
 (** A randomized circular double linked list.
 
-    This implementation is {b not} thread-safe and should be used into a single
+    This implementation is {b not} domain-safe and should be used into a single
     domain: otherwise, you will get data-race conditions. *)
 
 type 'a t

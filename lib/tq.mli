@@ -9,3 +9,4 @@ val is_empty : 'a t -> bool
 val iter : f:('a -> unit) -> 'a t -> unit
 val drop : f:('a -> unit) -> 'a t -> unit
 val length : 'a t -> int
+val to_list : 'a t -> 'a list

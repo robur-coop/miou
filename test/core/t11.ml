@@ -3,7 +3,7 @@ open Miou
 let sleepers = Hashtbl.create 0x100
 
 let sleep until =
-  let syscall = Prm.make ~return:(Fun.const ()) in
+  let syscall = Prm.make (Fun.const ()) in
   Hashtbl.add sleepers (Prm.uid syscall) (syscall, until);
   Prm.suspend syscall
 
@@ -27,7 +27,7 @@ let select () =
       Unix.sleepf until;
       [ Miou.task prm (Fun.const ()) ]
 
-let events () = { select; interrupt= ignore }
+let events _ = { select; interrupt= ignore }
 
 let prgm () =
   Miou.run ~events @@ fun () ->

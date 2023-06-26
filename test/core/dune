@@ -73,6 +73,26 @@
  (modules t17)
  (libraries miou))
 
+(executable
+ (name t18)
+ (modules t18)
+ (libraries miou))
+
+(executable
+ (name t19)
+ (modules t19)
+ (libraries miou))
+
+(executable
+ (name t20)
+ (modules t20)
+ (libraries miou))
+
+(executable
+ (name t21)
+ (modules t21)
+ (libraries miou))
+
 (cram
  (package miouu)
  (deps
@@ -90,4 +110,8 @@
   t13.exe
   t14.exe
   t15.exe
-  t17.exe))
+  t17.exe
+  t18.exe
+  t19.exe
+  t20.exe
+  t21.exe))

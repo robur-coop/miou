@@ -2,13 +2,14 @@ open Miou
 
 let or_raise = function Ok value -> value | Error exn -> raise exn
 
-type file_descr = { fd: Unix.file_descr; non_blocking: bool }
+type file_descr = { fd: Unix.file_descr; own: Own.t option; non_blocking: bool }
 
 let of_file_descr ?(non_blocking = true) fd =
   if non_blocking then Unix.set_nonblock fd else Unix.clear_nonblock fd;
-  { fd; non_blocking }
+  { fd; own= None; non_blocking }
 
 let to_file_descr { fd; _ } = fd
+let owner { own; _ } = own
 
 type unix_scheduler = {
     rd: (Unix.file_descr, unit Prm.syscall) Hashtbl.t
@@ -54,13 +55,13 @@ let sleeper () =
 
 let blocking_read fd =
   let dom = dom () in
-  let prm = Prm.make ~return:(Fun.const ()) in
+  let prm = Prm.make (Fun.const ()) in
   Hashtbl.add dom.rd fd prm;
   or_raise (Prm.suspend prm)
 
 let blocking_write fd =
   let dom = dom () in
-  let prm = Prm.make ~return:(Fun.const ()) in
+  let prm = Prm.make (Fun.const ()) in
   Hashtbl.add dom.wr fd prm;
   or_raise (Prm.suspend prm)
 
@@ -122,7 +123,12 @@ let rec accept ?cloexec ({ fd; non_blocking; _ } as file_descr) =
         blocking_read fd; accept ?cloexec file_descr
     | fd, sockaddr ->
         Unix.set_nonblock fd;
-        let file_descr = { fd; non_blocking= true } in
+        let close fd =
+          Unix.close fd;
+          Format.printf "%d closed\n%!" (Obj.magic fd)
+        in
+        let own = Own.own ~finally:close fd in
+        let file_descr = { fd; own= Some own; non_blocking= true } in
         (file_descr, sockaddr))
   else
     let rec go () =
@@ -130,17 +136,18 @@ let rec accept ?cloexec ({ fd; non_blocking; _ } as file_descr) =
       | exception Unix.(Unix_error (EINTR, _, _)) -> go ()
       | fd, sockaddr ->
           Unix.set_nonblock fd;
-          let file_descr = { fd; non_blocking= true } in
+          let own = Own.own ~finally:Unix.close fd in
+          let file_descr = { fd; own= Some own; non_blocking= true } in
           (file_descr, sockaddr)
     in
     blocking_read fd; go ()
 
-let close { fd; _ } = Unix.close fd
+let close { fd; own; _ } = Unix.close fd; Option.iter Own.disown own
 
 let consume_interrupt interrupt =
   ignore (Unix.read interrupt (Bytes.create 1) 0 1)
 
-let select interrupt () =
+let select _domain interrupt () =
   let dom = dom () in
   clean_syscalls dom;
   let rds = Hashtbl.fold (fun fd _ acc -> fd :: acc) dom.rd [] in
@@ -193,17 +200,17 @@ let select interrupt () =
       syscalls
   | _ -> []
 
-let events () =
+let events domain =
   let ic, oc = Unix.pipe ~cloexec:true () in
   let signal = Bytes.make 1 '\000' in
   let interrupt () = ignore (Unix.single_write oc signal 0 1) in
-  let select () = select ic () in
+  let select () = select domain ic () in
   { Miou.interrupt; select }
 
 let run ?g ?domains fn = Miou.run ~events ?g ?domains fn
 
 let sleep until =
   let dom = dom () in
-  let prm = Prm.make ~return:(Fun.const ()) in
+  let prm = Prm.make (Fun.const ()) in
   Hashtbl.add dom.sleepers (Prm.uid prm) (until, prm);
   or_raise (Prm.suspend prm)

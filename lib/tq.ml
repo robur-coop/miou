@@ -87,3 +87,8 @@ let drop ~f t =
     match dequeue t with v -> f v; go () | exception Empty -> ()
   in
   go ()
+
+let to_list t =
+  let res = ref [] in
+  let f v = res := v :: !res in
+  iter ~f t; !res
