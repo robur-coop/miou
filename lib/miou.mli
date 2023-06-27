@@ -133,12 +133,36 @@ module Prm : sig
       So a promise can be associated with an {!type:orphans}. The latter will
       then collect the results of the associated promise tasks and give you back
       the promises (via {!val:care} in a 'non-blocking' mode: applying
-      {!val:await} to them will give you the results directly. *)
+      {!val:await} to them will give you the results directly.
+
+      In this way, by creating promises associated with this Orphan value, we
+      can at the same time "clean up" these {i background} tasks, as this code
+      shows:
+
+      {[
+        let rec clean_up orphans =
+          match Prm.care orphans with
+          | None -> ()
+          | Some prm -> Prm.await_exn prm; clean_up orphans
+
+        let server orphans =
+          clean_up orphans;
+          ignore (Prm.call ~orphans handler);
+          server orphans in
+        server (Prm.oprhans ())
+      ]} *)
 
   type 'a orphans
+  (** The type of orphan collectors. *)
 
   val orphans : unit -> 'a orphans
+  (** [orphans ()] makes a new orphan collectors which can be used by
+      {!val:Prm.call} and {!val:Prm.call_cc}. *)
+
   val care : 'a orphans -> 'a t option
+  (** [care orphans] returns a {i ready-to-await} promise or [None]. The user
+      must {i consume} the result of the promise with {!val:Prm.await}.
+      Otherwise, [miou] will raises [Still_has_children]. *)
 
   (** {2 Launch a promise.} *)
 
@@ -152,8 +176,6 @@ module Prm : sig
       perform this kind of task. The user does {b not} choose the domain on
       which the task will be executed. [miou] {b randomly} chooses which of the
       domains will perform the task. *)
-
-  (* val all : (unit -> 'a) -> 'a t list *)
 
   (* {2 Cancellation.} *)
 

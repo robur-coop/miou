@@ -74,6 +74,11 @@ $ ./t10.exe
 Fatal error: exception Miou.Not_a_child
 ]}
 
+{4 t11 - implementation of sleepers.}
+
+This test shows the result of our tutorial about sleepers (without [interrupt])
+and demonstrate that our implementation works.
+
 {4 t12 - [cancel] does not do a state transition if the promise is resolved.}
 
 This test assumes a design that consists of not marking an already resolved
@@ -96,3 +101,28 @@ call_cc + Miouu.sleep: ok
 This test shows some of the limitations of cancel. You can't cancel everything
 and, in this case, our task sleeping for 0.2 seconds will really sleep for 0.2
 seconds even if you try to cancel it.
+
+{4 t17 - the minimal [select] function.}
+
+This tests demonstrates the example available into the documentation about the
+minimal required to give the [events] structure.
+
+{4 t18 - when no domains are available.}
+
+This test shows that when we don't have domains, {!val:Prm.call} raises an
+exception [No_domain_available].
+
+{4 t19 - basic usage of [Own].}
+
+This test shows that [miou] releases well resources when we got an abnormal
+termination. It should always show up "Resource released".
+
+{4 t20 - manage resources by ourself.}
+
+This test show that even if you use the {!module:Own}, you still need to manage
+by ourself resources. [Own] is useful only for abnormal situations.
+
+{4 t21 - the real usage of [Own].}
+
+This test shows how to use properly the {!module:Own} module. The user can
+[own], release its resources and must [disown].
