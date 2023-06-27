@@ -338,6 +338,19 @@ let await_any_domains domain pool =
    wait a signal from ouselves so we consider our current domain as a sleeping
    domain (even if it's probably false). *)
 
+let remove_prm_from_pool pool prm =
+  let f node =
+    let (Prm.Prm prm') =
+      match L.data node with
+      | Shared.Task (prm', _) -> Prm.Prm prm'
+      | Shared.Dedicated_task (_, prm', _) -> Prm.Prm prm'
+    in
+    if prm'.Prm.uid = prm.Prm.uid then L.remove node
+  in
+  L.iter_on ~f pool.glist;
+  Prm.to_consumed_with prm (Error Prm.Cancelled)
+(* XXX(dinosaure): [remove_prm_from_pool] must be used with a mutex. *)
+
 let rec until_children_are_cancelled pool domain = function
   | [] -> ()
   | unresolved ->
@@ -455,19 +468,6 @@ module Pool = struct
   let assign_domain domain prm =
     Atomic.compare_and_set prm.Prm.domain Prm.On_hold (Prm.Chosen domain.uid)
     |> fun set -> assert set
-
-  let remove_prm_from_pool pool prm =
-    let f node =
-      let (Prm.Prm prm') =
-        match L.data node with
-        | Shared.Task (prm', _) -> Prm.Prm prm'
-        | Shared.Dedicated_task (_, prm', _) -> Prm.Prm prm'
-      in
-      if prm'.Prm.uid = prm.Prm.uid then L.remove node
-    in
-    L.iter_on ~f pool.glist;
-    Prm.to_consumed_with prm (Error Prm.Cancelled)
-  (* XXX(dinosaure): [remove_prm_from_pool] must be used with a mutex. *)
 
   let nothing_to_do pool = L.is_empty pool.glist && L.is_empty pool.clist
   (* XXX(dinosaure): [nothing_to_do] must be used with a mutex. *)
@@ -702,7 +702,7 @@ let rec cancel : type a. pool -> domain -> go -> a Prm.t -> unit =
     | Prm.Consumed _, _ -> ()
     | _, Prm.On_hold ->
         Tq.iter ~f:(fun resource -> Own.finalise resource) prm.Prm.resources;
-        Pool.remove_prm_from_pool pool prm
+        remove_prm_from_pool pool prm
     | _, Prm.Chosen uid when uid = domain.uid ->
         (* XXX(dinosaure): this code is safe because we are surrounded by a
            lock and the task can only be executed in the current domain, which
