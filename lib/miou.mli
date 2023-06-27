@@ -132,12 +132,12 @@ module Prm : sig
 
       So a promise can be associated with an {!type:orphans}. The latter will
       then collect the results of the associated promise tasks and give you back
-      the promises (via {!val:care} in a 'non-blocking' mode: applying
+      the promises (via {!val:care}) in a 'non-blocking' mode: applying
       {!val:await} to them will give you the results directly.
 
-      In this way, by creating promises associated with this Orphan value, we
-      can at the same time "clean up" these {i background} tasks, as this code
-      shows:
+      In this way, by creating promises associated with this {!type:orphans}
+      value, we can at the same time "clean up" these {i background} tasks, as
+      this code shows:
 
       {[
         let rec clean_up orphans =
@@ -225,8 +225,8 @@ module Prm : sig
         - : (unit, exn) result = Error Prm.Cancelled
       ]}
 
-      What is certain is that after Prm.cancel, the task was {b completed} one
-      way ([Error Cancelled]) or another ([Ok ()]). *)
+      What is certain is that after {!val:Prm.cancel}, the task was
+      {b completed} one way ([Error Cancelled]) or another ([Ok ()]). *)
 
   (** {2 Await a promise.} *)
 

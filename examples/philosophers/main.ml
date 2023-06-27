@@ -8,6 +8,9 @@ let critical = Mutex.create ()
 
 type state = Hungry | Thinking | Eating
 
+open Miou
+open Miouu
+
 let test sem state i =
   if state.(i) = Hungry && state.(l i) <> Eating && state.(r i) <> Eating then (
     state.(i) <- Eating;
@@ -17,7 +20,7 @@ let think i =
   let duration = 1. +. Random.float 5. in
   with_lock output (fun () ->
       Format.printf "%02d is thinking %fs\n%!" i duration);
-  Miouu.sleep duration
+  sleep duration
 
 let take_forks sem state i =
   let () =
@@ -31,7 +34,7 @@ let take_forks sem state i =
 let eat i =
   let duration = 1. +. Random.float 5. in
   with_lock output (fun () -> Format.printf "%02d is eating\n%!" i);
-  Miouu.sleep duration
+  sleep duration
 
 let put_forks sem state i =
   with_lock critical @@ fun () ->
@@ -39,16 +42,17 @@ let put_forks sem state i =
   test sem state (l i);
   test sem state (r i)
 
-let rec philosopher sem state i () =
-  think i;
-  take_forks sem state i;
-  Miou.yield ();
-  eat i;
-  put_forks sem state i;
-  Miou.yield ();
-  philosopher sem state i ()
-
-open Miou
+let philosopher sem state i =
+  let rec go () =
+    think i;
+    take_forks sem state i;
+    yield ();
+    eat i;
+    put_forks sem state i;
+    yield ();
+    go ()
+  in
+  go
 
 let () =
   let ts =
@@ -59,8 +63,11 @@ let () =
   let state = Array.init 5 (fun _ -> Thinking) in
   let sleep =
     Prm.call (fun () ->
+        let finally = Array.iter Semaphore.Binary.release in
+        let t = Miou.Own.own ~finally sem in
         Miouu.sleep (Float.of_int ts);
-        Array.iter Semaphore.Binary.release sem)
+        finally sem;
+        Miou.Own.disown t)
   in
   let uid01 = Prm.call (philosopher sem state 00) in
   let uid02 = Prm.call (philosopher sem state 01) in

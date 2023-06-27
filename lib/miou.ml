@@ -344,7 +344,7 @@ let rec until_children_are_cancelled pool domain = function
       let unresolved, _ =
         List.partition (fun (Prm.Prm prm) -> Prm.is_pending prm) unresolved
       in
-      await_any_domains domain pool;
+      if unresolved <> [] then await_any_domains domain pool;
       until_children_are_cancelled pool domain unresolved
 
 module Run = struct
@@ -388,22 +388,23 @@ module Run = struct
            user code to add new ones). *)
         Tq.iter
           ~f:(fun (Prm.Prm prm) ->
-            match Atomic.get prm.Prm.domain with
-            | Prm.Chosen uid when uid = domain.uid ->
+            match (Atomic.get prm.Prm.state, Atomic.get prm.Prm.domain) with
+            | Prm.Pending, Prm.Chosen uid when uid = domain.uid ->
                 step pool domain go (Local.Cancel prm)
-            | Prm.Chosen uid ->
+            | Prm.Pending, Prm.Chosen uid ->
                 Mutex.lock (fst pool.work);
                 L.push (Shared.Cancel prm) pool.clist;
                 interrupt_domain ~uid pool;
                 Condition.broadcast (snd pool.work);
                 Mutex.unlock (fst pool.work)
-            | Prm.On_hold ->
+            | Prm.Pending, Prm.On_hold ->
                 Mutex.lock (fst pool.work);
-                L.push (Shared.Cancel prm) pool.clist;
-                Condition.broadcast (snd pool.work);
-                Mutex.unlock (fst pool.work))
+                remove_prm_from_pool pool prm;
+                Mutex.unlock (fst pool.work)
+            | _ -> ())
           prm.Prm.children;
         until_children_are_cancelled pool domain (Tq.to_list prm.Prm.children);
+        Tq.iter ~f:(fun resource -> Own.finalise resource) prm.Prm.resources;
         Prm.to_consumed_with prm (Error Prm.Cancelled)
 
   let transfer domain processes =
@@ -699,7 +700,9 @@ let rec cancel : type a. pool -> domain -> go -> a Prm.t -> unit =
   begin
     match (Atomic.get prm.Prm.state, Atomic.get prm.Prm.domain) with
     | Prm.Consumed _, _ -> ()
-    | _, Prm.On_hold -> Pool.remove_prm_from_pool pool prm
+    | _, Prm.On_hold ->
+        Tq.iter ~f:(fun resource -> Own.finalise resource) prm.Prm.resources;
+        Pool.remove_prm_from_pool pool prm
     | _, Prm.Chosen uid when uid = domain.uid ->
         (* XXX(dinosaure): this code is safe because we are surrounded by a
            lock and the task can only be executed in the current domain, which
@@ -714,6 +717,7 @@ let rec cancel : type a. pool -> domain -> go -> a Prm.t -> unit =
         in
         L.iter_on ~f:f0 domain.llist;
         L.iter_on ~f:f1 domain.blist;
+        Tq.iter ~f:(fun resource -> Own.finalise resource) prm.Prm.resources;
         Prm.to_consumed_with prm (Error Prm.Cancelled)
     | _, Prm.Chosen uid ->
         (* XXX(dinosaure): this code is like [Pool.cancel] but we are already
