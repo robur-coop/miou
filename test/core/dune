@@ -34,6 +34,11 @@
  (libraries unix miou))
 
 (executable
+ (name t08)
+ (modules t08)
+ (libraries unix miou))
+
+(executable
  (name t09)
  (modules t09)
  (libraries miouu))
@@ -103,6 +108,7 @@
   t05.exe
   t06.exe
   t07.exe
+  t08.exe
   t09.exe
   t10.exe
   t11.exe

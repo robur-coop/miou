@@ -64,12 +64,14 @@ module Own = struct
 
   type _ Effect.t += Own : t -> t Effect.t
   type _ Effect.t += Disown : t -> unit Effect.t
+  type _ Effect.t += Transfer : t -> unit Effect.t
 
   let own ~finally v =
     let resource = make ~finally v in
     Effect.perform (Own resource)
 
   let disown resource = Effect.perform (Disown resource)
+  let transfer resource = Effect.perform (Transfer resource)
 
   let copy (Resource { uid; value; finally; _ }) =
     Resource { uid; value; finally; active= Atomic.make true }
@@ -182,12 +184,9 @@ module Prm = struct
   let rec to_consumed_with prm res =
     if not (Atomic.compare_and_set prm.state Pending (Consumed res)) then
       match Atomic.get prm.state with
-      | Resolved v as seen ->
-          if not (Atomic.compare_and_set prm.state seen (Consumed (Ok v))) then
-            to_consumed_with prm (Ok v)
-      | Failed exn as seen ->
-          if not (Atomic.compare_and_set prm.state seen (Consumed (Error exn)))
-          then to_consumed_with prm (Error exn)
+      | (Resolved _ | Failed _) as seen ->
+          if not (Atomic.compare_and_set prm.state seen (Consumed res)) then
+            to_consumed_with prm res
       | _ -> ()
 
   let rec to_consumed prm =
@@ -336,7 +335,8 @@ let await_any_domains domain pool =
 (* XXX(dinosaure): if all domains sleep, we don't wait something from them.
    Otherwise, we wait a signal from one of them. We must be sure that we don't
    wait a signal from ouselves so we consider our current domain as a sleeping
-   domain (even if it's probably false). *)
+   domain (even if it's false because we run this function into the current
+   domain). *)
 
 let remove_prm_from_pool pool prm =
   let f node =
@@ -348,6 +348,10 @@ let remove_prm_from_pool pool prm =
     if prm'.Prm.uid = prm.Prm.uid then L.remove node
   in
   L.iter_on ~f pool.glist;
+  (* NOTE(dinosaure): it's safe to do a transition state here because
+     the task associated to the promise is not executed by any one domain.
+     Also, due to the mutex protection, no domain can take the ownership
+     on this specific cancellation job. *)
   Prm.to_consumed_with prm (Error Prm.Cancelled)
 (* XXX(dinosaure): [remove_prm_from_pool] must be used with a mutex. *)
 
@@ -359,6 +363,13 @@ let rec until_children_are_cancelled pool domain = function
       in
       if unresolved <> [] then await_any_domains domain pool;
       until_children_are_cancelled pool domain unresolved
+(* NOTE(dinosaure): we did not fully described [until_children_are_cancelled]
+   and the usage of this function is probably really specific to how we cancel
+   a promise and its children. Currently, this function is called after all the
+   children in the same domain have been cleaned - so we don't need to call
+   [Run.run_local] or discrimate promises into the same domain and promises
+   into another domain. Only promises that run in another domain should
+   therefore remain, hence the [await_any_domains]. *)
 
 module Run = struct
   (* NOTE(dinosaure): even if we [really_ignore] the result of a task (even its
@@ -393,12 +404,10 @@ module Run = struct
         in
         L.iter_on ~f:f0 domain.llist;
         L.iter_on ~f:f1 domain.blist;
-        (* XXX(dinosaure): even if [cancel] recurses on [prm]'s children, during
-           the synchronisation mechanism, there may have been a new child that
-           was not taken into account. We are currently in the only [prm]
-           synchronisation point, so we can take advantage of this to try to
-           [cancel] its children again (knowing that it is impossible for the
-           user code to add new ones). *)
+        (* XXX(dinosaure): we must recurse on [prm]'s children here because this
+           this is the only point where [prm.Prm.children] is up to date -
+           because we are currently into the same domain where we (will?)
+           tr{y,ied} to run the task associated to [prm]. *)
         Tq.iter
           ~f:(fun (Prm.Prm prm) ->
             match (Atomic.get prm.Prm.state, Atomic.get prm.Prm.domain) with
@@ -643,8 +652,11 @@ let is_a_child_of ~parent prm =
 
 let rec until_is_resolved pool domain go ~parent prm k =
   match (prm.Prm.ty, Atomic.get prm.Prm.state) with
-  | _, Prm.Consumed (Error ((Still_has_children | Not_a_child) as exn))
-  | _, Prm.Failed ((Still_has_children | Not_a_child) as exn) ->
+  | ( _
+    , Prm.Consumed
+        (Error ((Still_has_children | Not_a_child | Resource_leak) as exn)) ) ->
+      Effect.Deep.discontinue k exn
+  | _, Prm.Failed ((Still_has_children | Not_a_child | Resource_leak) as exn) ->
       Effect.Deep.discontinue k exn
   | _, Prm.Consumed res -> Effect.Deep.continue k res
   | _, Prm.(Resolved _ | Failed _) ->
@@ -677,6 +689,7 @@ let do_suspend domain ~parent prm k =
 
 let do_yield pool domain go k =
   Run.run_local pool domain go;
+  (* TODO(dinosaure): await any domains too? *)
   Effect.Deep.continue k ()
 
 let rec until_is_cancelled pool domain go prm =
@@ -693,9 +706,9 @@ let rec until_is_cancelled pool domain go prm =
           await_any_domains domain pool;
           until_is_cancelled pool domain go prm)
 
-let rec cancel : type a. pool -> domain -> go -> a Prm.t -> unit =
+let cancel : type a. pool -> domain -> go -> a Prm.t -> unit =
  fun pool domain go prm ->
-  Tq.iter ~f:(fun (Prm.Prm prm) -> cancel pool domain go prm) prm.children;
+  (* Tq.iter ~f:(fun (Prm.Prm prm) -> cancel pool domain go prm) prm.children; *)
   Mutex.lock (fst pool.work);
   begin
     match (Atomic.get prm.Prm.state, Atomic.get prm.Prm.domain) with
@@ -820,6 +833,22 @@ let do_disown prm (Own.Resource { uid; _ }) k =
   Tq.iter ~f prm.Prm.resources;
   Effect.Deep.continue k ()
 
+let do_transfer prm (Own.Resource { uid; _ } as resource) k =
+  match prm.Prm.parent with
+  | Some (Prm.Prm parent) ->
+      let f (Own.Resource { uid= uid'; active; _ }) =
+        if uid = uid' then Atomic.set active false
+      in
+      Tq.iter ~f prm.Prm.resources;
+      let exists = ref false in
+      let f (Own.Resource { uid= uid'; _ }) = exists := !exists || uid = uid' in
+      Tq.iter ~f parent.Prm.resources;
+      if not !exists then Tq.enqueue prm.Prm.resources (Own.copy resource);
+      Effect.Deep.continue k ()
+  | None ->
+      Effect.Deep.continue k
+        () (* TODO(dinosaure): discontinue with an exception? *)
+
 let collect_pending_children prm =
   let res = ref [] in
   let f (Prm.Prm prm) =
@@ -884,6 +913,7 @@ let run ?(g = Random.State.make_self_init ()) ?domains ~events fn =
           Some (do_cancel pool domain { go } ~parent:prm prm')
       | _, Own.Own resource -> Some (do_own prm resource)
       | _, Own.Disown resource -> Some (do_disown prm resource)
+      | _, Own.Transfer resource -> Some (do_transfer prm resource)
       | _ -> None
     in
     Effect.Deep.match_with fn () { Effect.Deep.retc; exnc; effc }

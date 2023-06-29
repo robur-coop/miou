@@ -10,6 +10,7 @@
   $ ./t07.exe
   Fatal error: exception Miou.Not_a_child
   [2]
+  $ ./t08.exe
   $ ./t09.exe
   Fatal error: exception Miou.Still_has_children
   [2]

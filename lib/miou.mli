@@ -97,6 +97,21 @@ module Own : sig
       ]}
 
       Note that even in this situation, [miou] calls the finaliser. *)
+
+  val transfer : t -> unit
+  (** [transfer t] transfers the ownership to the parent. This can be
+      interesting when the resource is locked into a small promise in
+      conjunction with others and the parent will make real use of it such as:
+
+      {[
+        Prm.await_first
+          [ Prm.call_cc @@ fun () ->
+            let socket = tcpv4 () in
+            Miouu.connect socket addr;
+            Own.transmit socket;
+            socket
+          ; Prm.call_cc @@ fun () -> sleep 10.; raise Timeout ]
+      ]} *)
 end
 
 module Prm : sig

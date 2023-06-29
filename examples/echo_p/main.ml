@@ -2,14 +2,9 @@ open Miou
 open Miouu
 
 let listen sockaddr =
-  let socket =
-    Unix.socket (Unix.domain_of_sockaddr sockaddr) Unix.SOCK_STREAM 0
-  in
-  Unix.setsockopt socket Unix.SO_REUSEADDR true;
-  Unix.setsockopt socket Unix.SO_REUSEPORT true;
-  Unix.bind socket sockaddr;
-  Unix.listen socket 64;
-  of_file_descr socket
+  let fd = tcpv4 () in
+  bind_and_listen fd sockaddr;
+  fd
 
 let sockaddr_to_string = function
   | Unix.ADDR_UNIX str -> str

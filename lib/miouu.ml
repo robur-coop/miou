@@ -11,6 +11,24 @@ let of_file_descr ?(non_blocking = true) fd =
 let to_file_descr { fd; _ } = fd
 let owner { own; _ } = own
 
+let tcpv4 () =
+  let fd = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+  Unix.set_nonblock fd;
+  let own = Own.own ~finally:Unix.close fd in
+  { fd; own= Some own; non_blocking= true }
+
+let tcpv6 () =
+  let fd = Unix.socket Unix.PF_INET6 Unix.SOCK_STREAM 0 in
+  Unix.set_nonblock fd;
+  let own = Own.own ~finally:Unix.close fd in
+  { fd; own= Some own; non_blocking= true }
+
+let bind_and_listen ?(backlog = 64) { fd; _ } sockaddr =
+  Unix.setsockopt fd Unix.SO_REUSEADDR true;
+  Unix.setsockopt fd Unix.SO_REUSEPORT true;
+  Unix.bind fd sockaddr;
+  Unix.listen fd backlog
+
 type unix_scheduler = {
     rd: (Unix.file_descr, unit Prm.syscall) Hashtbl.t
   ; wr: (Unix.file_descr, unit Prm.syscall) Hashtbl.t

@@ -5,4 +5,4 @@ let prgm () =
   let p = Prm.call_cc (Fun.const ()) in
   yield (); Prm.cancel p; Prm.await p
 
-let () = match prgm () with Ok () -> () | Error _ -> failwith "t12"
+let () = match prgm () with Error Prm.Cancelled -> () | _ -> failwith "t12"
