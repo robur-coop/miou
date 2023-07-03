@@ -1,0 +1,68 @@
+open Miou
+
+type box = Box : 'a option Atomic.t * 'a Prm.syscall -> box
+type t = (Id.t, box) Hashtbl.t
+
+let dom =
+  let make () : t = Hashtbl.create 0x100 in
+  let dom = Domain.DLS.new_key make in
+  fun () -> Domain.DLS.get dom
+
+let or_raise = function Ok value -> value | Error exn -> raise exn
+
+module Box : sig
+  type 'a t
+  type 'a u
+
+  val make : unit -> 'a t * 'a u
+  val push : 'a -> 'a u -> bool
+  val take : 'a t -> 'a
+end = struct
+  type 'a t = 'a Miou.Prm.syscall
+  type 'a u = 'a option Atomic.t
+
+  let make () =
+    let tbl = dom () in
+    let value = Atomic.make None in
+    let prm =
+      Prm.make @@ fun () ->
+      match Atomic.get value with
+      | Some value -> value
+      | None -> invalid_arg "box is empty"
+    in
+    Hashtbl.add tbl (Prm.uid prm) (Box (value, prm));
+    (prm, value)
+
+  let push value u = Atomic.compare_and_set u None (Some value)
+  let take t = or_raise (Prm.suspend t)
+end
+
+let select () =
+  let tbl = dom () in
+  let fold uid (Box (value, prm)) acc =
+    match Atomic.get value with
+    | Some _ -> Miou.task prm (fun () -> Hashtbl.remove tbl uid) :: acc
+    | None -> acc
+  in
+  Hashtbl.fold fold tbl []
+
+let events _domain = { Miou.select; interrupt= ignore }
+
+let prgm0 () =
+  let t, u = Box.make () in
+  let p0 = Prm.call @@ fun () -> assert (Box.push () u) in
+  Prm.await_exn p0; Box.take t
+
+let prgm1 () =
+  let t, u = Box.make () in
+  let p0 = Prm.call @@ fun () -> ignore (Box.push () u) in
+  Box.take t; Prm.await_exn p0
+
+let prgm2 () =
+  let t, u = Box.make () in
+  let p0 = Prm.call_cc @@ fun () -> ignore (Box.push () u) in
+  Prm.await_exn p0; Box.take t
+
+let () = Miou.run ~events prgm0
+let () = Miou.run ~events prgm1
+let () = Miou.run ~events prgm2

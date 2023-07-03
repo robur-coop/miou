@@ -98,6 +98,16 @@
  (modules t21)
  (libraries miou))
 
+(executable
+ (name t22)
+ (modules t22)
+ (libraries unix miou))
+
+(executable
+ (name t23)
+ (modules t23)
+ (libraries miouu))
+
 (cram
  (package miouu)
  (deps
@@ -120,4 +130,6 @@
   t18.exe
   t19.exe
   t20.exe
-  t21.exe))
+  t21.exe
+  t22.exe
+  t23.exe))

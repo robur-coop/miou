@@ -2,28 +2,33 @@ open Miou
 
 let or_raise = function Ok value -> value | Error exn -> raise exn
 
-type file_descr = { fd: Unix.file_descr; own: Own.t option; non_blocking: bool }
+type file_descr = { fd: Unix.file_descr; own: Own.t; non_blocking: bool }
 
-let of_file_descr ?(non_blocking = true) fd =
+let of_file_descr ?(non_blocking = true) ?own fd =
+  let own =
+    match own with Some own -> own | None -> Own.own ~finally:Unix.close fd
+  in
   if non_blocking then Unix.set_nonblock fd else Unix.clear_nonblock fd;
-  { fd; own= None; non_blocking }
+  { fd; own; non_blocking }
 
 let to_file_descr { fd; _ } = fd
 let owner { own; _ } = own
+let disown { own; _ } = Miou.Own.disown own
 
 let tcpv4 () =
   let fd = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
   Unix.set_nonblock fd;
   let own = Own.own ~finally:Unix.close fd in
-  { fd; own= Some own; non_blocking= true }
+  { fd; own; non_blocking= true }
 
 let tcpv6 () =
   let fd = Unix.socket Unix.PF_INET6 Unix.SOCK_STREAM 0 in
   Unix.set_nonblock fd;
   let own = Own.own ~finally:Unix.close fd in
-  { fd; own= Some own; non_blocking= true }
+  { fd; own; non_blocking= true }
 
-let bind_and_listen ?(backlog = 64) { fd; _ } sockaddr =
+let bind_and_listen ?(backlog = 64) { fd; own; _ } sockaddr =
+  Miou.Own.check own;
   Unix.setsockopt fd Unix.SO_REUSEADDR true;
   Unix.setsockopt fd Unix.SO_REUSEPORT true;
   Unix.bind fd sockaddr;
@@ -83,7 +88,8 @@ let blocking_write fd =
   Hashtbl.add dom.wr fd prm;
   or_raise (Prm.suspend prm)
 
-let rec read ({ fd; non_blocking; _ } as file_descr) buf ~off ~len =
+let rec read ({ fd; non_blocking; own; _ } as file_descr) buf ~off ~len =
+  Miou.Own.check own;
   if non_blocking then
     match Unix.read fd buf off len with
     | exception Unix.(Unix_error (EINTR, _, _)) -> read file_descr buf ~off ~len
@@ -99,7 +105,8 @@ let rec read ({ fd; non_blocking; _ } as file_descr) buf ~off ~len =
     in
     blocking_read fd; go ()
 
-let rec write ({ fd; non_blocking; _ } as file_descr) str ~off ~len =
+let rec write ({ fd; non_blocking; own; _ } as file_descr) str ~off ~len =
+  Miou.Own.check own;
   if non_blocking then
     match Unix.write fd (Bytes.unsafe_of_string str) off len with
     | exception Unix.(Unix_error (EINTR, _, _)) ->
@@ -120,7 +127,8 @@ let rec write ({ fd; non_blocking; _ } as file_descr) str ~off ~len =
     in
     blocking_write fd; go ()
 
-let rec connect ({ fd; non_blocking; _ } as file_descr) sockaddr =
+let rec connect ({ fd; non_blocking; own; _ } as file_descr) sockaddr =
+  Miou.Own.check own;
   if not non_blocking then
     invalid_arg
       "Miouu.connect: we expect a file descriptor in the non-blocking mode";
@@ -133,7 +141,10 @@ let rec connect ({ fd; non_blocking; _ } as file_descr) sockaddr =
       | None -> ()
       | Some err -> raise (Unix.Unix_error (err, "connect", "")))
 
-let rec accept ?cloexec ({ fd; non_blocking; _ } as file_descr) =
+let transfer ({ own; _ } as file_descr) = Own.transfer own; file_descr
+
+let rec accept ?cloexec ({ fd; non_blocking; own; _ } as file_descr) =
+  Miou.Own.check own;
   if non_blocking then (
     match Unix.accept ?cloexec fd with
     | exception Unix.(Unix_error (EINTR, _, _)) -> accept ?cloexec file_descr
@@ -146,7 +157,7 @@ let rec accept ?cloexec ({ fd; non_blocking; _ } as file_descr) =
           Format.printf "%d closed\n%!" (Obj.magic fd)
         in
         let own = Own.own ~finally:close fd in
-        let file_descr = { fd; own= Some own; non_blocking= true } in
+        let file_descr = { fd; own; non_blocking= true } in
         (file_descr, sockaddr))
   else
     let rec go () =
@@ -155,12 +166,12 @@ let rec accept ?cloexec ({ fd; non_blocking; _ } as file_descr) =
       | fd, sockaddr ->
           Unix.set_nonblock fd;
           let own = Own.own ~finally:Unix.close fd in
-          let file_descr = { fd; own= Some own; non_blocking= true } in
+          let file_descr = { fd; own; non_blocking= true } in
           (file_descr, sockaddr)
     in
     blocking_read fd; go ()
 
-let close { fd; own; _ } = Unix.close fd; Option.iter Own.disown own
+let close { fd; own; _ } = Miou.Own.check own; Unix.close fd; Own.disown own
 
 let consume_interrupt interrupt =
   ignore (Unix.read interrupt (Bytes.create 1) 0 1)

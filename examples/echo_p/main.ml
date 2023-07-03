@@ -24,16 +24,15 @@ let handler fd =
 
 let rec clean orphans =
   match Prm.care orphans with
-  | Some prm -> Prm.await_exn prm; clean orphans
   | None -> ()
+  | Some prm -> Prm.await_exn prm; clean orphans
 
 let prgm sockaddr =
   let rec server orphans fd =
     clean orphans;
     let fd', sockaddr = Miouu.accept fd in
     Format.printf "- new connection from %s\n%!" (sockaddr_to_string sockaddr);
-    let give = Option.to_list (Miouu.owner fd') in
-    ignore (Prm.call ~orphans ~give (handler fd'));
+    ignore (Prm.call ~give:[ Miouu.owner fd' ] ~orphans (handler fd'));
     server orphans fd
   in
   fun () -> server (Prm.orphans ()) (listen sockaddr)

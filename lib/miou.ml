@@ -1,5 +1,8 @@
 [@@@warning "-37"] (* Dedicated_task *)
 
+exception Invalid_syscall
+exception Not_owner
+
 module Tq = Tq
 
 module Did = struct
@@ -65,6 +68,7 @@ module Own = struct
   type _ Effect.t += Own : t -> t Effect.t
   type _ Effect.t += Disown : t -> unit Effect.t
   type _ Effect.t += Transfer : t -> unit Effect.t
+  type _ Effect.t += Check : t -> unit Effect.t
 
   let own ~finally v =
     let resource = make ~finally v in
@@ -72,6 +76,7 @@ module Own = struct
 
   let disown resource = Effect.perform (Disown resource)
   let transfer resource = Effect.perform (Transfer resource)
+  let check resource = Effect.perform (Check resource)
 
   let copy (Resource { uid; value; finally; _ }) =
     Resource { uid; value; finally; active= Atomic.make true }
@@ -203,10 +208,12 @@ module Prm = struct
     | Pending -> raise Unresolvable_promise
 
   let to_resolved prm value =
-    ignore (Atomic.compare_and_set prm.state Pending (Resolved value))
+    let set = Atomic.compare_and_set prm.state Pending (Resolved value) in
+    assert set
 
   let to_failed prm exn =
-    ignore (Atomic.compare_and_set prm.state Pending (Failed exn))
+    let set = Atomic.compare_and_set prm.state Pending (Failed exn) in
+    assert set
 
   (* XXX(dinosaure): state introspections. *)
 
@@ -297,6 +304,7 @@ type domain = {
   ; blist: Local.block L.t
   ; uid: Did.t
   ; events: events
+  ; suspended_once: bool Atomic.t
 }
 
 type pool = {
@@ -443,15 +451,22 @@ module Run = struct
           let unblock = { Local.prm; fn; return; k } in
           L.remove node;
           L.push (Local.Unblock unblock) domain.llist
-      | None -> ()
+      | None -> raise Invalid_syscall
     in
     List.iter go processes
 
   let rec run_local pool domain go =
+    let rec continue () =
+      match L.take domain.llist with
+      | process ->
+          step pool domain go process;
+          continue ()
+      | exception L.Empty -> Domain.cpu_relax ()
+    in
     match L.take domain.llist with
     | process ->
         step pool domain go process;
-        run_local pool domain go
+        continue ()
     | exception L.Empty -> (
         match domain.events.select () with
         | [] -> Domain.cpu_relax ()
@@ -567,6 +582,7 @@ module Pool = struct
     ; llist= L.make g
     ; blist= L.make g
     ; uid= Did.gen ()
+    ; suspended_once= Atomic.make false
     ; events= events (succ idx)
     }
 
@@ -684,6 +700,7 @@ let do_suspend domain ~parent prm k =
     (* XXX(dinosaure): [do_suspend] should be run by a [Suspend] which only
        accepts promise with [Ty.Block]. *)
     let[@warning "-8"] (Ty.Block return) = prm.Prm.ty in
+    Atomic.set domain.suspended_once true;
     L.push (Local.Block (prm, return, k)) domain.blist
   end
 
@@ -706,39 +723,57 @@ let rec until_is_cancelled pool domain go prm =
           await_any_domains domain pool;
           until_is_cancelled pool domain go prm)
 
-let cancel : type a. pool -> domain -> go -> a Prm.t -> unit =
+let rec cancel' : type a. pool -> domain -> go -> a Prm.t -> unit =
  fun pool domain go prm ->
-  (* Tq.iter ~f:(fun (Prm.Prm prm) -> cancel pool domain go prm) prm.children; *)
+  (* NOTE(dinosaure): for the task which runs into the same domain than the
+     canceller, we do what [Run.step] does but locally:
+     - cancel children (and redo the operation)
+     - release resources
+     - definitely remove the task from lists
+
+     When we have [Prm.On_hold], the task did not run yet (and its children), we
+     just need to delete everything from global lists. When we have
+     [Prm.Chosen], a part of the task was running and some of its children
+     (which appeared into another domain). We must cancel them and wait them. *)
+  match (Atomic.get prm.Prm.state, Atomic.get prm.Prm.domain) with
+  | Prm.Consumed _, _ -> ()
+  | _, Prm.On_hold ->
+      Tq.iter
+        ~f:(fun (Prm.Prm prm) -> cancel' pool domain go prm)
+        prm.Prm.children;
+      Tq.iter ~f:(fun resource -> Own.finalise resource) prm.Prm.resources;
+      remove_prm_from_pool pool prm
+  | _, Prm.Chosen uid when uid = domain.uid ->
+      (* XXX(dinosaure): this code is safe because we are surrounded by a
+         lock and the task can only be executed in the current domain, which
+         is already busy cancelling this task. *)
+      let f0 node =
+        let (Prm.Prm prm') = Local.prm (L.data node) in
+        if prm'.Prm.uid = prm.Prm.uid then L.remove node
+      in
+      let f1 node =
+        let (Local.Block (prm', _, _)) = L.data node in
+        if prm'.Prm.uid = prm.Prm.uid then L.remove node
+      in
+      L.iter_on ~f:f0 domain.llist;
+      L.iter_on ~f:f1 domain.blist;
+      Tq.iter
+        ~f:(fun (Prm.Prm prm) -> cancel' pool domain go prm)
+        prm.Prm.children;
+      until_children_are_cancelled pool domain (Tq.to_list prm.Prm.children);
+      Tq.iter ~f:(fun resource -> Own.finalise resource) prm.Prm.resources;
+      Prm.to_consumed_with prm (Error Prm.Cancelled)
+  | _, Prm.Chosen uid ->
+      (* XXX(dinosaure): this code is like [Pool.cancel] but we are already
+         surrounded by the lock of [fst pool.work]. *)
+      L.push (Shared.Cancel prm) pool.clist;
+      interrupt_domain ~uid pool;
+      Condition.broadcast (snd pool.work)
+
+and cancel : type a. pool -> domain -> go -> a Prm.t -> unit =
+ fun pool domain go prm ->
   Mutex.lock (fst pool.work);
-  begin
-    match (Atomic.get prm.Prm.state, Atomic.get prm.Prm.domain) with
-    | Prm.Consumed _, _ -> ()
-    | _, Prm.On_hold ->
-        Tq.iter ~f:(fun resource -> Own.finalise resource) prm.Prm.resources;
-        remove_prm_from_pool pool prm
-    | _, Prm.Chosen uid when uid = domain.uid ->
-        (* XXX(dinosaure): this code is safe because we are surrounded by a
-           lock and the task can only be executed in the current domain, which
-           is already busy cancelling this task. *)
-        let f0 node =
-          let (Prm.Prm prm') = Local.prm (L.data node) in
-          if prm'.Prm.uid = prm.Prm.uid then L.remove node
-        in
-        let f1 node =
-          let (Local.Block (prm', _, _)) = L.data node in
-          if prm'.Prm.uid = prm.Prm.uid then L.remove node
-        in
-        L.iter_on ~f:f0 domain.llist;
-        L.iter_on ~f:f1 domain.blist;
-        Tq.iter ~f:(fun resource -> Own.finalise resource) prm.Prm.resources;
-        Prm.to_consumed_with prm (Error Prm.Cancelled)
-    | _, Prm.Chosen uid ->
-        (* XXX(dinosaure): this code is like [Pool.cancel] but we are already
-           surrounded by the lock of [fst pool.work]. *)
-        L.push (Shared.Cancel prm) pool.clist;
-        interrupt_domain ~uid pool;
-        Condition.broadcast (snd pool.work)
-  end;
+  cancel' pool domain go prm;
   Mutex.unlock (fst pool.work);
   until_is_cancelled pool domain go prm
 
@@ -786,7 +821,15 @@ let do_await_one ~and_cancel pool domain go ~parent prms k =
     match resolved with
     | [] ->
         Run.run_local pool domain go;
-        await_any_domains domain pool;
+        let run_on_another_domain =
+          List.exists
+            (fun prm ->
+              match Atomic.get prm.Prm.domain with
+              | Prm.On_hold -> false
+              | Prm.Chosen uid -> uid <> domain.uid)
+            unresolved
+        in
+        if run_on_another_domain then await_any_domains domain pool;
         until ()
     | resolved when List.exists (discontinue_if_invalid k) resolved ->
         if and_cancel then List.iter (cancel pool domain go) unresolved
@@ -848,6 +891,13 @@ let do_transfer prm (Own.Resource { uid; _ } as resource) k =
   | None ->
       Effect.Deep.continue k
         () (* TODO(dinosaure): discontinue with an exception? *)
+
+let do_check prm (Own.Resource { uid; _ }) k =
+  let exists = ref false in
+  let f (Own.Resource { uid= uid'; _ }) = exists := !exists || uid = uid' in
+  Tq.iter ~f prm.Prm.resources;
+  if not !exists then Effect.Deep.discontinue k Not_owner
+  else Effect.Deep.continue k ()
 
 let collect_pending_children prm =
   let res = ref [] in
@@ -914,6 +964,7 @@ let run ?(g = Random.State.make_self_init ()) ?domains ~events fn =
       | _, Own.Own resource -> Some (do_own prm resource)
       | _, Own.Disown resource -> Some (do_disown prm resource)
       | _, Own.Transfer resource -> Some (do_transfer prm resource)
+      | _, Own.Check resource -> Some (do_check prm resource)
       | _ -> None
     in
     Effect.Deep.match_with fn () { Effect.Deep.retc; exnc; effc }
@@ -928,6 +979,7 @@ let run ?(g = Random.State.make_self_init ()) ?domains ~events fn =
     ; llist= L.make g
     ; blist= L.make g
     ; uid= Did.gen ()
+    ; suspended_once= Atomic.make false
     ; events= events 0
     }
   in
@@ -943,7 +995,14 @@ let run ?(g = Random.State.make_self_init ()) ?domains ~events fn =
     }
   in
   L.push (Local.Task (prm0, fn)) dom0.llist;
-  Run.run_local pool dom0 { go };
+  while
+    (not (L.is_empty dom0.llist))
+    || (Atomic.get dom0.suspended_once && not (L.is_empty dom0.blist))
+  do
+    (* NOTE(dinosaure): if [dom0] was suspended, we must wait something from
+       [select ()] to resolve [prm0]. *)
+    Run.run_local pool dom0 { go }
+  done;
   Pool.kill pool;
   List.iter Domain.join domains;
   Prm.to_result_exn prm0

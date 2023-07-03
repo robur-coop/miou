@@ -38,3 +38,4 @@
   Fatal error: exception Miou.Resource_leak
   [2]
   $ ./t21.exe
+  $ ./t22.exe

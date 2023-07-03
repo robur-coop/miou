@@ -112,6 +112,8 @@ module Own : sig
             socket
           ; Prm.call_cc @@ fun () -> sleep 10.; raise Timeout ]
       ]} *)
+
+  val check : t -> unit
 end
 
 module Prm : sig
@@ -197,11 +199,7 @@ module Prm : sig
   exception Cancelled
 
   val cancel : 'a t -> unit
-  (** [cancel prm] asynchronously tries to cancel the given promise [prm]. The
-      cancellation mechanism may not succeed if, during synchronisation, we find
-      that the promise has already been resolved - in this case, we {b do not}
-      perform a state transition.
-
+  (** [cancel prm] asynchronously tries to cancel the given promise [prm].
       [miou] allows the forgetting of a cancelled promise and the forgetting of
       its children. For instance, this code is valid (despite the second one):
 

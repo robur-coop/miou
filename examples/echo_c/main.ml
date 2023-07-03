@@ -26,8 +26,7 @@ let prgm sockaddr =
   let rec server tasks fd =
     let fd', sockaddr = Miouu.accept fd in
     Format.printf "- new connection from %s\n%!" (sockaddr_to_string sockaddr);
-    let give = Option.to_list (Miouu.owner fd') in
-    let task = Prm.call_cc ~give (handler fd') in
+    let task = Prm.call_cc ~give:[ Miouu.owner fd' ] (handler fd') in
     server (task :: tasks) fd
   in
   fun () -> server [] (listen sockaddr)
