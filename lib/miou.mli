@@ -115,6 +115,8 @@ module Own : sig
       ]} *)
 
   val check : t -> unit
+  (** [check t] verifies that the given resource [t] is owned by the current
+      promise. *)
 end
 
 module Prm : sig
@@ -216,31 +218,7 @@ module Prm : sig
       Cancellation will try to finish all the children and will wait until all
       the children are finished (once again, termination intervenes if the
       promise has been cancelled {b or} resolved). You can sleep soundly after
-      the cancellation, and the promise that all its children have stopped.
-
-      {2 Schrödinger's cat.}
-
-      During domain synchronisation (since a domain asks to cancel a promise
-      whose task is running on another domain), the state of the promise can
-      change and can be resolved. When we reach the synchronisation point, we
-      can be sure of one thing: no other domain can modify the promise. However,
-      the promise may already be resolved - and again, we {b are not} performing
-      a state transition in this situation.
-
-      So, as a consequence of [miou]'s behaviour, this code has 2 results:
-
-      {[
-        # let prgm () = Miou.(run @@ fun () ->
-          let p = Prm.call (Fun.const ()) in
-          Prm.cancel p; Prm.await p) ;;
-        # prgm () ;;
-        - : (unit, exn) result = Ok ()
-        # prgm () ;;
-        - : (unit, exn) result = Error Prm.Cancelled
-      ]}
-
-      What is certain is that after {!val:Prm.cancel}, the task was
-      {b completed} one way ([Error Cancelled]) or another ([Ok ()]). *)
+      the cancellation, and the promise that all its children have stopped. *)
 
   (** {2 Await a promise.} *)
 
