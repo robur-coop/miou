@@ -14,6 +14,7 @@ module Tq : sig
   val dequeue : 'a t -> 'a
   val make : unit -> 'a t
   val is_empty : 'a t -> bool
+  val transfer : 'a t -> 'a t
 end
 
 module Did : sig

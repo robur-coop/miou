@@ -886,7 +886,7 @@ let do_transfer prm (Own.Resource { uid; _ } as resource) k =
       let exists = ref false in
       let f (Own.Resource { uid= uid'; _ }) = exists := !exists || uid = uid' in
       Tq.iter ~f parent.Prm.resources;
-      if not !exists then Tq.enqueue prm.Prm.resources (Own.copy resource);
+      if not !exists then Tq.enqueue parent.Prm.resources (Own.copy resource);
       Effect.Deep.continue k ()
   | None ->
       Effect.Deep.continue k
