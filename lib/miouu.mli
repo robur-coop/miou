@@ -1,5 +1,14 @@
 open Miou
 
+module Cond : sig
+  type t
+
+  val make : unit -> t
+  val wait : t -> unit
+  val signal : t -> unit
+  val broadcast : t -> unit
+end
+
 type file_descr
 
 val read : file_descr -> bytes -> off:int -> len:int -> int

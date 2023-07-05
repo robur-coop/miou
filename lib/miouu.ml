@@ -88,6 +88,58 @@ let blocking_write fd =
   Hashtbl.add dom.wr fd prm;
   or_raise (Prm.suspend prm)
 
+let with_lock ~lock fn =
+  Mutex.lock lock;
+  Fun.protect ~finally:(fun () -> Mutex.unlock lock) fn
+
+module Cond = struct
+  let null = -1
+
+  let gen =
+    let value = Atomic.make (null + 1) in
+    fun () -> Atomic.fetch_and_add value 1
+
+  type t = {
+      ic: Unix.file_descr
+    ; oc: Unix.file_descr
+    ; mutex: Mutex.t
+    ; counter: int Atomic.t
+    ; uid: int
+  }
+
+  let make () =
+    let ic, oc = Unix.pipe ~cloexec:true () in
+    let mutex = Mutex.create () in
+    let counter = Atomic.make 0 in
+    { ic; oc; mutex; counter; uid= gen () }
+
+  let consume_signal fd =
+    let res = Bytes.create 1 in
+    while Unix.read fd res 0 1 = 0 do
+      ()
+    done
+
+  let produce_signal fd =
+    let res = Bytes.make 1 '\000' in
+    while Unix.single_write fd res 0 1 = 0 do
+      ()
+    done
+
+  let wait t =
+    with_lock ~lock:t.mutex (fun () -> Atomic.incr t.counter);
+    blocking_read t.ic;
+    consume_signal t.ic;
+    with_lock ~lock:t.mutex (fun () -> Atomic.decr t.counter)
+
+  let signal t = blocking_write t.oc; produce_signal t.oc
+
+  let broadcast t =
+    with_lock ~lock:t.mutex @@ fun () ->
+    for _ = 0 to Atomic.get t.counter - 1 do
+      produce_signal t.oc
+    done
+end
+
 let rec read ({ fd; non_blocking; own; _ } as file_descr) buf ~off ~len =
   Miou.Own.check own;
   if non_blocking then
