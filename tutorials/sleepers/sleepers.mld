@@ -205,10 +205,10 @@ with [U]nix).
 {2 Events & domains.}
 
 As you can imagine, this little introduction is not complete if we take into
-account [interrupt] and {!val:Prm.call}. This is where we'll explain another
-rule: a syscall is always local to a domain.
+account [interrupt] and {!val:Miou.Prm.call}. This is where we'll explain
+another rule: a syscall is always local to a domain.
 
 Above all, this means that I/O operations will always be cooperative. There may
 be more complex tasks which can run in parallel and which may contain some I/O,
-but the suspension ({!val:Prm.suspend}) of a syscall will always be local to the
-current domain executing the suspension.
+but the suspension ({!val:Miou.Prm.suspend}) of a syscall will always be local
+to the current domain executing the suspension.
