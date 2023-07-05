@@ -92,3 +92,8 @@ let to_list t =
   let res = ref [] in
   let f v = res := v :: !res in
   iter ~f t; !res
+
+let transfer t =
+  let q = make () in
+  drop ~f:(fun x -> enqueue q x) t;
+  q
