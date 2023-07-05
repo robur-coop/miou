@@ -39,3 +39,7 @@
   [2]
   $ ./t21.exe
   $ ./t22.exe
+  $ ./t23.exe
+  $ ./t24.exe
+  Fatal error: exception Miou.Still_has_children
+  [2]
