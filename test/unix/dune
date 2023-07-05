@@ -1,4 +1,0 @@
-(executable
- (name t03)
- (modules t03)
- (libraries miouu))
