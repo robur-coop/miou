@@ -181,3 +181,7 @@ with anyone. We would also like to inform future users that Miou disregards our
 objectives and our vision - which you may not agree with. So, if Miou satisfies
 you in its approach (and that of its maintainers), and its objectives (and those
 of its users), welcome!
+
+[repository]: https://git.robur.coop/robur/miou
+[github]: https://github.com/roburio/miou
+[documentation]: https://perdu.com/
