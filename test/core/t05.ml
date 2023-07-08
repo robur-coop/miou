@@ -1,11 +1,9 @@
-open Miou
-
 let prgm () =
   Miouu.run @@ fun () ->
-  let a = Prm.call (fun () -> Miouu.sleep 10.) in
+  let a = Miou.call (fun () -> Miouu.sleep 10.) in
   Miouu.sleep 0.1;
-  Prm.cancel a;
-  match Prm.await a with Error Miou.Prm.Cancelled -> () | _ -> failwith "t05"
+  Miou.cancel a;
+  match Miou.await a with Error Miou.Cancelled -> () | _ -> failwith "t05"
 
 let () =
   let t0 = Unix.gettimeofday () in

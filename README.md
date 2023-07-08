@@ -40,24 +40,24 @@ technical debt that these bring).
 
 There are 2 ways of creating a task:
 - it can run concurrently with other tasks and execute on the domain in which it
-  was created (see `Prm.call_cc`)
+  was created (see `Miou.call_cc`)
 - it can run in parallel with other tasks and be executed on **another** domain
-  (see `Prm.call`)
+  (see `Miou.call`)
 
 The first rule to follow is that the user must wait for all the tasks he/she has
 created. If they don't, Miou raises an exception: `Still_has_children`:
 ```ocaml
 let () = Miou.run @@ fun () ->
-  ignore (Prm.call_cc @@ fun () -> 42)
+  ignore (Miou.call_cc @@ fun () -> 42)
 Exception: Miou.Still_has_children
 ```
 
-The user must therefore take care to use `Prm.await` for all the tasks
+The user must therefore take care to use `Miou.await` for all the tasks
 (concurrent and parallel) that he/she has created:
 ```ocaml
 let () = Miou.run @@ fun () ->
-  let p0 = Prm.call_cc @@ fun () -> 42 in
-  Prm.await_exn p0
+  let p0 = Miou.call_cc @@ fun () -> 42 in
+  Miou.await_exn p0
 ```
 
 #### Relationships between tasks
@@ -65,9 +65,9 @@ let () = Miou.run @@ fun () ->
 A task can only be awaited by the person who created it.
 ```ocaml
 let () = Miou.run @@ fun () ->
-  let p0 = Prm.call_cc @@ fun () -> 42 in
-  let p1 = Prm.call_cc @@ fun () -> Prm.await_exn p0 in
-  Prm.await_exn p1
+  let p0 = Miou.call_cc @@ fun () -> 42 in
+  let p1 = Miou.call_cc @@ fun () -> Miou.await_exn p0 in
+  Miou.await_exn p1
 Esxception: Miou.Not_a_child
 ```
 
@@ -85,10 +85,10 @@ If a task fails (with an exception), all its sub-tasks also end.
 
 ```ocaml
 let prgm () = Miouu.run @@ fun () ->
-  let p = Prm.call_cc @@ fun () ->
-    let q = Prm.call_cc @@ fun () -> sleep 1. in
+  let p = Miou.call_cc @@ fun () ->
+    let q = Miou.call_cc @@ fun () -> sleep 1. in
     raise (Failure "p") in
-  Prm.await p
+  Miou.await p
 
 let () =
   let t0 = Unix.gettimeofday () in
@@ -105,13 +105,13 @@ termination will always attempt to complete all sub-tasks so that there are no
 #### Wait or cancel
 
 It was explained above that all children must be waited on by the task that
-created them. However, the user can also `Prm.cancel` a task - of course, this
+created them. However, the user can also `Miou.cancel` a task - of course, this
 produces an abnormal termination of the task which automatically results in the
 termination of all its children.
 
 ```ocaml
 let () = Miou.run @@ fun () ->
-  Prm.cancel (Prm.call_cc @@ fun () -> 42)
+  Miou.cancel (Miou.call_cc @@ fun () -> 42)
 ```
 
 This code shows that if it is not possible to `ignore` the result of a task, it
@@ -177,7 +177,7 @@ simply the reemergence of these opinions in another environment which has
 unfortunately not been offered by the actors who had the opportunity to do so.
 
 We would like to make it clear that we do not want to monopolise and/or compete
-with anyone. We would also like to inform future users that Miou disregards our
+with anyone. We would also like to inform future users that Miou regards our
 objectives and our vision - which you may not agree with. So, if Miou satisfies
 you in its approach (and that of its maintainers), and its objectives (and those
 of its users), welcome!

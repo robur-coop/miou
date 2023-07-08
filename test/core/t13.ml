@@ -1,9 +1,8 @@
-open Miou
 
 let prgm () =
   Miou.run @@ fun () ->
-  let p = Prm.call (Fun.const ()) in
-  Prm.await_exn p; Prm.cancel p; Prm.await_exn p
+  let p = Miou.call (Fun.const ()) in
+  Miou.await_exn p; Miou.cancel p; Miou.await_exn p
 
 let () =
   for _ = 0 to 100 do

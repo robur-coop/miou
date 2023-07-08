@@ -1,5 +1,3 @@
-open Miou
-
 let src = Logs.Src.create "mdns.transport"
 
 module Log = (val Logs.src_log src : Logs.LOG)
@@ -58,7 +56,7 @@ end
 
 type msg = [ `Msg of string ]
 type io_addr = [ `Plaintext of Ipaddr.t * int ]
-type connecting = int * Miouu.file_descr * Miouu.file_descr Prm.t
+type connecting = int * Miouu.file_descr * Miouu.file_descr Miou.t
 type waiter = ((Ipaddr.t * int) * Miouu.file_descr, msg) result Box.t
 type request = Cstruct.t * (Cstruct.t, msg) result Box.t
 type +'a io = 'a
@@ -80,7 +78,7 @@ type daemon = {
   ; mutable waiters: waiter Happy_eyeballs.Waiter_map.t
   ; he_lock: Mutex.t
   ; mutable he: Happy_eyeballs.t
-  ; he_orphans: unit Prm.orphans
+  ; he_orphans: unit Miou.orphans
   ; timer_condition: Cond.t
   ; stop: bool Atomic.t
 }
@@ -90,11 +88,11 @@ type t = {
   ; proto: Dns.proto
   ; timeout_ns: int64
   ; daemon: daemon
-  ; he_prm: unit Prm.t
-  ; user_actions: Happy_eyeballs.action Tq.t
+  ; he_prm: unit Miou.t
+  ; user_actions: Happy_eyeballs.action Miou.Queue.t
   ; mutable requests: request M.t
   ; requests_condition: Cond.t
-  ; mutable current: unit Prm.t
+  ; mutable current: unit Miou.t
   ; current_lock: Mutex.t
 }
 
@@ -118,14 +116,14 @@ let rem_cancellation tbl id attempt =
   Hashtbl.filter_map_inplace fn tbl
 
 let cancel_same_connections tbl id attempt =
-  let close (att, _, prm) = if att <> attempt then Prm.cancel prm in
+  let close (att, _, prm) = if att <> attempt then Miou.cancel prm in
   let fn id' conns =
     if id' = id then (List.iter close conns; None) else Some conns
   in
   Hashtbl.filter_map_inplace fn tbl
 
 let cancel_all_connections tbl id =
-  let close (_, _, prm) = Prm.cancel prm in
+  let close (_, _, prm) = Miou.cancel prm in
   let fn id' conns =
     if id = id' then (List.iter close conns; None) else Some conns
   in
@@ -152,12 +150,12 @@ let handle_one_action t = function
   | Happy_eyeballs.Connect (host, id, attempt, addr) -> (
       let fd = Miouu.tcpv4 () in
       let prm =
-        Prm.call_cc ~give:[ Miouu.owner fd ] @@ fun () ->
+        Miou.call_cc ~give:[ Miouu.owner fd ] @@ fun () ->
         Miouu.connect fd (to_addr addr);
         Miouu.transfer fd
       in
       add_cancellation t.cancel_connecting id attempt fd prm;
-      match Prm.await prm with
+      match Miou.await prm with
       | Ok fd ->
           cancel_same_connections t.cancel_connecting id attempt;
           let box =
@@ -180,7 +178,7 @@ let handle_one_action t = function
             | Some false | None -> Miouu.close fd
           end;
           Some (Happy_eyeballs.Connected (host, id, addr))
-      | Error Prm.Cancelled -> None
+      | Error Miou.Cancelled -> None
       | Error exn ->
           rem_cancellation t.cancel_connecting id attempt;
           let err = Fmt.str "Got an exception: %S" (Printexc.to_string exn) in
@@ -200,20 +198,20 @@ let rec handle_action t action =
 
 let handle_timer_actions t =
   List.iter @@ fun action ->
-  ignore (Prm.call_cc ~orphans:t.he_orphans @@ fun () -> handle_action t action)
+  ignore (Miou.call_cc ~orphans:t.he_orphans @@ fun () -> handle_action t action)
 
 let rec clean orphans =
-  match Prm.care orphans with
+  match Miou.care orphans with
   | None -> ()
   | Some prm -> (
-      match Prm.await prm with
+      match Miou.await prm with
       | Ok () -> clean orphans
       | Error _exn -> clean orphans)
 
 let rec add_user's_actions actions q =
-  match Tq.dequeue q with
+  match Miou.Queue.dequeue q with
   | action -> add_user's_actions (action :: actions) q
-  | exception Tq.Empty -> actions
+  | exception Miou.Queue.Empty -> actions
 
 let happy_eyeballs_daemon ~user's_actions t =
   let rec go () =
@@ -228,7 +226,9 @@ let happy_eyeballs_daemon ~user's_actions t =
     handle_timer_actions t actions;
     match cont with
     | `Suspend ->
-        let p () = (not (Tq.is_empty user's_actions)) || Atomic.get t.stop in
+        let p () =
+          (not (Miou.Queue.is_empty user's_actions)) || Atomic.get t.stop
+        in
         let stop =
           Cond.wait_and_run_until
             ~fn:(fun () -> Atomic.get t.stop)
@@ -280,7 +280,7 @@ let rec wrrd ?(linger = Cstruct.empty) t fd =
   match fd with
   | `Plain fd -> (
       let prm =
-        Prm.call_cc ~give:[ Miouu.owner fd ] @@ fun () ->
+        Miou.call_cc ~give:[ Miouu.owner fd ] @@ fun () ->
         List.iter (query_one (`Plain fd)) txs;
         let buf = Bytes.create 0x1000 in
         let len = Miouu.read fd buf ~off:0 ~len:0x1000 in
@@ -289,14 +289,14 @@ let rec wrrd ?(linger = Cstruct.empty) t fd =
           (Miouu.transfer fd, res)
         else (Miouu.transfer fd, None)
       in
-      let res = Prm.await prm in
+      let res = Miou.await prm in
       match res with
       | Ok (fd, Some linger) -> wrrd ~linger t (`Plain fd)
       | Ok (fd, None) -> Miouu.close fd
       | Error _exn -> Miouu.disown fd)
 
 let send_user's_actions t actions =
-  let fn () = List.iter (Tq.enqueue t.user_actions) actions in
+  let fn () = List.iter (Miou.Queue.enqueue t.user_actions) actions in
   Cond.run_and_broadcast ~fn t.daemon.timer_condition
 
 let to_pairs : [ `Plaintext of Ipaddr.t * int ] list -> _ =
@@ -340,13 +340,13 @@ let rec connect_ns_and_do_requests (t : t) nameservers =
 exception Timeout
 
 let with_timeout ns fn =
-  let p0 = Prm.call_cc fn in
+  let p0 = Miou.call_cc fn in
   let p1 =
-    Prm.call_cc @@ fun () ->
+    Miou.call_cc @@ fun () ->
     Miouu.sleep (Duration.to_f ns);
     raise Timeout
   in
-  match Prm.await_first [ p0; p1 ] with
+  match Miou.await_first [ p0; p1 ] with
   | Ok _ as v -> v
   | Error Timeout -> Error (`Msg "DNS request timeout")
   | Error exn -> raise exn
@@ -376,7 +376,7 @@ let rng = Mirage_crypto_rng.generate ?g:None
 let kill t =
   kill_happy_eyeballs_daemon t.daemon;
   with_lock ~lock:t.current_lock @@ fun () ->
-  Prm.cancel t.current; Prm.await t.he_prm
+  Miou.cancel t.current; Miou.await t.he_prm
 
 let create ?nameservers ~timeout () =
   let proto, nameservers =
@@ -394,14 +394,14 @@ let create ?nameservers ~timeout () =
     ; waiters= Happy_eyeballs.Waiter_map.empty
     ; he_lock= Mutex.create ()
     ; he= Happy_eyeballs.create ~connect_timeout:timeout (clock ())
-    ; he_orphans= Prm.orphans ()
+    ; he_orphans= Miou.orphans ()
     ; timer_condition= Cond.make ()
     ; stop= Atomic.make false
     }
   in
-  let user's_actions = Tq.make () in
-  let he_prm = Prm.call (happy_eyeballs_daemon ~user's_actions daemon) in
-  let current = Prm.call_cc (Fun.const ()) and () = yield () in
+  let user's_actions = Miou.Queue.make () in
+  let he_prm = Miou.call (happy_eyeballs_daemon ~user's_actions daemon) in
+  let current = Miou.call_cc (Fun.const ()) and () = Miou.yield () in
   {
     nameservers
   ; proto
@@ -416,14 +416,16 @@ let create ?nameservers ~timeout () =
   }
 
 let connect t =
-  let state = with_lock ~lock:t.current_lock @@ fun () -> Prm.state t.current in
+  let state =
+    with_lock ~lock:t.current_lock @@ fun () -> Miou.state t.current
+  in
   match state with
-  | Prm.Pending -> Ok (`Tcp, t)
+  | Miou.Pending -> Ok (`Tcp, t)
   | _ ->
       with_lock ~lock:t.current_lock @@ fun () ->
-      ignore (Prm.await t.current);
+      ignore (Miou.await t.current);
       let prm =
-        Prm.call @@ fun () -> connect_ns_and_do_requests t t.nameservers
+        Miou.call @@ fun () -> connect_ns_and_do_requests t t.nameservers
       in
       t.current <- prm;
       Ok (`Tcp, t)

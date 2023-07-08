@@ -9,7 +9,7 @@ module Cond : sig
 
       This module reimplements the {!module:Condition} with [miou]. The
       behaviour remains the same, except that the user can
-      {!val:Miou.Prm.cancel} a task while it is waiting for a signal/broadcast. 
+      {!val:Miou.cancel} a task while it is waiting for a signal/broadcast. 
     *)
 
   type t
@@ -53,7 +53,7 @@ end
     checks (again {i at runtime}) that these {!type:file_descr} have been
     released.
 
-    For more information, please read the {!module:Miou.Own} module. *)
+    For more information, please read the {!module:Miou.Ownership} module. *)
 
 type file_descr
 (** Type of file-descriptors. *)
@@ -75,15 +75,15 @@ val accept : ?cloexec:bool -> file_descr -> file_descr * Unix.sockaddr
     file descritptors in non-blocking mode. *)
 
 val close : file_descr -> unit
-(** [close fd] closes and {!val:Miou.Own.disown} properly the given [fd]. Its
+(** [close fd] closes and {!val:Miou.Ownership.disown} properly the given [fd]. Its
     use ensures that there is no leakage of resources. *)
 
 val sleep : float -> unit
 (** [sleep v] suspends the current task and {i sleeps} [v] seconds. *)
 
 val of_file_descr :
-  ?non_blocking:bool -> ?own:Own.t -> Unix.file_descr -> file_descr
-(** [of_file_descr ?non_blocking ?own fd] creates a new {!type:file_descr}.
+  ?non_blocking:bool -> ?owner:Ownership.t -> Unix.file_descr -> file_descr
+(** [of_file_descr ?non_blocking ?owner fd] creates a new {!type:file_descr}.
     Depending on [non_blocking] (defaults to true), we set the given [fd] to
     non-blocking mode or not. The user can also specify the owner of the given
     [fd]. Otherwise, we consider the current task as the owner. *)
@@ -91,15 +91,15 @@ val of_file_descr :
 val to_file_descr : file_descr -> Unix.file_descr
 (** [to_file_descr fd] returns the {i real} {!type:Unix.file_descr}. *)
 
-val owner : file_descr -> Own.t
+val owner : file_descr -> Ownership.t
 (** [owner own] returns the witness of the task's ownership. Its useful to pass
     the ownership to a sub-task:
 
     {[
       let fd = tcpv4 () in
-      let p0 = Prm.call_cc ~give:[ owner fd ] @@ fun () ->
+      let p0 = Miou.call_cc ~give:[ owner fd ] @@ fun () ->
         connect fd addr; transfer fd in
-      Prm.await p0
+      Miou.await p0
     ]} *)
 
 val tcpv4 : unit -> file_descr

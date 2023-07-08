@@ -8,9 +8,6 @@ let critical = Mutex.create ()
 
 type state = Hungry | Thinking | Eating
 
-open Miou
-open Miouu
-
 let test sem state i =
   if state.(i) = Hungry && state.(l i) <> Eating && state.(r i) <> Eating then (
     state.(i) <- Eating;
@@ -20,7 +17,7 @@ let think i =
   let duration = 1. +. Random.float 5. in
   with_lock output (fun () ->
       Format.printf "%02d is thinking %fs\n%!" i duration);
-  sleep duration
+  Miouu.sleep duration
 
 let take_forks sem state i =
   let () =
@@ -34,7 +31,7 @@ let take_forks sem state i =
 let eat i =
   let duration = 1. +. Random.float 5. in
   with_lock output (fun () -> Format.printf "%02d is eating\n%!" i);
-  sleep duration
+  Miouu.sleep duration
 
 let put_forks sem state i =
   with_lock critical @@ fun () ->
@@ -46,10 +43,10 @@ let philosopher sem state i =
   let rec go () =
     think i;
     take_forks sem state i;
-    yield ();
+    Miou.yield ();
     eat i;
     put_forks sem state i;
-    yield ();
+    Miou.yield ();
     go ()
   in
   go
@@ -62,16 +59,16 @@ let () =
   let sem = Array.init 5 (fun _ -> Semaphore.Binary.make false) in
   let state = Array.init 5 (fun _ -> Thinking) in
   let sleep =
-    Prm.call (fun () ->
-        let finally = Array.iter Semaphore.Binary.release in
-        let t = Miou.Own.own ~finally sem in
-        Miouu.sleep (Float.of_int ts);
-        finally sem;
-        Miou.Own.disown t)
+    Miou.call @@ fun () ->
+    let finally = Array.iter Semaphore.Binary.release in
+    let t = Miou.Ownership.own ~finally sem in
+    Miouu.sleep (Float.of_int ts);
+    finally sem;
+    Miou.Ownership.disown t
   in
-  let uid01 = Prm.call (philosopher sem state 00) in
-  let uid02 = Prm.call (philosopher sem state 01) in
-  let uid03 = Prm.call (philosopher sem state 02) in
-  let uid04 = Prm.call (philosopher sem state 03) in
-  let uid05 = Prm.call (philosopher sem state 04) in
-  Prm.await_first [ uid01; uid02; uid03; uid04; uid05; sleep ] |> ignore
+  let uid01 = Miou.call (philosopher sem state 00) in
+  let uid02 = Miou.call (philosopher sem state 01) in
+  let uid03 = Miou.call (philosopher sem state 02) in
+  let uid04 = Miou.call (philosopher sem state 03) in
+  let uid05 = Miou.call (philosopher sem state 04) in
+  Miou.await_first [ uid01; uid02; uid03; uid04; uid05; sleep ] |> ignore

@@ -1,3 +1,2 @@
-open Miou
 
-let () = Miou.run @@ fun () -> ignore (Prm.call_cc (Fun.const ()))
+let () = Miou.run @@ fun () -> ignore (Miou.call_cc (Fun.const ()))

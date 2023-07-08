@@ -44,12 +44,10 @@ let filenames_of_stdin () =
   in
   go []
 
-open Miou
-
 let run filenames () =
-  let fold acc filename = Prm.call (digest filename) :: acc in
+  let fold acc filename = Miou.call (digest filename) :: acc in
   List.fold_left fold [] filenames
-  |> List.rev_map Prm.await
+  |> List.rev_map Miou.await
   |> List.map Result.join
   |> List.mapi (fun idx ->
          Result.map_error (fun exn -> (List.nth filenames idx, exn)))

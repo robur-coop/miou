@@ -1,10 +1,9 @@
-open Miou
 
 let prgm () =
   Miou.run @@ fun () ->
-  let a = Prm.call_cc (fun () -> Unix.sleepf 1.) in
-  let b = Prm.call_cc (fun () -> Unix.sleepf 2.) in
-  Prm.await_all [ a; b ] |> ignore
+  let a = Miou.call_cc (fun () -> Unix.sleepf 1.) in
+  let b = Miou.call_cc (fun () -> Unix.sleepf 2.) in
+  Miou.await_all [ a; b ] |> ignore
 
 let () =
   Format.printf "call_cc + Unix.sleepf:%!";
@@ -16,9 +15,9 @@ let () =
 
 let prgm () =
   Miou.run @@ fun () ->
-  let a = Prm.call (fun () -> Unix.sleepf 1.) in
-  let b = Prm.call (fun () -> Unix.sleepf 2.) in
-  Prm.await_all [ a; b ] |> ignore
+  let a = Miou.call (fun () -> Unix.sleepf 1.) in
+  let b = Miou.call (fun () -> Unix.sleepf 2.) in
+  Miou.await_all [ a; b ] |> ignore
 
 let () =
   Format.printf "call + Unix.sleepf:   %!";
@@ -30,9 +29,9 @@ let () =
 
 let prgm () =
   Miouu.run @@ fun () ->
-  let a = Prm.call_cc (fun () -> Miouu.sleep 1.) in
-  let b = Prm.call_cc (fun () -> Miouu.sleep 2.) in
-  Prm.await_all [ a; b ] |> ignore
+  let a = Miou.call_cc (fun () -> Miouu.sleep 1.) in
+  let b = Miou.call_cc (fun () -> Miouu.sleep 2.) in
+  Miou.await_all [ a; b ] |> ignore
 
 let () =
   Format.printf "call_cc + Miouu.sleep:%!";
