@@ -493,7 +493,8 @@ module Pool = struct
     Atomic.compare_and_set prm.Prm.domain Prm.On_hold (Prm.Chosen domain.uid)
     |> fun set -> assert set
 
-  let nothing_to_do pool = L.is_empty pool.glist && L.is_empty pool.clist
+  let nothing_to_do pool domain =
+    L.is_empty pool.glist && L.is_empty pool.clist && L.is_empty domain.blist
   (* XXX(dinosaure): [nothing_to_do] must be used with a mutex. *)
 
   let locate pool domain =
@@ -526,7 +527,7 @@ module Pool = struct
     try
       while true do
         Mutex.lock (fst pool.work);
-        while nothing_to_do pool && not (Atomic.get pool.stop) do
+        while nothing_to_do pool domain && not (Atomic.get pool.stop) do
           Condition.wait (snd pool.work) (fst pool.work)
         done;
         if Atomic.get pool.stop then raise Exit;
@@ -539,7 +540,7 @@ module Pool = struct
         if
           (not (Atomic.get pool.stop))
           && Atomic.get pool.working_counter = 0
-          && nothing_to_do pool
+          && nothing_to_do pool domain
         then Condition.signal pool.working;
         Mutex.unlock (fst pool.work)
       done
@@ -706,7 +707,7 @@ let do_suspend domain ~parent prm k =
 
 let do_yield pool domain go k =
   Run.run_local pool domain go;
-  (* TODO(dinosaure): await any domains too? *)
+  Array.iter (fun domain -> interrupt_domain ~uid:domain.uid pool) pool.domains;
   Effect.Deep.continue k ()
 
 let rec until_is_cancelled pool domain go prm =
