@@ -177,7 +177,7 @@ simply the reemergence of these opinions in another environment which has
 unfortunately not been offered by the actors who had the opportunity to do so.
 
 We would like to make it clear that we do not want to monopolise and/or compete
-with anyone. We would also like to inform future users that Miou disregards our
+with anyone. We would also like to inform future users that Miou regards our
 objectives and our vision - which you may not agree with. So, if Miou satisfies
 you in its approach (and that of its maintainers), and its objectives (and those
 of its users), welcome!
