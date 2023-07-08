@@ -29,7 +29,7 @@ end = struct
       with_lock ~lock:(fst t.lock) (fun () ->
           Option.is_none (Atomic.get t.value))
     do
-      Miouu.Cond.wait (snd t.lock)
+      Miouu.Cond.wait ~fn:ignore (snd t.lock)
     done;
     with_lock ~lock:(fst t.lock) (fun () -> Option.get (Atomic.get t.value))
 
@@ -44,7 +44,7 @@ module Cond = struct
 
   let wait_and_run_until ~p ~fn t =
     while not (with_lock ~lock:(fst t) p) do
-      Miouu.Cond.wait (snd t)
+      Miouu.Cond.wait ~fn:ignore (snd t)
     done;
     with_lock ~lock:(fst t) fn
 

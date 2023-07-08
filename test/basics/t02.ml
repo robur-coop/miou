@@ -7,7 +7,7 @@ let () =
   let p0 = Prm.call @@ fun () -> Atomic.set v (Some ()); Miouu.Cond.signal t in
   let p1 =
     Prm.call @@ fun () ->
-    Miouu.Cond.wait t;
+    Miouu.Cond.wait ~fn:ignore t;
     match Atomic.get v with Some v -> v | None -> failwith "p1"
   in
   Prm.await_all [ p0; p1 ]

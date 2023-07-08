@@ -1,7 +1,16 @@
 (library
  (name mdns)
  (modules transport mdns)
- (libraries hxd.core hxd.string mtime.clock.os mirage-crypto-rng ipaddr.unix dns dns-client happy-eyeballs miouu))
+ (libraries
+  hxd.core
+  hxd.string
+  mtime.clock.os
+  mirage-crypto-rng
+  ipaddr.unix
+  dns
+  dns-client
+  happy-eyeballs
+  miouu))
 
 (executable
  (name main)

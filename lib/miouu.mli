@@ -9,18 +9,31 @@ module Cond : sig
 
       This module reimplements the {!module:Condition} with [miou]. The
       behaviour remains the same, except that the user can
-      {!val:Miou.Prm.cancel} a task while it is waiting for a signal.  *)
+      {!val:Miou.Prm.cancel} a task while it is waiting for a signal/broadcast. 
+    *)
 
   type t
   (** The type of condition variables. *)
 
-  val make : unit -> t
-  (** [make ()] creates and return a new condition variable. *)
+  val make : ?mutex:Mutex.t -> unit -> t
+  (** [make ?mutex ()] creates and return a new condition variable. A condition
+      needs a {!type:Mutex.t} to have internal inter-domain synchronization
+      mechanisms. This mutex can be used by several conditions {!type:t}, so it
+      is possible to specify your own {!type:Mutex.t} instead of letting [miou]
+      create one. *)
 
-  val wait : t -> unit
-  (** [wait t] suspends the current task on the condition variable [t]. The task
-      can later be woken up after the condition variable [t] has been signaled
-      via {!val:signal} or {!val:broadcast}. *)
+  val wait : fn:(unit -> 'a) -> t -> 'a
+  (** [wait ~predicate t] suspends the current task on the condition variable
+      [t]. The task can later be woken up after the condition variable [t] has
+      been signaled via {!val:signal} or {!val:broadcast}. [fn] is a function
+      which is executed {b after} the wait and {b protected} by the internal
+      {!type:Mutex.t} (see {!val:make}). *)
+
+  val until : predicate:(unit -> bool) -> fn:(unit -> 'a) -> t -> 'a
+  (** [until ~predicate ~fn t] waits as long as [predicate] is [true]. Then, we
+      execute [fn] as soon as the process has unblocked. The execution of
+      [predicate] and [fn] is protected by the mutex internal to condition [t].
+    *)
 
   val signal : t -> unit
   (** [signal t] wakes up one of the tasks waiting on the condition variable

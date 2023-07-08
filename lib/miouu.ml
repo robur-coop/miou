@@ -102,14 +102,13 @@ module Cond = struct
   type t = {
       ic: Unix.file_descr
     ; oc: Unix.file_descr
-    ; mutex: Mutex.t
     ; counter: int Atomic.t
+    ; mutex: Mutex.t
     ; uid: int
   }
 
-  let make () =
+  let make ?(mutex = Mutex.create ()) () =
     let ic, oc = Unix.pipe ~cloexec:true () in
-    let mutex = Mutex.create () in
     let counter = Atomic.make 0 in
     { ic; oc; mutex; counter; uid= gen () }
 
@@ -120,18 +119,31 @@ module Cond = struct
     done
 
   let produce_signal fd =
-    let res = Bytes.make 1 '\000' in
+    let res = Bytes.make 1 '\042' in
     while Unix.single_write fd res 0 1 = 0 do
       ()
     done
 
-  let wait t =
+  let wait ~fn t =
     with_lock ~lock:t.mutex (fun () -> Atomic.incr t.counter);
     blocking_read t.ic;
     consume_signal t.ic;
-    with_lock ~lock:t.mutex (fun () -> Atomic.decr t.counter)
+    with_lock ~lock:t.mutex @@ fun () -> Atomic.decr t.counter; fn ()
 
-  let signal t = blocking_write t.oc; produce_signal t.oc
+  let until ~predicate ~fn t =
+    Mutex.lock t.mutex;
+    while predicate () do
+      Atomic.incr t.counter;
+      Mutex.unlock t.mutex;
+      blocking_read t.ic;
+      consume_signal t.ic;
+      Mutex.lock t.mutex;
+      Atomic.decr t.counter
+    done;
+    let finally () = Mutex.unlock t.mutex in
+    Fun.protect ~finally fn
+
+  let signal t = blocking_write t.oc; produce_signal t.oc; yield ()
 
   let broadcast t =
     with_lock ~lock:t.mutex @@ fun () ->
@@ -251,10 +263,8 @@ let select _domain interrupt () =
           Some (until', prm))
         dom.sleepers;
       syscalls
-  | rds, _, _ when List.exists (( = ) interrupt) rds ->
-      consume_interrupt interrupt;
-      []
   | rds, wrs, [] ->
+      if List.exists (( = ) interrupt) rds then consume_interrupt interrupt;
       let t1 = Unix.gettimeofday () in
       Hashtbl.filter_map_inplace
         (fun _ (until, prm) ->
@@ -284,7 +294,11 @@ let select _domain interrupt () =
 let events domain =
   let ic, oc = Unix.pipe ~cloexec:true () in
   let signal = Bytes.make 1 '\000' in
-  let interrupt () = ignore (Unix.single_write oc signal 0 1) in
+  let interrupt () =
+    while Unix.single_write oc signal 0 1 = 0 do
+      ()
+    done
+  in
   let select () = select domain ic () in
   { Miou.interrupt; select }
 
