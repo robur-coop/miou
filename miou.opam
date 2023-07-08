@@ -22,3 +22,8 @@ depends: [
   "mirage-crypto-rng" {with-test}
   "ipaddr"            {with-test}
 ]
+
+pin-depends: [
+  [ "dns.dev" "git+https://github.com/dinosaure/ocaml-dns.git#d47aedc2e20401c428315f7ae2ac819e71186961" ]
+  [ "dns-client.dev" "git+https://github.com/dinosaure/ocaml-dns.git#d47aedc2e20401c428315f7ae2ac819e71186961" ]
+]
