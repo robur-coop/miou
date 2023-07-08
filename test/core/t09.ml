@@ -1,7 +1,6 @@
-open Miou
 
 let prgm () =
-  Miouu.run @@ fun () -> ignore (Prm.call (fun () -> Miouu.sleep 10.))
+  Miouu.run @@ fun () -> ignore (Miou.call (fun () -> Miouu.sleep 10.))
 
 let () =
   let t0 = Unix.gettimeofday () in

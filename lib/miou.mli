@@ -1,4 +1,4 @@
-module Tq : sig
+module Queue : sig
   (** A lock-free queue.
 
       To be able to implement a scheduler across multiple domains, we must
@@ -17,7 +17,7 @@ module Tq : sig
   val transfer : 'a t -> 'a t
 end
 
-module Did : sig
+module Domain_id : sig
   (** An unique identifier for domains. *)
 
   type t
@@ -39,7 +39,7 @@ module Id : sig
 
   val null : t
   (** [null] is an {i impossible} value of {!type:t}. Actually, {!type:t} is
-      used to identify {!type:Prm.t} and they will {b never} have such
+      used to identify {!type:t} and they will {b never} have such
       value as their identifiers. *)
 
   val compare : t -> t -> int
@@ -47,7 +47,7 @@ module Id : sig
   val pp : Format.formatter -> t -> unit
 end
 
-module Own : sig
+module Ownership : sig
   (** A capitalism idea into our scheduler.
 
       [miou] offers a mechanism for protecting resources if a task finishes
@@ -58,8 +58,8 @@ module Own : sig
 
       {[
         let fd = Unix.socket ... in
-        let rs = Own.make ~finally:Unix.close fd in
-        Own.own rs
+        let rs = Ownership.make ~finally:Unix.close fd in
+        Ownership.own rs
       ]} *)
 
   type t
@@ -73,10 +73,10 @@ module Own : sig
       {[
         # let show () = print_endline "Resource released"
         # Miou.(run @@ fun () ->
-          let p = Prm.call_cc @@ fun () ->
-            let _ = Own.own ~finally:show () in
+          let p = call_cc @@ fun () ->
+            let _ = Ownership.own ~finally:show () in
             failwith "p" in
-          Prm.await_exn p) ;;
+          await_exn p) ;;
         Resource released!
         Exception: Failure "p".
       ]} *)
@@ -89,10 +89,10 @@ module Own : sig
       {[
         # let show () = print_endline "Resource released"
         # Miou.(run @@ fun () ->
-          let p = Prm.call_cc @@ fun () ->
-            let _ = Own.own ~finally:show () in
+          let p = call_cc @@ fun () ->
+            let _ = Ownership.own ~finally:show () in
             () in
-          Prm.await_exn p) ;;
+          await_exn p) ;;
         Resource released!
         Exception: Miou.Resource_leak.
       ]}
@@ -105,13 +105,13 @@ module Own : sig
       conjunction with others and the parent will make real use of it such as:
 
       {[
-        Prm.await_first
-          [ Prm.call_cc @@ fun () ->
+        Miou.await_first
+          [ Miou.call_cc @@ fun () ->
             let socket = tcpv4 () in
             Miouu.connect socket addr;
-            Own.transmit socket;
+            Ownership.transmit socket;
             socket
-          ; Prm.call_cc @@ fun () -> sleep 10.; raise Timeout ]
+          ; Miou.call_cc @@ fun () -> sleep 10.; raise Timeout ]
       ]} *)
 
   val check : t -> unit
@@ -119,201 +119,199 @@ module Own : sig
       promise. *)
 end
 
-module Prm : sig
-  (** A promise for a better futur.
+(** {1 A promise for a better futur.}
 
-      A {b promise} is a function ([unit -> 'a]) that will be executed by the
-      scheduler in the near future. The user can launch a promise (and notify
-      by this way the scheduler of a new task to do) as well as wait for the
-      result of a promise (see {!val:await}).
+    A {b promise} is a function ([unit -> 'a]) that will be executed by the
+    scheduler in the near future. The user can launch a promise (and notify by
+    this way the scheduler of a new task to do) as well as wait for the result
+    of a promise (see {!val:await}).
 
-      A promise can be executed concurrently with other promises (see
-      {!val:call_cc}) or in parallel with other promises (see {!val:call}).
-  *)
+    A promise can be executed concurrently with other promises (see
+    {!val:call_cc}) or in parallel with other promises (see {!val:call}).
+*)
 
-  type 'a t
-  (** Type of promises. *)
+type 'a t
+(** Type of promises. *)
 
-  val pp : Format.formatter -> 'a t -> unit
-  (** A simple pretty-printer of a promise which shows you the domain where
-      the promise run and its unique ID. *)
+val pp : Format.formatter -> 'a t -> unit
+(** A simple pretty-printer of a promise which shows you the domain where the
+    promise run and its unique ID. *)
 
-  (** {2 Daemon and orphan tasks.}
+(** {2 Daemon and orphan tasks.}
 
-      The prerogative of absolutely expecting all of its direct children limits
-      the user to considering certain anti-patterns. The best known is the
-      {i background} task: this consists of running a task that we would like to
-      'detach' from the main task so that it can continue its life in autonomy.
+    The prerogative of absolutely expecting all of its direct children limits
+    the user to considering certain anti-patterns. The best known is the
+    {i background} task: this consists of running a task that we would like to
+    'detach' from the main task so that it can continue its life in autonomy.
 
-      Not that we want to impose an authoritarian family approach, but the fact
-      remains that these {i orphaned} tasks have resources that we need to
-      manage and free up (even in an abnormal situation). And we'd like to sleep
-      easy tonight.
+    Not that we want to impose an authoritarian family approach, but the fact
+    remains that these {i orphaned} tasks have resources that we need to manage
+    and free up (even in an abnormal situation). And we'd like to sleep easy
+    tonight.
 
-      So a promise can be associated with an {!type:orphans}. The latter will
-      then collect the results of the associated promise tasks and give you back
-      the promises (via {!val:care}) in a 'non-blocking' mode: applying
-      {!val:await} to them will give you the results directly.
+    So a promise can be associated with an {!type:orphans}. The latter will then
+    collect the results of the associated promise tasks and give you back the
+    promises (via {!val:care}) in a 'non-blocking' mode: applying {!val:await}
+    to them will give you the results directly.
 
-      In this way, by creating promises associated with this {!type:orphans}
-      value, we can at the same time "clean up" these {i background} tasks, as
-      this code shows:
+    In this way, by creating promises associated with this {!type:orphans}
+    value, we can at the same time "clean up" these {i background} tasks, as
+    this code shows:
 
-      {[
-        let rec clean_up orphans =
-          match Prm.care orphans with
-          | None -> ()
-          | Some prm -> Prm.await_exn prm; clean_up orphans
+    {[
+      let rec clean_up orphans =
+        match Miou.care orphans with
+        | None -> ()
+        | Some prm -> Miou.await_exn prm; clean_up orphans
 
-        let server orphans =
-          clean_up orphans;
-          ignore (Prm.call ~orphans handler);
-          server orphans in
-        server (Prm.oprhans ())
-      ]} *)
+      let server orphans =
+        clean_up orphans;
+        ignore (Miou.call ~orphans handler);
+        server orphans in
+      server (Miou.oprhans ())
+    ]} *)
 
-  type 'a orphans
-  (** The type of orphan collectors. *)
+type 'a orphans
+(** The type of orphan collectors. *)
 
-  val orphans : unit -> 'a orphans
-  (** [orphans ()] makes a new orphan collectors which can be used by
-      {!val:Prm.call} and {!val:Prm.call_cc}. *)
+val orphans : unit -> 'a orphans
+(** [orphans ()] makes a new orphan collectors which can be used by
+    {!val:call} and {!val:call_cc}. *)
 
-  val care : 'a orphans -> 'a t option
-  (** [care orphans] returns a {i ready-to-await} promise or [None]. The user
-      must {i consume} the result of the promise with {!val:Prm.await}.
-      Otherwise, [miou] will raises [Still_has_children]. *)
+val care : 'a orphans -> 'a t option
+(** [care orphans] returns a {i ready-to-await} promise or [None]. The user must
+    {i consume} the result of the promise with {!val:await}. Otherwise,
+    [miou] will raises [Still_has_children]. *)
 
-  (** {2 Launch a promise.} *)
+(** {2 Launch a promise.} *)
 
-  val call_cc : ?orphans:'a orphans -> ?give:Own.t list -> (unit -> 'a) -> 'a t
-  (** [call_cc fn] (for Call with Current Continuation) returns a promise which
-      will be executed {b cooperatively} with other promises. *)
+val call_cc :
+  ?orphans:'a orphans -> ?give:Ownership.t list -> (unit -> 'a) -> 'a t
+(** [call_cc fn] (for Call with Current Continuation) returns a promise which
+    will be executed {b cooperatively} with other promises. *)
 
-  val call : ?orphans:'a orphans -> ?give:Own.t list -> (unit -> 'a) -> 'a t
-  (** [call fn] returns a promise which will be executed {b in parallel}
-      with other promises. [miou] pre-allocates domains that are waiting to
-      perform this kind of task. The user does {b not} choose the domain on
-      which the task will be executed. [miou] {b randomly} chooses which of the
-      domains will perform the task. *)
+val call : ?orphans:'a orphans -> ?give:Ownership.t list -> (unit -> 'a) -> 'a t
+(** [call fn] returns a promise which will be executed {b in parallel} with
+    other promises. [miou] pre-allocates domains that are waiting to perform
+    this kind of task. The user does {b not} choose the domain on which the task
+    will be executed. [miou] {b randomly} chooses which of the domains will
+    perform the task. *)
 
-  (* {2 Cancellation.} *)
+(* {2 Cancellation.} *)
 
-  exception Cancelled
+exception Cancelled
 
-  val cancel : 'a t -> unit
-  (** [cancel prm] asynchronously tries to cancel the given promise [prm].
-      [miou] allows the forgetting of a cancelled promise and the forgetting of
-      its children. For instance, this code is valid (despite the second one):
+val cancel : 'a t -> unit
+(** [cancel prm] asynchronously tries to cancel the given promise [prm]. [miou]
+    allows the forgetting of a cancelled promise and the forgetting of its
+    children. For instance, this code is valid (despite the second one):
 
-      {[
-        # Miou.(run @@ fun () ->
-                ignore (Prm.cancel (Prm.call (Fun.const ())))) ;;
-        - : unit = ()
-        # Miou.(run @@ fun () ->
-                ignore (Prm.call (Fun.const ()))) ;;
-        Exception: Miou.Still_has_children
-      ]}
+    {[
+      # Miou.(run @@ fun () ->
+              ignore (cancel (call (Fun.const ())))) ;;
+      - : unit = ()
+      # Miou.(run @@ fun () ->
+              ignore (call (Fun.const ()))) ;;
+      Exception: Miou.Still_has_children
+    ]}
 
-      Cancellation will try to finish all the children and will wait until all
-      the children are finished (once again, termination intervenes if the
-      promise has been cancelled {b or} resolved). You can sleep soundly after
-      the cancellation, and the promise that all its children have stopped. *)
+    Cancellation will try to finish all the children and will wait until all the
+    children are finished (once again, termination intervenes if the promise has
+    been cancelled {b or} resolved). You can sleep soundly after the
+    cancellation, and the promise that all its children have stopped. *)
 
-  (** {2 Await a promise.} *)
+(** {2 Await a promise.} *)
 
-  val await : 'a t -> ('a, exn) result
-  val await_exn : 'a t -> 'a
-  val await_one : 'a t list -> ('a, exn) result
-  val await_all : 'a t list -> ('a, exn) result list
-  val await_first : 'a t list -> ('a, exn) result
+val await : 'a t -> ('a, exn) result
+val await_exn : 'a t -> 'a
+val await_one : 'a t list -> ('a, exn) result
+val await_all : 'a t list -> ('a, exn) result list
+val await_first : 'a t list -> ('a, exn) result
 
-  (** {2 State introspection.} *)
+(** {2 State introspection.} *)
 
-  type 'a state =
-    | Resolved of 'a  (** Normal termination. *)
-    | Failed of exn  (** Abnormal termination. *)
-    | Pending  (** Not yet resolved. *)
+type 'a state =
+  | Resolved of 'a  (** Normal termination. *)
+  | Failed of exn  (** Abnormal termination. *)
+  | Pending  (** Not yet resolved. *)
 
-  val state : 'a t -> 'a state
-  (** [state prm] returns the current state of the given promise {!type:t}
+val state : 'a t -> 'a state
+(** [state prm] returns the current state of the given promise {!type:t}
       [prm]. *)
 
-  (** {2 Syscalls.}
+(** {2 Syscalls.}
 
-      [miou] does not interact with the system, only with the OCaml runtime. As
-      a result, it does not implement the usual input/output operations.
-      Nevertheless, it offers a fairly simple API for using functions that
-      interact with the system (and that can, above all, block).
+    [miou] does not interact with the system, only with the OCaml runtime. As a
+    result, it does not implement the usual input/output operations.
+    Nevertheless, it offers a fairly simple API for using functions that
+    interact with the system (and that can, above all, block).
 
-      One of the rules of [miou] is never to give it blocking functions to eat
-      (in fact, it has very strict - but very simple - nutritional constraints).
+    One of the rules of [miou] is never to give it blocking functions to eat (in
+    fact, it has very strict - but very simple - nutritional constraints).
 
-      On the other hand, the system can inform you when a function is
-      non-blocking (and can therefore be given to [miou]). The idea is to inform
-      [miou] of the existence of a {i promise}, which it will then try to
-      resolve. Of course, it won't be able to, but as a last resort, [miou] will
-      come back to you to ask for a possible task to resolve this promise. It
-      will do this via an user's defined function, which you can specify using
-      the {!val:run} function (see [events] argument).
+    On the other hand, the system can inform you when a function is non-blocking
+    (and can therefore be given to [miou]). The idea is to inform [miou] of the
+    existence of a {i promise}, which it will then try to resolve. Of course, it
+    won't be able to, but as a last resort, [miou] will come back to you to ask
+    for a possible task to resolve this promise. It will do this via an user's
+    defined function, which you can specify using the {!val:run} function (see
+    [events] argument).
 
-      This user's defined function return a {!type:task} which is a promise
-      associated with a {b non-blocking} task ([unit -> unit]) that would
-      resolve it. At last, [miou] will be able to fulfil your promise!
+    This user's defined function return a {!type:task} which is a promise
+    associated with a {b non-blocking} task ([unit -> unit]) that would resolve
+    it. At last, [miou] will be able to fulfil your promise!
 
-      For more information on this API, a tutorial is available on how to
-      implement {!page:sleepers}: tasks that block your process for a time.
-   *)
+    For more information on this API, a tutorial is available on how to
+    implement {!page:sleepers}: tasks that block your process for a time.
+*)
 
-  type 'a syscall
-  (** The type of {i syscalls}.
+type 'a syscall
+(** The type of {i syscalls}.
 
-      A syscall is like a promise (see {!type:t}), but the user can only
-      {!val:suspend} the execution flow with it. *)
+    A syscall is like a promise (see {!type:t}), but the user can only
+    {!val:suspend} the execution flow with it. *)
 
-  val make : ?give:Own.t list -> (unit -> 'a) -> 'a syscall
-  (** [make return] creates a {i promise} that will {b never} be resolved. For
-      the example, this code fails:
+val make : ?give:Ownership.t list -> (unit -> 'a) -> 'a syscall
+(** [make return] creates a {i promise} that will {b never} be resolved. For
+    the example, this code fails:
 
-      {[
-        # Miou.(run @@ fun () -> let v = Prm.make (Fun.const ()) in
-                Prm.suspend v) ;;
-        Exception: Miou.Still_has_children
-      ]}
+    {[
+      # Miou.(run @@ fun () -> let v = make (Fun.const ()) in
+              suspend v) ;;
+      Exception: Miou.Still_has_children
+    ]}
 
-      However, if you keep this promise somewhere and specify a "select"
-      function that proposes a task to resolve it, the program should then
-      terminate:
+    However, if you keep this promise somewhere and specify a "select" function
+    that proposes a task to resolve it, the program should then terminate:
 
-      {[
-        # let global = ref None ;;
-        # let select () = match !global with
-          | Some p -> [ Miou.task p (fun () -> global := None) ]
-          | None -> []
-          ;;
-        # let events = { Miou.select; Miou.interrupt= ignore } ;;
-        # Miou.(run ~events @@ fun () ->
-          let v = Prm.make (Fun.const ()) in
-          global := Some v; Prm.suspend v) ;;
-        - : (unit, exn) result = Ok ()
-      ]}
+    {[
+      # let global = ref None ;;
+      # let select () = match !global with
+        | Some p -> [ Miou.task p (fun () -> global := None) ]
+        | None -> []
+        ;;
+      # let events = { Miou.select; Miou.interrupt= ignore } ;;
+      # Miou.(run ~events @@ fun () ->
+        let v = make (Fun.const ()) in
+        global := Some v; suspend v) ;;
+      - : (unit, exn) result = Ok ()
+    ]}
 
-      As you can see, the use of {!val:make} is very intrinsic to the creation
-      of the [events] function. *)
+    As you can see, the use of {!val:make} is very intrinsic to the creation of
+    the [events] function. *)
 
-  val suspend : 'a syscall -> ('a, exn) result
-  (** [suspend syscall] suspends the execution flow and will be resumed when the
-      user gives a {b non-blocking} function (a {!type:task}) via {!type:events}
-      that resolves the syscall. *)
+val suspend : 'a syscall -> ('a, exn) result
+(** [suspend syscall] suspends the execution flow and will be resumed when the
+    user gives a {b non-blocking} function (a {!type:task}) via {!type:events}
+    that resolves the syscall. *)
 
-  val is_pending : 'a syscall -> bool
-  (** [is_pending syscall] returns [true] if the given [syscall] is not yet
-      resolved (or cancelled). This function can be useful to {i clean-up}
-      syscalls that have been cancelled by [miou]. *)
+val is_pending : 'a syscall -> bool
+(** [is_pending syscall] returns [true] if the given [syscall] is not yet
+    resolved (or cancelled). This function can be useful to {i clean-up}
+    syscalls that have been cancelled by [miou]. *)
 
-  val uid : 'a syscall -> Id.t
-  (** [uid syscall] returns a unique identifier of the promise. *)
-end
+val uid : 'a syscall -> Id.t
+(** [uid syscall] returns a unique identifier of the promise. *)
 
 val yield : unit -> unit
 (** [yield ()] reschedules tasks and give a chance to all of them to be executed
@@ -321,17 +319,17 @@ val yield : unit -> unit
 
     {[
       # Miou.run @@ fun () ->
-        let p = Prm.call_cc (fun () -> print_endline "Hello") in
+        let p = Miou.call_cc (fun () -> print_endline "Hello") in
         print_endline "World";
-        Prm.await_exn prm ;;
+        Miou.await_exn prm ;;
       World
       Hello
       - : unit = ()
       # Miou.run @@ fun () ->
-        let p = Prm.call_cc (fun () -> print_endline "Hello") in
+        let p = Miou.call_cc (fun () -> print_endline "Hello") in
         yield ();
         print_endline "World";
-        Prm.await_exn prm ;;
+        Miou.await_exn prm ;;
       Hello
       World
       - : unit = ()
@@ -342,14 +340,14 @@ type task
 
 type events = { interrupt: unit -> unit; select: unit -> task list }
 
-val task : 'a Prm.syscall -> (unit -> unit) -> task
-(** [task prm fn] creates a new task associated with a {!type:Prm.syscall}
+val task : 'a syscall -> (unit -> unit) -> task
+(** [task prm fn] creates a new task associated with a {!type:syscall}
     created by the user. The task must be a non-blocking function to resolve the
     associated promise. *)
 
 val run :
      ?g:Random.State.t
   -> ?domains:int
-  -> ?events:(Did.t -> events)
+  -> ?events:(Domain_id.t -> events)
   -> (unit -> 'a)
   -> 'a

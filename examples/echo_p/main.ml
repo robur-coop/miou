@@ -1,9 +1,6 @@
-open Miou
-open Miouu
-
 let listen sockaddr =
-  let fd = tcpv4 () in
-  bind_and_listen fd sockaddr;
+  let fd = Miouu.tcpv4 () in
+  Miouu.bind_and_listen fd sockaddr;
   fd
 
 let sockaddr_to_string = function
@@ -23,18 +20,18 @@ let handler fd =
   go
 
 let rec clean orphans =
-  match Prm.care orphans with
+  match Miou.care orphans with
   | None -> ()
-  | Some prm -> Prm.await_exn prm; clean orphans
+  | Some prm -> Miou.await_exn prm; clean orphans
 
 let prgm sockaddr =
   let rec server orphans fd =
     clean orphans;
     let fd', sockaddr = Miouu.accept fd in
     Format.printf "- new connection from %s\n%!" (sockaddr_to_string sockaddr);
-    ignore (Prm.call ~give:[ Miouu.owner fd' ] ~orphans (handler fd'));
+    ignore (Miou.call ~give:[ Miouu.owner fd' ] ~orphans (handler fd'));
     server orphans fd
   in
-  fun () -> server (Prm.orphans ()) (listen sockaddr)
+  fun () -> server (Miou.orphans ()) (listen sockaddr)
 
 let () = Miouu.run (prgm (Unix.ADDR_INET (Unix.inet_addr_loopback, 9000)))

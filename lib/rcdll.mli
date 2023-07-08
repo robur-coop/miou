@@ -1,4 +1,4 @@
-(** A randomized circular double linked list.
+(** A Randomized Circular Double Linked List.
 
     This implementation is {b not} domain-safe and should be used into a single
     domain: otherwise, you will get data-race conditions. *)

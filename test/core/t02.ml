@@ -1,10 +1,9 @@
-open Miou
 
 let prgm () =
   Miou.run @@ fun () ->
-  let a = Prm.call_cc (Fun.const 1) in
-  let b = Prm.call_cc (Fun.const 2) in
-  Prm.await_first [ a; b ]
+  let a = Miou.call_cc (Fun.const 1) in
+  let b = Miou.call_cc (Fun.const 2) in
+  Miou.await_first [ a; b ]
 
 let rec until_its value =
   match prgm () with

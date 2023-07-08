@@ -1,9 +1,6 @@
-open Miou
-open Miouu
-
 let listen sockaddr =
   let fd = Miouu.tcpv4 () in
-  bind_and_listen fd sockaddr;
+  Miouu.bind_and_listen fd sockaddr;
   fd
 
 let sockaddr_to_string = function
@@ -26,7 +23,7 @@ let prgm sockaddr =
   let rec server tasks fd =
     let fd', sockaddr = Miouu.accept fd in
     Format.printf "- new connection from %s\n%!" (sockaddr_to_string sockaddr);
-    let task = Prm.call_cc ~give:[ Miouu.owner fd' ] (handler fd') in
+    let task = Miou.call_cc ~give:[ Miouu.owner fd' ] (handler fd') in
     server (task :: tasks) fd
   in
   fun () -> server [] (listen sockaddr)

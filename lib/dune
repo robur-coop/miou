@@ -1,7 +1,7 @@
 (library
  (name miou)
  (public_name miou)
- (modules miou tq l))
+ (modules miou queue rcdll))
 
 (library
  (name miouu)

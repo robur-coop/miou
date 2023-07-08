@@ -1,12 +1,11 @@
-open Miou
 
 let sleep () = Unix.sleepf 1.
 
 let prgm () =
   Miou.run @@ fun () ->
-  let a = Prm.call sleep in
-  let b = Prm.call sleep in
-  Prm.await_exn a; Prm.await_exn b
+  let a = Miou.call sleep in
+  let b = Miou.call sleep in
+  Miou.await_exn a; Miou.await_exn b
 
 let () =
   let t0 = Unix.gettimeofday () in

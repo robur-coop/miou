@@ -21,18 +21,17 @@ module Box = struct
     { value= Atomic.make None; lock= (Mutex.create (), Condition.create ()) }
 end
 
-open Miou
 
 let prgm () =
   let box = Box.make () in
   let p0 =
-    Prm.call @@ fun () ->
+    Miou.call @@ fun () ->
     Miouu.sleep 1.;
     assert (Box.push box "Hello World!" = true)
   in
-  let p1 = Prm.call @@ fun () -> ignore (Box.take box) in
-  let p2 = Prm.call @@ fun () -> ignore (Box.take box) in
-  Prm.await_all [ p0; p1; p2 ]
+  let p1 = Miou.call @@ fun () -> ignore (Box.take box) in
+  let p2 = Miou.call @@ fun () -> ignore (Box.take box) in
+  Miou.await_all [ p0; p1; p2 ]
   |> List.iter @@ function Error exn -> raise exn | Ok () -> ()
 
 let () = Miouu.run prgm

@@ -9,8 +9,8 @@ let reporter ppf =
     let with_metadata header _tags k ppf fmt =
       Format.kfprintf k ppf
         ("[%a]%a[%a]: " ^^ fmt ^^ "\n%!")
-        Fmt.(styled `Blue Miou.Did.pp)
-        (Miou.Did.self ()) Logs_fmt.pp_header (level, header)
+        Fmt.(styled `Blue Miou.Domain_id.pp)
+        (Miou.Domain_id.self ()) Logs_fmt.pp_header (level, header)
         Fmt.(styled `Magenta string)
         (Logs.Src.name src)
     in

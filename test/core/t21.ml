@@ -1,12 +1,10 @@
-open Miou
-
 let print () = print_endline "Resource released"
 
 let () =
   Miou.run @@ fun () ->
   let p =
-    Prm.call_cc @@ fun () ->
-    let t = Own.own ~finally:print () in
-    Own.disown t
+    Miou.call_cc @@ fun () ->
+    let t = Miou.Ownership.own ~finally:print () in
+    Miou.Ownership.disown t
   in
-  Prm.await_exn p
+  Miou.await_exn p
