@@ -511,7 +511,9 @@ module Pool = struct
     L.iter_on ~f pool.clist;
     match !to_cancel with
     | Some (Prm.Prm prm) -> Some (Local.Cancel prm)
-    | None -> (
+    | None when L.is_empty domain.blist -> (
+        (* XXX(dinosaure): if the domain has some blockers, we don't locate
+           a pending global task and let it to handle its own blockers task. *)
         match L.take pool.glist with
         | Shared.Task (prm, fn) ->
             assign_domain domain prm;
@@ -520,6 +522,7 @@ module Pool = struct
             if did = domain.uid then Some (Local.Task (prm, fn))
             else (L.push task pool.glist; None)
         | exception L.Empty -> None)
+    | None -> None
   (* XXX(dinosaure): [locate] must be used with a mutex. *)
 
   let worker pool domain go =
