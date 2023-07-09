@@ -137,11 +137,9 @@ user. Indeed, task management focuses mainly on suspension management: that is,
 a task that can *block* the process.
 
 It turns out that suspend mainly<sup>[2](#fn2)</sup> only affects the use of
-resources offered by the system (sockets, files, time, etc.). It turns out that
-suspend mainly only affects the use of resources offered by the system (sockets,
-files, time, etc.). Our experience in system programming and in the development
-of unikernels teaches us that this management of system resources, although
-intrinsic to task management, is:
+resources offered by the system (sockets, files, time, etc.). Our experience in
+system programming and in the development of unikernels teaches us that this
+management of system resources, although intrinsic to task management, is:
 - complex because of the subtleties that may exist between each system (Linux,
   \*BSD, Mac, Windows, unikernels)
 - specific to the case of the suspension of a task while waiting for a signal
