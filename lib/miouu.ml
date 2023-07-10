@@ -116,19 +116,29 @@ module Cond = struct
   let make ?(mutex = Mutex.create ()) () =
     let ic, oc = Unix.pipe ~cloexec:true () in
     let counter = Atomic.make 0 in
-    { ic; oc; mutex; counter; uid= gen () }
+    let t = { ic; oc; mutex; counter; uid= gen () } in
+    let close { ic; oc; _ } = Unix.close ic; Unix.close oc in
+    Gc.finalise close t; t
 
   let consume_signal fd =
     let res = Bytes.create 1 in
-    while Unix.read fd res 0 1 = 0 do
-      ()
-    done
+    let rec go () =
+      match Unix.read fd res 0 1 with
+      | exception Unix.Unix_error (Unix.EINTR, _, _) -> go ()
+      | 0 -> go ()
+      | _ -> ()
+    in
+    go ()
 
   let produce_signal fd =
     let res = Bytes.make 1 '\042' in
-    while Unix.single_write fd res 0 1 = 0 do
-      ()
-    done
+    let rec go () =
+      match Unix.single_write fd res 0 1 with
+      | exception Unix.Unix_error (Unix.EINTR, _, _) -> go ()
+      | 0 -> go ()
+      | _ -> ()
+    in
+    go ()
 
   let wait ~fn t =
     with_lock ~lock:t.mutex (fun () -> Atomic.incr t.counter);
