@@ -5,8 +5,8 @@ with {i blocking} operations. For the example, we're going to implement the
 sleepers. [Unix.sleepf] is a blocking operation. The fundamental problem with
 [miou] is that it performs operations in the background (scheduling). So using a
 blocking operation with [miou] prevents it from managing other tasks
-concurrently (manage tasks entered with {!val:Miou.Prm.call_cc}) or in parallel
-(wait for parallel process tasks introduced by {!val:Miou.Prm.call}). 
+concurrently (manage tasks entered with {!val:Miou.call_cc}) or in parallel
+(wait for parallel process tasks introduced by {!val:Miou.call}). 
 
 As stated in the documentation, and this is a fundamental rule:
 > you should never give [miou] blocking tasks (such as [Unix.sleepf])
@@ -30,9 +30,9 @@ write this code:
 open Miou
 
 let program () = Miou.run @@ fun () ->
-  let a = Prm.call_cc (fun () -> sleep 1.) in
-  let b = Prm.call_cc (fun () -> sleep 2.) in
-  Prm.await_all_ign [ a; b ]
+  let a = Miou.call_cc (fun () -> sleep 1.) in
+  let b = Miou.call_cc (fun () -> sleep 2.) in
+  Miou.await_all_ign [ a; b ]
 
 let () =
   let t0 = Unix.gettimeofday () in
@@ -55,10 +55,10 @@ So we've got our test, which will validate what we're expecting.
 
 {2 Syscalls.}
 
-The {!module:Miou.Prm} module is fairly straightforward about what can (and
+The {!module:Miou} module is fairly straightforward about what can (and
 cannot) be done about {i promises} not associated with a task. You can create
-such a promise ({!val:Miou.Prm.make}), {b suspend} and wait for its result
-{!val:Miou.Prm.suspend}) and obtain its unique identifier ({!val:Miou.Prm.uid}).
+such a promise ({!val:Miou.make}), {b suspend} and wait for its result
+{!val:Miou.suspend}) and obtain its unique identifier ({!val:Miou.uid}).
 And that's it!
 
 The first function allows us to create our [sleep] "syscall". The second will
@@ -72,9 +72,9 @@ open Miou
 let sleepers = Hashtbl.create 0x100
 
 let sleep until =
-  let promise = Prm.make ~return:(Fun.const ()) in
-  Hashtbl.add sleepers (Prm.uid promise) (promise, until);
-  match Prm.suspend promise with
+  let promise = Miou.make ~return:(Fun.const ()) in
+  Hashtbl.add sleepers (Miou.uid promise) (promise, until);
+  match Miou.suspend promise with
   | Ok () -> ()
   | Error exn -> raise exn
 ]}
@@ -152,10 +152,10 @@ them:
 {[
 let prgm () =
   Miou.run ~events @@ fun () ->
-  let a = Prm.call_cc (fun () -> sleep 1.) in
-  let b = Prm.call_cc (fun () -> sleep 2.) in
-  ignore (Prm.await a);
-  ignore (Prm.await b)
+  let a = Miou.call_cc (fun () -> sleep 1.) in
+  let b = Miou.call_cc (fun () -> sleep 2.) in
+  ignore (Miou.await a);
+  ignore (Miou.await b)
 
 let () =
   let t0 = Unix.gettimeofday () in
@@ -205,10 +205,17 @@ with [U]nix).
 {2 Events & domains.}
 
 As you can imagine, this little introduction is not complete if we take into
-account [interrupt] and {!val:Miou.Prm.call}. This is where we'll explain
-another rule: a syscall is always local to a domain.
+account {!val:Miou.call}. [miou] can launch tasks in parallel and these tasks
+can perform I/O. On this point, we propose a fairly simple design: a {i syscall}
+is always managed by the domain that launched it (it is somewhat equivalent to
+{!val:Miou.call_cc}).
 
 Above all, this means that I/O operations will always be cooperative. There may
 be more complex tasks which can run in parallel and which may contain some I/O,
-but the suspension ({!val:Miou.Prm.suspend}) of a syscall will always be local
+but the suspension ({!val:Miou.suspend}) of a syscall will always be local
 to the current domain executing the suspension.
+
+The suspension mechanism can therefore appear in a domain, but we can assure you
+that only this domain will transmit the task resolving the suspended promise. If
+the user, through some obscure game, tries to resolve a promise in a domain
+other than the one with the suspension, [miou] will stop with [Invalid_syscall].
