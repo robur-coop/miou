@@ -1,5 +1,3 @@
-[@@@warning "-37"] (* Dedicated_task *)
-
 exception Invalid_syscall
 exception Not_owner
 
@@ -159,6 +157,7 @@ module Promise = struct
   type _ Effect.t += Await_one : bool * 'a t list -> ('a, exn) result Effect.t
   type _ Effect.t += Await_all : 'a t list -> ('a, exn) result list Effect.t
   type _ Effect.t += Suspend : 'a syscall -> ('a, exn) result Effect.t
+  type _ Effect.t += Multiple_spawn : (unit -> 'a) list -> 'a t list Effect.t
 
   let call_cc ?orphans ?(give = []) fn =
     Effect.perform (Local_spawn (orphans, give, fn))
@@ -166,6 +165,7 @@ module Promise = struct
   let call ?orphans ?(give = []) fn =
     Effect.perform (Parallel_spawn (orphans, give, fn))
 
+  let parallel lst = Effect.perform (Multiple_spawn lst)
   let await prm = Effect.perform (Await prm)
   let await_exn prm = or_raise (await prm)
   let make ?(give = []) return = Effect.perform (Syscall_spawn (give, return))
@@ -289,7 +289,7 @@ module Shared = struct
      and was not taken yet by a domain. *)
 
   type t =
-    | Task : 'a Promise.t * (unit -> 'a) -> t
+    | Task : Domain_id.t * 'a Promise.t * (unit -> 'a) -> t
     | Dedicated_task : Domain_id.t * 'a Promise.t * (unit -> 'a) -> t
 
   type cancel = Cancel : 'a Promise.t -> cancel
@@ -350,7 +350,7 @@ let remove_prm_from_pool pool prm =
   let f node =
     let (Promise.Promise prm') =
       match Rcdll.data node with
-      | Shared.Task (prm', _) -> Promise.Promise prm'
+      | Shared.Task (_, prm', _) -> Promise.Promise prm'
       | Shared.Dedicated_task (_, prm', _) -> Promise.Promise prm'
     in
     if prm'.Promise.uid = prm.Promise.uid then Rcdll.remove node
@@ -525,12 +525,13 @@ module Pool = struct
         (* XXX(dinosaure): if the domain has some blockers, we don't locate
            a pending global task and let it to handle its own blockers task. *)
         match Rcdll.take pool.glist with
-        | Shared.Task (prm, fn) ->
+        | Shared.Task (launcher, prm, fn) when launcher <> domain.uid ->
             assign_domain domain prm;
             Some (Local.Task (prm, fn))
-        | Shared.Dedicated_task (did, prm, fn) as task ->
-            if did = domain.uid then Some (Local.Task (prm, fn))
+        | Shared.Dedicated_task (runner, prm, fn) as task ->
+            if runner = domain.uid then Some (Local.Task (prm, fn))
             else (Rcdll.push task pool.glist; None)
+        | task -> Rcdll.push task pool.glist; None
         | exception Rcdll.Empty -> None)
     | None -> None
   (* XXX(dinosaure): [locate] must be used with a mutex. *)
@@ -562,9 +563,11 @@ module Pool = struct
       Condition.signal pool.working;
       Mutex.unlock (fst pool.work)
 
-  let push pool ~fn prm =
+  let push pool ~launcher ~fn ?domain prm =
     Mutex.lock (fst pool.work);
-    Rcdll.push (Shared.Task (prm, fn)) pool.glist;
+    (match domain with
+    | None -> Rcdll.push (Shared.Task (launcher.uid, prm, fn)) pool.glist
+    | Some uid -> Rcdll.push (Shared.Dedicated_task (uid, prm, fn)) pool.glist);
     Condition.broadcast (snd pool.work);
     Mutex.unlock (fst pool.work)
 
@@ -648,7 +651,7 @@ let do_local_spawn domain ress ?orphans ~parent fn k =
   Rcdll.push (Local.Task (prm, fn)) domain.llist;
   Effect.Deep.continue k prm
 
-let do_parallel_spawn pool ress ?orphans ~parent fn k =
+let do_parallel_spawn pool domain ress ?orphans ~parent fn k =
   if Array.length pool.domains <= 0 then
     Effect.Deep.discontinue k No_domain_available
   else
@@ -671,8 +674,39 @@ let do_parallel_spawn pool ress ?orphans ~parent fn k =
     in
     Option.iter (Rcdll.push prm) orphans;
     Queue.enqueue parent.Promise.children (Promise.Promise prm);
-    Pool.push pool ~fn prm;
+    Pool.push pool ~launcher:domain ~fn prm;
     Effect.Deep.continue k prm
+
+let do_multiple_spawns pool domain ~parent lst k =
+  if List.length lst > Array.length pool.domains then
+    Effect.Deep.discontinue k (Invalid_argument "Miou.parallel");
+  let uids =
+    List.filter_map
+      (fun domain' ->
+        if domain.uid = domain'.uid then None else Some domain'.uid)
+      (Array.to_list pool.domains)
+  in
+  let _, prms =
+    List.fold_left
+      (fun (uids, prms) fn ->
+        let[@warning "-8"] (uid :: uids) = uids in
+        let prm =
+          {
+            Promise.uid= Id.gen ()
+          ; runner= Atomic.make Promise.On_hold
+          ; state= Atomic.make (Promise.Pending : _ Promise.pstate)
+          ; ty= Ty.Task
+          ; children= Queue.make ()
+          ; resources= Queue.make ()
+          ; parent= Some (Promise.Promise parent)
+          }
+        in
+        Queue.enqueue parent.Promise.children (Promise.Promise prm);
+        Pool.push pool ~launcher:domain ~domain:uid ~fn prm;
+        (uids, prm :: prms))
+      (uids, []) lst
+  in
+  Effect.Deep.continue k prms
 
 let is_a_child_of ~parent prm =
   let res = ref false in
@@ -984,9 +1018,11 @@ let run ?(g = Random.State.make_self_init ()) ?domains ~events fn =
       | _, Promise.Local_spawn (orphans, ress, fn) ->
           Some (do_local_spawn domain ress ?orphans ~parent:prm fn)
       | _, Promise.Parallel_spawn (orphans, ress, fn) ->
-          Some (do_parallel_spawn pool ress ?orphans ~parent:prm fn)
+          Some (do_parallel_spawn pool domain ress ?orphans ~parent:prm fn)
       | _, Promise.Syscall_spawn (ress, return) ->
           Some (do_syscall_spawn domain ress ~parent:prm ~return)
+      | _, Promise.Multiple_spawn lst ->
+          Some (do_multiple_spawns pool domain ~parent:prm lst)
       | _, Promise.Await prm' ->
           Some (do_await pool domain { go } ~parent:prm prm')
       | _, Promise.Suspend prm' -> Some (do_suspend domain ~parent:prm prm')

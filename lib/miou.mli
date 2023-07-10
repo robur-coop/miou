@@ -195,7 +195,41 @@ val call : ?orphans:'a orphans -> ?give:Ownership.t list -> (unit -> 'a) -> 'a t
     other promises. [miou] pre-allocates domains that are waiting to perform
     this kind of task. The user does {b not} choose the domain on which the task
     will be executed. [miou] {b randomly} chooses which of the domains will
-    perform the task. *)
+    perform the task. The task will {b never} run into the domain which launches the
+    promise. For instance:
+
+    {[
+      let () = Miou.run @@ fun () ->
+        let p = Miou.call @@ fun () ->
+          let q = Miou.call @@ fun () -> 42 in
+          await_exn q in
+        await_exn p
+    ]}
+
+    In this example, [q] will always run into another domain than [p]. However,
+    a subsequent call to {!Miou.call} does {b not} ensure that tasks will run
+    into different domains. For instance, this output is valid:
+
+    {[
+      # let prgm () = Format.printf "Run into %a\n%!"
+          Miou.Domain_id.pp (Domain_id.self ()) ;;
+      # let () = Miou.run @@ fun () ->
+          let p0 = Miou.call prgm in
+          let p1 = Miou.call prgm in
+          Miou.await_all [ p0; p1 ] ;;
+      Run into 1
+      Run into 1
+    ]}
+
+    If you want to run multiple tasks on different domains, you can use
+    {!val:parallel}. *)
+
+val parallel : (unit -> 'a) list -> 'a t list
+(** [parallel [ fun () -> ...; fun () -> ...]] assigns a task from the list to
+    each domain. If the list contains more tasks than domains, we raise an
+    exception. This ensures that several tasks run in parallel - unlike several
+    calls to {!val:Miou.call}, which only ensures that the task is run in a
+    different domain from the launcher. *)
 
 (* {2 Cancellation.} *)
 
