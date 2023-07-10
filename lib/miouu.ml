@@ -317,7 +317,9 @@ let events domain =
     done
   in
   let select () = select domain ic () in
-  { Miou.interrupt; select }
+  let t = { Miou.interrupt; select } in
+  let close _ = Unix.close ic; Unix.close oc in
+  Gc.finalise close t; t
 
 let run ?g ?domains fn = Miou.run ~events ?g ?domains fn
 
