@@ -15,4 +15,5 @@ run-test: [ "dune" "runtest" "-p" name "-j" jobs ]
 depends: [
   "ocaml"       {>= "5.0.0"}
   "dune"        {>= "2.8.0"}
+  "miou"        {= version}
 ]
