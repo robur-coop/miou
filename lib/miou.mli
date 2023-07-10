@@ -116,7 +116,7 @@ module Ownership : sig
 
   val check : t -> unit
   (** [check t] verifies that the given resource [t] is owned by the current
-      promise. *)
+      task. *)
 end
 
 (** {1 A promise for a better futur.}
@@ -271,7 +271,7 @@ type 'a state =
 
 val state : 'a t -> 'a state
 (** [state prm] returns the current state of the given promise {!type:t}
-      [prm]. *)
+    [prm]. *)
 
 (** {2 Syscalls.}
 
