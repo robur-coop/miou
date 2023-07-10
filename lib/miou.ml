@@ -463,17 +463,8 @@ module Run = struct
     List.iter go processes
 
   let rec run_local pool domain go =
-    let rec continue () =
-      match Rcdll.take domain.llist with
-      | process ->
-          step pool domain go process;
-          continue ()
-      | exception Rcdll.Empty -> Domain.cpu_relax ()
-    in
     match Rcdll.take domain.llist with
-    | process ->
-        step pool domain go process;
-        continue ()
+    | process -> step pool domain go process
     | exception Rcdll.Empty -> (
         match domain.events.select () with
         | [] -> Domain.cpu_relax ()
