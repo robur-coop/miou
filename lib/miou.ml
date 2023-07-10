@@ -377,7 +377,7 @@ let rec until_children_are_cancelled pool domain = function
    and the usage of this function is probably really specific to how we cancel
    a promise and its children. Currently, this function is called after all the
    children in the same domain have been cleaned - so we don't need to call
-   [Run.run_local] or discrimate promises into the same domain and promises
+   [Run.run_local] or discriminate promises into the same domain and promises
    into another domain. Only promises that run in another domain should
    therefore remain, hence the [await_any_domains]. *)
 
