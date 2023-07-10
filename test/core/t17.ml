@@ -1,3 +1,6 @@
+(* NOTE(dinosaure): This code is given as an example into our documentation.
+   We ensure that it terminates properly. *)
+
 let global = ref None
 
 let select () =

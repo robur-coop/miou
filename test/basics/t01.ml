@@ -1,3 +1,6 @@
+(* NOTE(dinosaure): This test show an other implementation of /boxes/ which does
+   not work when the cancellation is used. *)
+
 module Box = struct
   type 'a t = { value: 'a option Atomic.t; lock: Mutex.t * Condition.t }
 
@@ -20,7 +23,6 @@ module Box = struct
   let make () =
     { value= Atomic.make None; lock= (Mutex.create (), Condition.create ()) }
 end
-
 
 let prgm () =
   let box = Box.make () in

@@ -1,3 +1,4 @@
+(* NOTE(dinosaure): This test always fails with [No_domain_available]. *)
 
 let () =
   Miou.run ~domains:0 @@ fun () ->

@@ -1,3 +1,5 @@
+(* NOTE(dinosaure): We show up basically what is the behavior of [miou] with
+   several compositions of [call]/[call_cc] and [sleep]/[Unix.sleepf]. *)
 
 let prgm () =
   Miou.run @@ fun () ->

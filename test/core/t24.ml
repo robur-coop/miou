@@ -1,3 +1,5 @@
+(* NOTE(dinosaure): In this code, [p0] must wait [p1] even if it returns the
+   promise. This test always fail with [Still_has_children]. *)
 
 let () =
   Miou.run @@ fun () ->

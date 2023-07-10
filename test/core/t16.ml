@@ -1,3 +1,4 @@
+(* NOTE(dinosaure): we can await multiple times a task. *)
 
 let () =
   Miou.run @@ fun () ->

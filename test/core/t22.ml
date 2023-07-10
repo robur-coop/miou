@@ -1,3 +1,8 @@
+(* NOTE(dinosaure): this code is an **experimentation** with a /box/. The
+   implementation does not work! But it works in some situations that we show
+   up at the end of this code. It ensures a certain behavior of [miou]
+   regardless [Miou.call], [Miou.call_cc] and [Miou.suspend]. *)
+
 type box = Box : 'a option Atomic.t * 'a Miou.syscall -> box
 type t = (Miou.Id.t, box) Hashtbl.t
 

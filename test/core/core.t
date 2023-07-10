@@ -1,5 +1,8 @@
   $ ./t01.exe
-  3
+  World
+  Hello
+  Hello
+  World
   $ ./t02.exe
   $ ./t03.exe
   Fatal error: exception Miou.Still_has_children
@@ -43,3 +46,4 @@
   $ ./t24.exe
   Fatal error: exception Miou.Still_has_children
   [2]
+  $ ./t25.exe

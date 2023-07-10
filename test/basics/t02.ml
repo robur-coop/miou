@@ -1,3 +1,4 @@
+(* NOTE(dinosaure): This code show a basic usage of [Miouu.Cond.t]. *)
 
 let () =
   Miouu.run @@ fun () ->

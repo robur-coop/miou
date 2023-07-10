@@ -1,3 +1,5 @@
+(* NOTE(dinosaure): This example is our tutorial about sleepers. *)
+
 let sleepers = Hashtbl.create 0x100
 
 let sleep until =

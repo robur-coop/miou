@@ -1,3 +1,6 @@
+(* NOTE(dinosaure): This example is like [t08], we can not wait a task launch
+   by another domain. It show up that a transmission of a promise from a domain
+   to another is illegal. *)
 
 let () =
   Miou.run @@ fun () ->

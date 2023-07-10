@@ -1,3 +1,7 @@
+(* NOTE(dinosaure): This test shows slightly more precise behaviour in relation
+   to cancellation. It says that if a promise (even an almost-resolved one) is
+   cancelled (like [t08]), we make a state transition. However, if the user has
+   **already** had the result of this promise, we don't do it. *)
 
 let prgm () =
   Miou.run @@ fun () ->

@@ -1,3 +1,4 @@
+(* NOTE(dinosaure): We show up the basic [with_timeout] function. *)
 
 exception Timeout
 
@@ -7,6 +8,9 @@ let with_timeout s fn =
   Miou.await_first [ p0; p1 ]
 
 let () =
+  let t0 = Unix.gettimeofday () in
   match Miouu.run @@ fun () -> with_timeout 10. (Fun.const ()) with
-  | Ok () -> ()
+  | Ok () ->
+      let t1 = Unix.gettimeofday () in
+      assert (t1 -. t0 < 10.)
   | Error _ -> failwith "t23"

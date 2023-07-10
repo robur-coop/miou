@@ -1,3 +1,5 @@
+(* NOTE(dinosaure): This code is a simple producer/consumer - the test exists
+   also into the OCaml distribution. *)
 
 type 'a p = {
     buffer: 'a array
@@ -50,12 +52,16 @@ let () =
   Miouu.run ~domains:4 @@ fun () ->
   let t0 = make 20 0 and t1 = make 30 0 in
   let ok0 = ref false and ok1 = ref false in
-  let p0 = Miou.call @@ fun () -> produce t0 0 10000 in
-  let p1 = Miou.call @@ fun () -> produce t1 0 8000 in
-  let p2 = Miou.call @@ fun () -> ok0 := consume t0 0 10000 in
+  let prms =
+    Miou.parallel
+      [
+        (fun () -> produce t0 0 10000); (fun () -> produce t1 0 8000)
+      ; (fun () -> ok0 := consume t0 0 10000)
+      ]
+  in
   ok1 := consume t1 0 8000;
   let () =
-    Miou.await_all [ p0; p1; p2 ]
+    Miou.await_all prms
     |> List.iter (function Ok () -> () | Error exn -> raise exn)
   in
   if not (!ok0 && !ok1) then failwith "t25"

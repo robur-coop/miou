@@ -1,3 +1,6 @@
+(* NOTE(dinosaure): We show up that a cancellation, even for an almost-resolved
+   task terminates with [Miou.Cancelled]. [Miou.cancel] does a state transition
+   even if the task is resolved. We try 100 times to ensure this behavior. *)
 
 let prgm () =
   Miou.run @@ fun () ->
