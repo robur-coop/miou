@@ -15,6 +15,7 @@ module Queue : sig
   val make : unit -> 'a t
   val is_empty : 'a t -> bool
   val transfer : 'a t -> 'a t
+  val length : 'a t -> int
 end
 
 module Domain_id : sig
