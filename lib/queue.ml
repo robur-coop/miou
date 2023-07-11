@@ -52,9 +52,10 @@ let dequeue t =
     match Atomic.get p.next with
     | None -> raise Empty
     | Some next ->
-        if Atomic.compare_and_set t.head p next then
-          let[@warning "-8"] (Some node) = Atomic.get p.next in
-          node.value
+        if Atomic.compare_and_set t.head p next then (
+          let value = next.value in
+          next.value <- Obj.magic ();
+          value)
         else go ()
   in
   go ()
