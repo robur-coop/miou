@@ -7,7 +7,12 @@
    https://people.cs.pitt.edu/~jacklange/teaching/cs2510-f12/papers/implementing_lock_free.pdf *)
 
 type 'a t = { tail: 'a node Atomic.t; head: 'a node Atomic.t }
-and 'a node = { mutable value: 'a; next: 'a node option Atomic.t }
+
+and 'a node = {
+    mutable value: 'a
+  ; next: 'a node option Atomic.t
+  ; mutable count: int
+}
 
 (* enqueue(x):
      q <- new record
@@ -22,9 +27,10 @@ and 'a node = { mutable value: 'a; next: 'a node option Atomic.t }
      compare_and_swap tail p q
 *)
 let enqueue t value =
-  let q = { value; next= Atomic.make None } in
+  let q = { value; next= Atomic.make None; count= 0 } in
   let rec go () =
     let p = Atomic.get t.tail in
+    q.count <- p.count + 1;
     if Atomic.compare_and_set p.next None (Some q) then
       ignore (Atomic.compare_and_set t.tail p q)
     else
@@ -52,15 +58,22 @@ let dequeue t =
     match Atomic.get p.next with
     | None -> raise Empty
     | Some next ->
-        if Atomic.compare_and_set t.head p next then
-          let[@warning "-8"] (Some node) = Atomic.get p.next in
-          node.value
+        if Atomic.compare_and_set t.head p next then (
+          let value = next.value in
+          next.value <- Obj.magic ();
+          (* XXX(dinosaure): it is safe to set the value to [Obj.magic ()]
+             (or [NULL]) where this value will be never used then. It fixes a
+             memory leak on the queue - indeed, as long as [next] is used (it is
+             possible that [tail] still points to it), we keep [value] too, only
+             a subsequent function which goes through our queue is able to
+             physically delete [next]. *)
+          value)
         else go ()
   in
   go ()
 
 let make () =
-  let dummy = { value= Obj.magic (); next= Atomic.make None } in
+  let dummy = { value= Obj.magic (); next= Atomic.make None; count= 0 } in
   let t = { tail= Atomic.make dummy; head= Atomic.make dummy } in
   assert (Atomic.get t.head == Atomic.get t.tail);
   t
@@ -69,24 +82,46 @@ let is_empty t =
   let p = Atomic.get t.head in
   match Atomic.get p.next with None -> true | Some _ -> false
 
-let iter ~f t =
-  let rec go p =
-    match Atomic.get p.next with
-    | None -> ()
-    | Some next -> f next.value; go next
-  in
-  go (Atomic.get t.head)
+type 'a snapshot = 'a node * 'a node
+
+(* XXX(dinosaure): [snapshot] returns an **accurate** view of the given queue.
+   It merely points to two nodes ([head] and [tail]) in the queue at a point in
+   time. For the following operations, it is preferable to use a snapshot rather
+   than the queue directly - it can be modified in parallel by another domain.
+*)
+let rec snapshot t : 'a snapshot =
+  let head = Atomic.get t.head and tail = Atomic.get t.tail in
+  match Atomic.get tail.next with
+  | Some node ->
+      let _ = Atomic.compare_and_set t.tail tail node in
+      snapshot t
+  | None -> if Atomic.get t.head != head then snapshot t else (head, tail)
 
 let length t =
-  let v = Atomic.make 0 in
-  iter ~f:(fun _ -> Atomic.incr v) t;
-  Atomic.get v
+  let head, tail = snapshot t in
+  tail.count - head.count
 
-let drop ~f t =
-  let rec go () =
-    match dequeue t with v -> f v; go () | exception Empty -> ()
+let iter ~f t =
+  let head, tail = snapshot t in
+  let rec go prev =
+    if prev != tail then
+      match Atomic.get prev.next with
+      | None -> ()
+      | Some next -> f next.value; go next
   in
-  go ()
+  go head
+
+let rec drop ~f t =
+  let head, tail = snapshot t in
+  if Atomic.compare_and_set t.head head tail then
+    let rec go prev =
+      if prev != tail then
+        match Atomic.get prev.next with
+        | None -> ()
+        | Some next -> f next.value; go next
+    in
+    go head
+  else drop ~f t
 
 let to_list t =
   let res = ref [] in

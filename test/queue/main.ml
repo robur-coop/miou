@@ -44,4 +44,14 @@ let () =
   Queue.enqueue q 0;
   check (Queue.is_empty q = false)
 
+let () =
+  let q = Queue.make () in
+  for i = 0 to 100 do
+    Queue.enqueue q i
+  done;
+  for _ = 0 to 10 do
+    ignore (Queue.dequeue q)
+  done;
+  check (Queue.length q = 90)
+
 let () = print_endline " ok"
