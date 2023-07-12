@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>Ownership (miou.Miou.Ownership)</title><link rel="stylesheet" href="../../../odoc.support/odoc.css"/><meta charset="utf-8"/><meta name="generator" content="odoc 2.2.0"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><script src="../../../odoc.support/highlight.pack.js"></script><script>hljs.initHighlightingOnLoad();</script></head><body class="odoc"><nav class="odoc-nav"><a href="../index.html">Up</a> – <a href="../../index.html">miou</a> &#x00BB; <a href="../index.html">Miou</a> &#x00BB; Ownership</nav><header class="odoc-preamble"><h1>Module <code><span>Miou.Ownership</span></code></h1><p>A capitalism idea into our scheduler.</p><p><code>miou</code> offers a mechanism for protecting resources if a task finishes abnormally (with an exception). In such a situation, the <code>finally</code> function associated with the resource will be executed. An example can be applied to file-descriptors and associate <code>Unix.close</code> with them as a &quot;finaliser&quot;:</p><pre class="language-ocaml"><code>let fd = Unix.socket ... in
+let rs = Ownership.make ~finally:Unix.close fd in
+Ownership.own rs</code></pre></header><div class="odoc-content"><div class="odoc-spec"><div class="spec type anchored" id="type-t"><a href="#type-t" class="anchor"></a><code><span><span class="keyword">type</span> t</span></code></div><div class="spec-doc"><p>The type of ownerships.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-own"><a href="#val-own" class="anchor"></a><code><span><span class="keyword">val</span> own : <span>finally:<span>(<span><span class="type-var">'a</span> <span class="arrow">&#45;&gt;</span></span> unit)</span> <span class="arrow">&#45;&gt;</span></span> <span><span class="type-var">'a</span> <span class="arrow">&#45;&gt;</span></span> <a href="#type-t">t</a></span></code></div><div class="spec-doc"><p><code>own ~finally value</code> associates the value and this finaliser with the current promise. This way, if the current promise fails abnormally, the finally function will be called.</p><pre class="language-ocaml"><code># let show () = print_endline &quot;Resource released&quot;
+# Miou.(run @@ fun () -&gt;
+  let p = call_cc @@ fun () -&gt;
+    let _ = Ownership.own ~finally:show () in
+    failwith &quot;p&quot; in
+  await_exn p) ;;
+Resource released!
+Exception: Failure &quot;p&quot;.</code></pre></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-disown"><a href="#val-disown" class="anchor"></a><code><span><span class="keyword">val</span> disown : <span><a href="#type-t">t</a> <span class="arrow">&#45;&gt;</span></span> unit</span></code></div><div class="spec-doc"><p><code>disown t</code> informs <code>miou</code> that you have properly released the resource. If the current promise ends well and the user has not <code>disown</code> the resource, <code>miou</code> raises the exception: <code>Resource_leak</code>:</p><pre class="language-ocaml"><code># let show () = print_endline &quot;Resource released&quot;
+# Miou.(run @@ fun () -&gt;
+  let p = call_cc @@ fun () -&gt;
+    let _ = Ownership.own ~finally:show () in
+    () in
+  await_exn p) ;;
+Resource released!
+Exception: Miou.Resource_leak.</code></pre><p>Note that even in this situation, <code>miou</code> calls the finaliser.</p></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-transfer"><a href="#val-transfer" class="anchor"></a><code><span><span class="keyword">val</span> transfer : <span><a href="#type-t">t</a> <span class="arrow">&#45;&gt;</span></span> unit</span></code></div><div class="spec-doc"><p><code>transfer t</code> transfers the ownership to the parent. This can be interesting when the resource is locked into a small promise in conjunction with others and the parent will make real use of it such as:</p><pre class="language-ocaml"><code>Miou.await_first
+  [ Miou.call_cc @@ fun () -&gt;
+    let socket = tcpv4 () in
+    Miouu.connect socket addr;
+    Ownership.transmit socket;
+    socket
+  ; Miou.call_cc @@ fun () -&gt; sleep 10.; raise Timeout ]</code></pre></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-check"><a href="#val-check" class="anchor"></a><code><span><span class="keyword">val</span> check : <span><a href="#type-t">t</a> <span class="arrow">&#45;&gt;</span></span> unit</span></code></div><div class="spec-doc"><p><code>check t</code> verifies that the given resource <code>t</code> is owned by the current task.</p></div></div></div></body></html>
