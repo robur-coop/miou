@@ -1,9 +1,12 @@
+open Miou
+
 let sleepers = Hashtbl.create 0x100
 
 let sleep until =
-  let promise = Miou.make (Fun.const ()) in
+  let return () = () in
+  let promise = Miou.make return in
   Hashtbl.add sleepers (Miou.uid promise) (promise, until);
-  Miou.suspend promise
+  match Miou.suspend promise with Ok () -> () | Error exn -> raise exn
 
 let select () =
   let min =
@@ -20,18 +23,19 @@ let select () =
   | Some (uid, prm, until) ->
       Hashtbl.remove sleepers uid;
       Hashtbl.filter_map_inplace
-        (fun _ (prm, until') -> Some (prm, Float.min 0. (until' -. until)))
+        (fun _ (prm, until') -> Some (prm, Float.max 0. (until' -. until)))
         sleepers;
       Unix.sleepf until;
       [ Miou.task prm (Fun.const ()) ]
 
-let events _domain = { Miou.select; interrupt= ignore }
+let events _ = { select; interrupt= ignore }
 
 let program () =
   Miou.run ~events @@ fun () ->
   let a = Miou.call_cc (fun () -> sleep 1.) in
   let b = Miou.call_cc (fun () -> sleep 2.) in
-  Miou.await_all [ a; b ] |> ignore
+  Miou.await_all [ a; b ]
+  |> List.iter @@ function Ok () -> () | Error exn -> raise exn
 
 let () =
   let t0 = Unix.gettimeofday () in
