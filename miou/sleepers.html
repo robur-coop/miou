@@ -1,10 +1,12 @@
 <!DOCTYPE html>
-<html xmlns="http://www.w3.org/1999/xhtml"><head><title>sleepers (miou.sleepers)</title><link rel="stylesheet" href="../odoc.support/odoc.css"/><meta charset="utf-8"/><meta name="generator" content="odoc 2.2.0"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><script src="../odoc.support/highlight.pack.js"></script><script>hljs.initHighlightingOnLoad();</script></head><body class="odoc"><nav class="odoc-nav"><a href="index.html">Up</a> – <a href="index.html">miou</a> &#x00BB; sleepers</nav><header class="odoc-preamble"><h2 id="sleepers:-how-to-inject-syscalls-into-miou?"><a href="#sleepers:-how-to-inject-syscalls-into-miou?" class="anchor"></a>Sleepers: how to inject syscalls into <code>miou</code>?</h2><p>This tutorial shows how to inject a new syscall to <code>miou</code> and extend the API of it with <i>blocking</i> operations. For the example, we're going to implement the sleepers. <code>Unix.sleepf</code> is a blocking operation. The fundamental problem with <code>miou</code> is that it performs operations in the background (scheduling). So using a blocking operation with <code>miou</code> prevents it from managing other tasks concurrently (manage tasks entered with <a href="Miou/index.html#val-call_cc"><code>Miou.call_cc</code></a>) or in parallel (wait for parallel process tasks introduced by <a href="Miou/index.html#val-call"><code>Miou.call</code></a>).</p><p>As stated in the documentation, and this is a fundamental rule: &gt; you should never give <code>miou</code> blocking tasks (such as <code>Unix.sleepf</code>)</p><p>That said, how do you manage blocking tasks? <code>miou</code> offers an API that allows you to extend its API with such tasks. The idea is to inform <code>miou</code> of a promise that is <b>not</b> associated with a task (because the latter would be blocking) and to notify it of the task that we would like to do as soon as we are <b>sure</b> that it is a non-blocking task.</p><p>This notification is possible because <code>miou</code> lets you inject such a function which will notify it. This is the <code>events</code> function expected as a parameter to the <a href="Miou/index.html#val-run"><code>Miou.run</code></a> function.</p></header><nav class="odoc-toc"><ul><li><a href="#what-we-want-to-do?">What we want to do?</a></li><li><a href="#syscalls.">Syscalls.</a></li><li><a href="#usage.">Usage.</a></li><li><a href="#the-reason-behind-this-api.">The reason behind this API.</a></li><li><a href="#events-&amp;-domains.">Events &amp; domains.</a><ul><li><a href="#local-events-at-domains-and-local-storage.">Local events at domains and local storage.</a></li><li><a href="#cancellation-&amp;-interruption.">Cancellation &amp; interruption.</a></li></ul></li></ul></nav><div class="odoc-content"><h3 id="what-we-want-to-do?"><a href="#what-we-want-to-do?" class="anchor"></a>What we want to do?</h3><p>So let's get down to business. The aim of this tutorial is to enable you to write this code:</p><pre class="language-ocaml"><code>open Miou
+<html xmlns="http://www.w3.org/1999/xhtml"><head><title>sleepers (miou.sleepers)</title><link rel="stylesheet" href="../odoc.support/odoc.css"/><meta charset="utf-8"/><meta name="generator" content="odoc 2.2.0"/><meta name="viewport" content="width=device-width,initial-scale=1.0"/><script src="../odoc.support/highlight.pack.js"></script><script>hljs.initHighlightingOnLoad();</script></head><body class="odoc"><nav class="odoc-nav"><a href="index.html">Up</a> – <a href="index.html">miou</a> &#x00BB; sleepers</nav><header class="odoc-preamble"><h2 id="sleepers:-how-to-inject-syscalls-into-miou?"><a href="#sleepers:-how-to-inject-syscalls-into-miou?" class="anchor"></a>Sleepers: how to inject syscalls into <code>miou</code>?</h2><p>This tutorial shows how to inject a new syscall to <code>miou</code> and extend the API of it with <i>blocking</i> operations. For the example, we're going to implement the sleepers. <code>Unix.sleepf</code> is a blocking operation. The fundamental problem with <code>miou</code> is that it performs operations in the background (scheduling). So using a blocking operation with <code>miou</code> prevents it from managing other tasks concurrently (manage tasks entered with <a href="Miou/index.html#val-call_cc"><code>Miou.call_cc</code></a>) or in parallel (wait for parallel process tasks introduced by <a href="Miou/index.html#val-call"><code>Miou.call</code></a>).</p><p>As stated in the documentation, and this is a fundamental rule: &gt; you should never give <code>miou</code> blocking tasks (such as <code>Unix.sleepf</code>)</p><p>That said, how do you manage blocking tasks? <code>miou</code> offers an API that allows you to extend its API with such tasks. The idea is to inform <code>miou</code> of a promise that is <b>not</b> associated with a task (because the latter would be blocking) and to notify it of the task that we would like to do as soon as we are <b>sure</b> that it is a non-blocking task.</p><p>This notification is possible because <code>miou</code> lets you inject such a function which will notify it. This is the <code>events</code> function expected as a parameter to the <a href="Miou/index.html#val-run"><code>Miou.run</code></a> function.</p></header><nav class="odoc-toc"><ul><li><a href="#what-we-want-to-do?">What we want to do?</a></li><li><a href="#syscalls.">Syscalls.</a></li><li><a href="#usage.">Usage.</a></li><li><a href="#the-reason-behind-this-api.">The reason behind this API.</a></li><li><a href="#events-&amp;-domains.">Events &amp; domains.</a><ul><li><a href="#local-events-at-domains-and-local-storage.">Local events at domains and local storage.</a></li><li><a href="#cancellation-&amp;-interruption.">Cancellation &amp; interruption.</a></li></ul></li><li><a href="#conclusion.">Conclusion.</a></li></ul></nav><div class="odoc-content"><h3 id="what-we-want-to-do?"><a href="#what-we-want-to-do?" class="anchor"></a>What we want to do?</h3><p>So let's get down to business. The aim of this tutorial is to enable you to write this code:</p><pre class="language-ocaml"><code>open Miou
 
-let program () = Miou.run @@ fun () -&gt;
+let program () =
+  Miou.run @@ fun () -&gt;
   let a = Miou.call_cc (fun () -&gt; sleep 1.) in
   let b = Miou.call_cc (fun () -&gt; sleep 2.) in
-  Miou.await_all_ign [ a; b ]
+  Miou.await_all [ a; b ]
+  |&gt; List.iter @@ function Ok () -&gt; () | Error exn -&gt; raise exn
 
 let () =
   let t0 = Unix.gettimeofday () in
@@ -18,30 +20,31 @@ let sleep until =
   let return () = () in
   let promise = Miou.make return in
   Hashtbl.add sleepers (Miou.uid promise) (promise, until);
-  match Miou.suspend promise with
-  | Ok () -&gt; ()
-  | Error exn -&gt; raise exn</code></pre><p>As you can see, the implementation of a 'syscall' is relatively simple, but it is always associated with the implementation or extension of another function: the <code>events</code> function. The <code>return</code> value is the function that is called as soon as the promise <b>is</b> resolved. In our case, we would like to return <code>() : unit</code> but we could very well return the value of a reference that the task of resolving our promise will modify correctly.</p><p><code>miou</code> is quite stupid, trying to carry out all the tasks we give it in the hope that they will solve our promises. And it does this as long as it has at least one unresolved promise. In our case, the promise we've just created will never be resolved by any task. To clarify <code>miou</code>'s behaviour in this situation, you can run this code:</p><pre class="language-ocaml"><code>let dummy _ =
+  match Miou.suspend promise with Ok () -&gt; () | Error exn -&gt; raise exn</code></pre><p>As you can see, the implementation of a 'syscall' is relatively simple, but it is always associated with the implementation or extension of another function: the <code>events</code> function. The <code>return</code> value is the function that is called as soon as the promise <b>is</b> resolved. In our case, we would like to return <code>() : unit</code> but we could very well return the value of a reference that the task of resolving our promise will modify correctly.</p><p><code>miou</code> is quite stupid, trying to carry out all the tasks we give it in the hope that they will solve our promises. And it does this as long as it has at least one unresolved promise. In our case, the promise we've just created will never be resolved by any task. To clarify <code>miou</code>'s behaviour in this situation, you can run this code:</p><pre class="language-ocaml"><code>let dummy _ =
   { select= Fun.const []
   ; interrupt= ignore }
 
 let () = Miou.(run ~events:dummy @@ fun () -&gt; sleep 1.; ())</code></pre><p>This code will never end simply because a promise is always waiting to be solved.</p><p>But as you can see, I've specified an <code>events</code> function here which always returns an empty list. In truth, if <code>miou</code> has no more tasks to do and there are still promises, it will try one last thing: execute our <code>events</code> function. This can return a new task (always non-blocking) that could resolve a given promise. And it's here that we'll be able to inject the tasks that will resolve our sleepers.</p><p>Contrary to what we have just said, this <code>events</code> function (and only this one) <b>can block</b>! And, in reality, this is not a problem as all the tasks have been executed. We can therefore be in a <i>busy waiting</i> state for the next event to unblock our execution flow.</p><p>In our case, it's a case of taking the <b>smallest</b> sleeper, waiting and then returning a task that resolves that same sleeper. We also need to update the other sleepers because we're going to consume time.</p><pre class="language-ocaml"><code>let select () =
-  let min = Hashtbl.fold (fun uid (prm, until) -&gt; function
-    | Some (_uid', _prm', until') when until &lt; until' -&gt;
-        Some (uid, prm, until)
-    | Some _ as acc -&gt; acc
-    | None -&gt; Some (uid, prm, until) sleepers None in
+  let min =
+    Hashtbl.fold
+      (fun uid (prm, until) -&gt; function
+        | Some (_uid', _prm', until') when until &lt; until' -&gt;
+            Some (uid, prm, until)
+        | Some _ as acc -&gt; acc
+        | None -&gt; Some (uid, prm, until))
+      sleepers None
+  in
   match min with
   | None -&gt; []
   | Some (uid, prm, until) -&gt;
-    Hashtbl.remove sleepers uid;
-    Hashtbl.filter_map_inplace
-      (fun _ (prm, until') -&gt; Some (prm, Float.max 0. (until' -. until)))
-      sleepers;
-    Unix.sleepf until;
-    [ Miou.syscall prm (Fun.const ()) ]
+      Hashtbl.remove sleepers uid;
+      Hashtbl.filter_map_inplace
+        (fun _ (prm, until') -&gt; Some (prm, Float.max 0. (until' -. until)))
+        sleepers;
+      Unix.sleepf until;
+      [ Miou.task prm (Fun.const ()) ]
 
-let events =
-  { select; interrupt= ignore }</code></pre><h3 id="usage."><a href="#usage." class="anchor"></a>Usage.</h3><p>Now that we have our <code>events</code> function and our <i>syscall</i> <code>sleep</code>, we can use them:</p><pre class="language-ocaml"><code>let prgm () =
+let events _ = { select; interrupt= ignore }</code></pre><h3 id="usage."><a href="#usage." class="anchor"></a>Usage.</h3><p>Now that we have our <code>events</code> function and our <i>syscall</i> <code>sleep</code>, we can use them:</p><pre class="language-ocaml"><code>let prgm () =
   Miou.run ~events @@ fun () -&gt;
   let a = Miou.call_cc (fun () -&gt; sleep 1.) in
   let b = Miou.call_cc (fun () -&gt; sleep 2.) in
@@ -70,4 +73,57 @@ let () =
   let t0 = Unix.gettimeofday () in
   prgm () ;
   let t1 = Unix.gettimeofday ()  in
-  assert (t1 -. t0 &lt; 10.)</code></pre><p>In this example, a domain is asked to <code>sleep</code> for 10 seconds. But, at the same time, we want to <a href="Miou/index.html#val-cancel"><code>Miou.cancel</code></a> this task. At the moment, the domain will wait 10 seconds and then be &quot;cancelled&quot;. This is where the interrupt mechanism comes in: <code>miou</code> will interrupt the domain to tell it that something in its tasks has changed (cancellation). The domain will then recalculate these tasks and re-observe their states before finally realising that the task it was doing has just been cancelled.</p><p>The problem is that this interrupt must also interrupt our <code>Unix.sleepf</code> on which our domain is based. It's here, in our <code>events</code> function, that we're going to replace <code>Unix.sleepf</code> (which can't be interrupted) with <code>Unix.select</code>!</p></div></body></html>
+  assert (t1 -. t0 &lt; 10.)</code></pre><p>In this example, a domain is asked to <code>sleep</code> for 10 seconds. But, at the same time, we want to <a href="Miou/index.html#val-cancel"><code>Miou.cancel</code></a> this task. At the moment, the domain will wait 10 seconds and then be &quot;cancelled&quot;. This is where the interrupt mechanism comes in: <code>miou</code> will interrupt the domain to tell it that something in its tasks has changed (cancellation). The domain will then recalculate these tasks and re-observe their states before finally realising that the task it was doing has just been cancelled.</p><p>The problem is that this interrupt must also interrupt our <code>Unix.sleepf</code> on which our domain is based. It's here, in our <code>events</code> function, that we're going to replace <code>Unix.sleepf</code> (which can't be interrupted) with <code>Unix.select</code>!</p><p>In fact, <code>Unix.select</code> can both wait (like <code>Unix.sleepf</code>) and interrupt itself if an event occurs on one of its file-descriptors. We are going to use the latter mechanism to implement an <i>interrupt</i> mechanism. To do this, we need to create a pipe (<code>Unix.pipe</code>). The <code>interrupt</code> function will be called by <code>miou</code> whenever domains need to be interrupted (as in the case of cancellation). This interruption consists of writing to one side of the pipe while <code>Unix.select</code> observes the other side.</p><p>We also need to handle only promises that are pending. A cancellation changes the state of our promise and we need to &quot;clean up&quot; the promises that have been cancelled by <code>miou</code> in our sleepers.</p><p>Finally, we will have to manage 2 cases, the one where we receive an interrupt and the one where we have just consumed the minimum amount of time between all our sleepers. In the first case, we'll need to consume the byte sent to us by <code>miou</code>, while the second case is similar to what we did before.</p><pre class="language-ocaml"><code>let rec consume_interrupt ic =
+  if Unix.read ic (Bytes.create 1) 0 1 = 0 then consume_interrupt ic
+
+let update sleepers n =
+  Hashtbl.filter_map_inplace
+    (fun _ (prm, until) -&gt;
+      let until' = Float.max 0. (until -. n) in
+      Some (prm, until'))
+    sleepers
+
+let select interrupt () =
+  let sleepers = sleepers () in
+  (* clean-up our sleepers. *)
+  Hashtbl.filter_map_inplace
+    (fun _ (prm, until) -&gt;
+      if Miou.is_pending prm then Some (prm, until) else None)
+    sleepers;
+  let min =
+    Hashtbl.fold
+      (fun uid (prm, until) -&gt; function
+        | Some (_uid', _prm', until') when until &lt; until' -&gt;
+            Some (uid, prm, until)
+        | Some _ as acc -&gt; acc
+        | None -&gt; Some (uid, prm, until))
+      sleepers None
+  in
+  let ts =
+    Option.map (fun (_, _, until) -&gt; until) min |&gt; function
+    | Some ts -&gt; ts
+    | None -&gt; 0. (* don't wait *) in
+  let t0 = Unix.gettimeofday ()
+  (* we must record how long we [select ()] to update then our [sleepers]. *)
+  match Unix.select [ interrupt ] [] [] ts with
+  | [], _, _ -&gt; (
+    (* no interruption *)
+    let t1 = Unix.gettimeofday () in
+    update sleepers (t1 -. t0);
+    match min with
+    | Some (uid, prm, _) -&gt;
+      Hashtbl.remove sleepers uid;
+      [ Miou.task prm (Fun.const ()) ]
+    | None -&gt; [])
+  | _ -&gt;
+    (* we got an interruption signal *)
+    let t1 = Unix.gettimeofday () in
+    consume_interrupt interrupt;
+    update sleepers (t1 -. t0);
+    []
+
+let events _ =
+  let ic, oc = Unix.pipe ~cloexec:true () in
+  let rec interrupt () =
+    if Unix.write oc (Bytes.make 1 '\000') 0 1 = 0 then interrupt () in
+  { Miou.select= select ic; interrupt }</code></pre><p>And there you have it, if you run our example code with cancellation, you can see the interrupt mechanism and the fact that one of our promises is no longer waiting to be resolved (since it has been cancelled by <code>miou</code>). And our program finishes after 1 second.</p><p>This code shows the basic architecture of a real scheduler. We centralise everything around the <code>select</code> (which can become <code>poll</code> or something else). Quite a few issues have not been mentioned here (such as signal management, system interruption, or how to properly close our pipes). Above all, this means that this code is just an example! It does, however, give a general idea of how <code>miouu</code> (<code>miou</code>'s Unix extension) works and how you can extend <code>miou</code> for more specific applications.</p><h3 id="conclusion."><a href="#conclusion." class="anchor"></a>Conclusion.</h3><p>The objective of such composability lies in our experience with the use of several systems, up to the most exotic (such as unikernels), where the ambition to centralise all the subtleties of these systems in a 'portable' implementation ultimately remains a vain ambition.</p><p>We can, and do, acknowledge the differences between systems, but also acknowledge the differences in the way in which the events of these systems are managed. Indeed, there may be alternatives (sometimes more effective) for managing events that may be in opposition to a more traditional vision (such as the use of <code>select</code>).</p><p>Finally, such an ambition requires quite a lot of work, which we can't commit to in the (very) long term given the resources we have. We prefer to leave room for future contributors and users who will surely have more time and more skills in this area.</p><p>At the very least, we hope that this little tutorial has taught you a little more about OCaml, Miou and schedulers. Who knows, you might be able to make your own!</p></div></body></html>
