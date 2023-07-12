@@ -113,20 +113,21 @@ let iter ~f t =
 
 let rec drop ~f t =
   let head, tail = snapshot t in
-  if Atomic.compare_and_set t.head head tail then
+  if Atomic.compare_and_set t.head head tail then (
     let rec go prev =
       if prev != tail then
         match Atomic.get prev.next with
         | None -> ()
         | Some next -> f next.value; go next
     in
-    go head
+    go head;
+    tail.value <- Obj.magic ())
   else drop ~f t
 
 let to_list t =
   let res = ref [] in
   let f v = res := v :: !res in
-  iter ~f t; !res
+  iter ~f t; List.rev !res
 
 let transfer t =
   let q = make () in

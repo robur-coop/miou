@@ -11,11 +11,28 @@ module Queue : sig
   exception Empty
 
   val enqueue : 'a t -> 'a -> unit
+  (** [enqueue t x] adds the element [x] at the end of the queue [t]. *)
+
   val dequeue : 'a t -> 'a
+  (** [dequeue t] removes and returns the first element in the queue [t],
+      or raise {!exception:Empty} if the queue is empty. *)
+
   val make : unit -> 'a t
+  (** [make ()] returns a new queue, initially empty. *)
+
   val is_empty : 'a t -> bool
+  (** [is_empty] returns [true] if the given queue is empty, it returns [false]
+      otherwise. *)
+
   val transfer : 'a t -> 'a t
+  (** [transfer q] returns a new queue which contains all of [q]'s elements,
+      then clears [q]. *)
+
   val length : 'a t -> int
+  (** Return the number of elements in a queue. *)
+
+  val to_list : 'a t -> 'a list
+  (** Return a list representation of the given queue. *)
 end
 
 module Domain_id : sig
