@@ -117,6 +117,31 @@ let () = Miou.run @@ fun () ->
 This code shows that if it is not possible to `ignore` the result of a task, it
 is still possible to `cancel` it.
 
+#### Randomised tasks
+
+Tasks are taken randomly. That is to say that this code could return 1 as 2.
+```ocaml
+let prgm () =
+  Miou.run @@ fun () ->
+  let a = Miou.call_cc (Fun.const 1) in
+  let b = Miou.call_cc (Fun.const 2) in
+  Miou.await_first [ a; b ]
+
+let rec until_its n =
+  match prgm () with
+  | Ok n' when n = n' -> ()
+  | _ -> untils_its n
+
+let () =
+  until_its 1;
+  until_its 2
+```
+
+This code shows that it is possible for our program to return 1 or 2. The reason
+why we decided to randomly select the promises allows:
+1) extend the coverage of your code
+2) be less sensitive to predictions that could help an attacker
+
 <hr>
 
 <tag id="fn1">**1**</tag>: This arbitrary consideration proves that the answer
@@ -182,4 +207,5 @@ of its users), welcome!
 
 [repository]: https://git.robur.coop/robur/miou
 [github]: https://github.com/roburio/miou
-[documentation]: https://perdu.com/
+[documentation]: https://roburio.github.io/miou/
+[sleepers]: https://roburio.github.io/miou/miou/sleepers.html
