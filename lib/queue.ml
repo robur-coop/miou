@@ -127,7 +127,7 @@ let rec drop ~f t =
 let to_list t =
   let res = ref [] in
   let f v = res := v :: !res in
-  iter ~f t; !res
+  iter ~f t; List.rev !res
 
 let transfer t =
   let q = make () in
