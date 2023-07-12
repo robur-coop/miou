@@ -46,12 +46,32 @@ let () =
 
 let () =
   let q = Queue.make () in
-  for i = 0 to 100 do
+  for i = 1 to 100 do
     Queue.enqueue q i
   done;
-  for _ = 0 to 10 do
+  for _ = 1 to 10 do
     ignore (Queue.dequeue q)
   done;
   check (Queue.length q = 90)
+
+let () =
+  let p = Queue.make () in
+  for i = 1 to 100 do
+    Queue.enqueue p i
+  done;
+  let q = Queue.transfer p in
+  (match Queue.dequeue p with
+  | _ -> failwith "Queue.transfer / Queue.dequeue"
+  | exception Queue.Empty -> check true);
+  check (Queue.length p = 0);
+  check (Queue.length q = 100)
+
+let () =
+  let q = Queue.make () in
+  for i = 0 to 9 do
+    Queue.enqueue q i
+  done;
+  let lst = Queue.to_list q in
+  List.iteri (fun a b -> check (a = b)) lst
 
 let () = print_endline " ok"
