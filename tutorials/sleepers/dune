@@ -3,5 +3,11 @@
  (mld_files sleepers))
 
 (executable
- (name main)
+ (name t02)
+ (modules t02)
+ (libraries miou unix))
+
+(executable
+ (name t03)
+ (modules t03)
  (libraries miou unix))
