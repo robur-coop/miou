@@ -30,9 +30,9 @@ let enqueue t value =
   let q = { value; next= Atomic.make None; count= 0 } in
   let rec go () =
     let p = Atomic.get t.tail in
-    if Atomic.compare_and_set p.next None (Some q) then (
-      q.count <- p.count + 1;
-      ignore (Atomic.compare_and_set t.tail p q))
+    q.count <- p.count + 1;
+    if Atomic.compare_and_set p.next None (Some q) then
+      ignore (Atomic.compare_and_set t.tail p q)
     else
       (* XXX(dinosaure): it's safe because our previous [compare_and_set] proved
          that [p.next != None]. *)
