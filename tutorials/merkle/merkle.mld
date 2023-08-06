@@ -1,0 +1,316 @@
+{1 Merkle tree and parallelism.}
+
+The purpose of this short tutorial is to introduce you to some of the subtleties
+you need to know about [miou] and parallelism in relation to "basic" algorithms.
+We're going to try and parallelize the calculation of a hash of a folder, its
+sub-folders and its files: a sort of Git-style Merkle-tree.
+
+First of all, before you start coding, you need to be clear about one thing: not
+everything can be parallelized! Parallelization requires what we call
+{i synchronisation mechanisms}. These mechanisms can be more or less cumbersome
+because they have to adapt to a multitude of situations of varying complexity
+when it comes to calculating and sharing information between processors. In this
+respect, there are tasks that would be far too complex to parallelize and whose
+final gain would surely be disappointing.
+
+Parallelization essentially consists of finding a point in your code where
+launching the task in parallel and obtaining its result would not be so costly
+compared to what the task does. In other words, if the synchronisation time
+required remains marginal compared to what the task does, we can imagine that
+running the task in parallel could save us some time.
+
+Parallelization is not synonymous with performance either. In fact, it can be
+useful to parallelize tasks in order to separate them conceptually as well. For
+example, parallelizing a task when a connection is received is not really
+intended to make the server faster - but rather to separate the logic of the
+server from that of managing a client.
+
+Parallelization is therefore not an option:
+1) systematic
+2) not just for performance reasons
+
+{2 The pool of domains.}
+
+Miou has a very basic design as far as parallelization is concerned: it will
+allocate several domains (depending on your number of cores) and put them on
+standby for tasks. So, a call to Miou.call corresponds to sending a task to
+these domains. Finally, one of these domains will take charge of the task and
+run it in parallel with dom0, which runs your main code.
+
+This is called a domain pool. It's a fairly basic design that has the advantage
+of taking care of domain allocation and management (as well as synchronization)
+while allowing the user to run a task in parallel.
+
+This also highlights a fairly simple pattern in parallel programming: fork &
+join.
+
+{[
+  let tasks = List.map (fun fn -> Miou.call fn) tasks in (* fork *)
+  Miou.await_all tasks (* and join *)
+]}
+
+This pattern is still the simplest: launch tasks in parallel and wait for the
+results of all these tasks. Here, our synchronisation mechanism corresponds to
+{!val:Miou.await_all}, and using such a pattern with Miou is quite free.
+
+You can imagine several other patterns, but limiting yourself to this one is
+still good practice, as the others involve more complex synchronisation
+mechanisms.
+
+{2 A Merkle-tree.}
+
+Our objective is quite simple:
+- obtain the hash of a file
+- obtain the hash of a folder which corresponds to the composition of the hashes
+  of the sub-folders and files in that folder
+
+Let's start by obtaining the hash of a file:
+{[
+module Hash = Digestif.SHA1
+
+let hash_of_blob filename =
+  let ic = open_in filename in
+  let ln = in_channel_length ic in
+  let rec go buf ctx =
+    match input ic buf 0 (Bytes.length buf) with
+    | 0 | (exception End_of_file) -> Hash.get ctx
+    | len ->
+        let ctx = Hash.feed_bytes ctx buf ~len in
+        go buf ctx
+  in
+  let ctx = Hash.empty in
+  let str = Fmt.str "blob %d\000" ln in
+  let ctx = Hash.feed_string ctx str in
+  let res = go (Bytes.create 0x1000) ctx in
+  close_in ic; res
+]}
+
+This code basically calculates the hash of a file "à la Git" and returns the
+result. The calculation for a directory is a little more complex, and consists
+of using {!val:Sys.readdir}, sorting the result and calculating the hash for all
+the items in the directory, then serialising these hashes in a certain form and
+calculating the hash of this serialisation:
+
+{[
+let ( / ) = Filename.concat
+
+let rec hash_of_tree filename =
+  let entries = Sys.readdir filename in
+  let entries =
+    List.map
+      (fun v ->
+        let filename = filename / v in
+        if Sys.is_directory filename then (`Dir, filename)
+        else (`Normal, filename))
+      (List.sort String.compare (Array.to_list entries))
+      (* sort and recognize if it's a file or a directory. *)
+  in
+  hash_of_entries entries
+
+and hash_of_entries entries =
+  let entries =
+    (* compute the hash of all items *)
+    List.map
+      (function
+        | `Dir, filename ->
+            let name = Filename.basename filename in
+            let hash = hash_of_tree filename in
+            Fmt.str "40000 %s\000%s" name (Hash.to_raw_string hash)
+        | `Normal, filename ->
+            let name = Filename.basename filename in
+            let hash = hash_of_blob filename in
+            Fmt.str "100644 %s\000%s" name (Hash.to_raw_string hash))
+      entries
+  in
+  let ctx = Hash.empty in
+  let len = List.fold_left (fun acc str -> acc + String.length str) 0 entries in
+  (* serialisation *)
+  let str = Fmt.str "tree %d\000" len in
+  let ctx = Hash.feed_string ctx str in
+  let ctx =
+    List.fold_left (fun ctx str -> Hash.feed_string ctx str) ctx entries
+  in
+  Hash.get ctx
+]}
+
+{3 Let's run!}
+
+Finally, we just need a final function to handle the user's argument, such as:
+
+{[
+let () =
+  match Sys.argv with
+  | [| _; filename |] when Sys.file_exists filename ->
+      if Sys.is_directory filename then
+        let hash = hash_of_tree filename in
+        Format.printf "%a\n%!" Hash.pp hash
+      else
+        let hash = hash_of_blob filename in
+        Format.printf "%a\n%!" Hash.pp hash
+  | [| _; filename |] ->
+      Format.eprintf "%s: %s not found\n%!" Sys.argv.(0) filename
+  | _ -> Format.eprintf "%s <filename>\n%!" Sys.argv.(0)
+]}
+
+We can compile the program with:
+{[
+$ ocamlfind opt -linkpkg -package fmt,digestif,digestif.c main.ml
+$ ./a.out $PWD
+aa146b5524a5c7ed221efda5382beeabcbc58d54
+]}
+
+{2 Parallelisation.}
+
+If you followed our explanation of patterns for parallel programming, you can
+already see where we might use {!val:Miou.call} rather than sequentially
+executing the code. We're talking, of course, about the [List.map] in our
+[hash_of_entries] function. We could return promises ([fork]) rather than the
+result as such for each item. Finally, we could use {!val:Miou.await_all}
+([join]) as our synchronisation point. So let's make the change accordingly:
+
+{[
+and hash_of_entries entries =
+  let entries =
+    List.rev_map
+      (function
+        | `Dir, filename ->
+            Miou.call @@ fun () -> (* Add a [call] here! *)
+            let name = Filename.basename filename in
+            let hash = hash_of_tree filename in
+            Fmt.str "40000 %s\000%s" name (Hash.to_raw_string hash)
+        | `Normal, filename ->
+            Miou.call @@ fun () -> (* Add a [call] here! *)
+            let name = Filename.basename filename in
+            let hash = hash_of_blob filename in
+            Fmt.str "100644 %s\000%s" name (Hash.to_raw_string hash))
+      entries
+  in
+  let entries =
+    if [] = entries then []
+    else
+      List.rev_map
+        (function Ok str -> str | Error exn -> raise exn)
+        (Miou.await_all entries)
+  in
+  let ctx = Hash.empty in
+  let len = List.fold_left (fun acc str -> acc + String.length str) 0 entries in
+  let str = Fmt.str "tree %d\000" len in
+  let ctx = Hash.feed_string ctx str in
+  let ctx =
+    List.fold_left (fun ctx str -> Hash.feed_string ctx str) ctx entries
+  in
+  Hash.get ctx
+]}
+
+Note the double use of {!val:List.rev_map} instead of {!val:List.map}, wich
+provides a {i tail-rec} function. Finally, {!val:Miou.await_all} necessarily
+expects a non-empty list - otherwise it raises an exception. However, this code
+won't work, it will even wait indefinitely.
+
+{3 Starvation problem.}
+
+The reason this code doesn't work is the recursion and the limited number of
+domains waiting. Miou allocates a certain number of domains (your number of
+cores - 1). Let's imagine that it only allocates 3 domains (for 4 cores). If we
+have a folder structure such that ["a/b/c/d"] exists, domain 1 will attempt to
+calculte ["a"], domain 2 will calculate ["b"] and domain 3 will calculate ["c"].
+However, to obtain the result of ["c"], we need the result of ["d"] and we have
+no more domains available! We've just run into the starvation problem.
+
+Miou only has limited number of domains (which can be increased by
+{!val:Miou.run} via the [domains] argument - but we don't recommend that) and we
+need to take this into account and manage this resource sparingly.
+
+There are methods that avoid the starvation problem, but they require {i task
+prioritisation} - however, this method would be contrary to one of our precepts
+(linked to security): randomly choose which task we want to run.
+
+{2 Parallelism & concurrency.}
+
+So how do we get around this? Well, the real question is: what's the point in
+parallelizing? If we deduce the execution of our code, it's easy to see that
+[hash_of_blob] is surely the longest function, as it may have to calculate the
+hash for large files. [hash_of_entries] remains fairly basic; we could have 1
+million entries, but it would still be smalled than a 1 GB file. In other words,
+we should only parallelize the calculation of a file and only have one
+{!val:Miou.call}, when the entry is a file ([`Normal]).
+
+Another problem persists, this time with the OCaml type system. If we delete the
+{!val:Miou.call} when we have a directory, we have a heterogeneous list (which
+contains both the result for directories and promises for files). We need to
+unify all this: this is where {!val:Miou.call_cc} comes in!
+
+{[
+  let entries =
+    List.rev_map
+      (function
+        | `Dir, filename ->
+            Miou.call_cc @@ fun () ->
+            let name = Filename.basename filename in
+            let hash = hash_of_tree filename in
+            Fmt.str "40000 %s\000%s" name (Hash.to_raw_string hash)
+        | `Normal, filename ->
+            Miou.call @@ fun () ->
+            let name = Filename.basename filename in
+            let hash = hash_of_blob filename in
+            Fmt.str "100644 %s\000%s" name (Hash.to_raw_string hash))
+      entries
+  in
+]}
+
+{!val:Miou.call_cc} also returns a promise like {!val:Miou.call}. However,
+instead of being executed on another domain in parallel, the task will be
+executed {i later} on the {b which created} the promise. For OCaml aficionados,
+this is a return to the idea of pre-OCaml 5.0 concurrent scheduling!
+
+The idea is that hashes for directories will {b only} be calculted on the main
+domain and only the calculation for files will be parallelized for the other
+domains - the latter will no longer depend on the result of a recursion.
+
+So we've mixed parallelism and concurrency.
+
+{2 Results.}
+
+We're going to compare the results and to do this, we're simply going to try and
+calculate the hash of our [".opam"]:
+
+{[
+dinosaure@turbine:~$ hyperfine --warmup=1 './miou_p.out ~/.opam/5.0.0' './miou_s.out ~/.opam/5.0.0'
+Benchmark 1: ./miou_p.out ~/.opam/5.0.0
+  Time (mean ± σ):     760.1 ms ±  45.1 ms    [User: 6148.9 ms, System: 760.8 ms]
+  Range (min … max):   661.5 ms … 840.8 ms    10 runs
+ 
+Benchmark 2: ./miou_s.out ~/.opam/5.0.0
+  Time (mean ± σ):      2.723 s ±  0.016 s    [User: 2.414 s, System: 0.305 s]
+  Range (min … max):    2.694 s …  2.748 s    10 runs
+ 
+Summary
+  ./miou_p.out ~/.opam/5.0.0 ran
+    3.58 ± 0.21 times faster than ./miou_s.out ~/.opam/5.0.0
+]}
+
+The first version ["miou_p"] is the on that uses {!val:Miou.call}. The second
+["miou_s"] corresponds to our first code. The parallelized version is at least
+3 times faster!
+
+{2 Conclusion.}
+
+As you can see, parallelising code is never a simple matter. The example here is
+basic, but it highlights the starvation problem. Using system resources is
+always difficult and choices can be made based on speed, security and ease of
+use. As far as we're concerned, Miou remains fairly basic in what it proposes
+and concentrates mainly on system and network programming where security issues
+may appear to be crucial - even if this is at the expense of apparent
+simplicity.
+
+This tutorial explains the two ways of making a promise with Miou that {i will}
+be executed. You can launch a {i local} task to the domain where you are or
+launch a task on another domain. The two have different properties. Here's an
+example:
+- for the first, the use of data structures such as {!module:Hashtbl} can be
+  considered
+- for the second, synchronisation mechanism are required (Condition, Mutex) but
+  offer the lattitude to use all your computer's calculating resources
+
+Other properties exist, but we won't lis them all here. Welcome to the world of
+parallelism!

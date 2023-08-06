@@ -187,7 +187,10 @@ val pp : Format.formatter -> 'a t -> unit
         ignore (Miou.call ~orphans handler);
         server orphans in
       server (Miou.oprhans ())
-    ]} *)
+    ]}
+
+   There is a step-by-step {{!page:echo}tutorial} on how to create an echo
+   server and how to create a {i daemon} with [miou]. *)
 
 type 'a orphans
 (** The type of orphan collectors. *)
@@ -240,7 +243,8 @@ val call : ?orphans:'a orphans -> ?give:Ownership.t list -> (unit -> 'a) -> 'a t
     ]}
 
     If you want to run multiple tasks on different domains, you can use
-    {!val:parallel}. *)
+    {!val:parallel}. If you want to know more about parallelism with [miou], you
+    can check also our mini tutorial about {{!page:merkle}merkle-tree}. *)
 
 val parallel : (unit -> 'a) list -> 'a t list
 (** [parallel [ fun () -> ...; fun () -> ...]] assigns a task from the list to

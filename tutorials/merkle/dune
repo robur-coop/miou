@@ -1,0 +1,13 @@
+(documentation
+ (package miou)
+ (mld_files merkle))
+
+(executable
+ (name main_p)
+ (modules main_p)
+ (libraries miou miouu fmt digestif))
+
+(executable
+ (name main_s)
+ (modules main_s)
+ (libraries fmt digestif))
