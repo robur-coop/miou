@@ -39,16 +39,16 @@ let select interrupt () =
     | Some ts -> ts
     | None -> 0.
   in
-  let t0 = Unix.gettimeofday () in
+  let t0 = Clock.now () in
   match Unix.select [ interrupt ] [] [] ts with
   | [], _, _ -> (
-      let t1 = Unix.gettimeofday () in
+      let t1 = Clock.now () in
       update sleepers (t1 -. t0);
       match min with
       | Some (_, prm, _) -> [ Miou.task prm (Fun.const ()) ]
       | None -> [])
   | _ ->
-      let t1 = Unix.gettimeofday () in
+      let t1 = Clock.now () in
       update sleepers (t1 -. t0);
       consume_interrupt interrupt;
       []
@@ -83,24 +83,24 @@ let program2 () =
 
 let () =
   Format.eprintf "[0]: %!";
-  let t0 = Unix.gettimeofday () in
+  let t0 = Clock.now () in
   program0 ();
-  let t1 = Unix.gettimeofday () in
+  let t1 = Clock.now () in
   assert (t1 -. t0 < 3.);
   Format.eprintf "ok\n%!"
 
 let () =
   Format.eprintf "[1]: %!";
-  let t0 = Unix.gettimeofday () in
+  let t0 = Clock.now () in
   program1 ();
-  let t1 = Unix.gettimeofday () in
+  let t1 = Clock.now () in
   assert (t1 -. t0 < 3.);
   Format.eprintf "ok\n%!"
 
 let () =
   Format.eprintf "[2]: %!";
-  let t0 = Unix.gettimeofday () in
+  let t0 = Clock.now () in
   program2 ();
-  let t1 = Unix.gettimeofday () in
+  let t1 = Clock.now () in
   assert (t1 -. t0 < 10.);
   Format.eprintf "ok\n%!"

@@ -43,7 +43,7 @@ let program () =
   |> List.iter @@ function Ok () -> () | Error exn -> raise exn
 
 let () =
-  let t0 = Unix.gettimeofday () in
+  let t0 = Clock.now () in
   program ();
-  let t1 = Unix.gettimeofday () in
+  let t1 = Clock.now () in
   assert (t1 -. t0 < 3.)

@@ -12,7 +12,7 @@ let prgm () =
   Miou.await_exn a; Miou.await_exn b
 
 let () =
-  let t0 = Unix.gettimeofday () in
+  let t0 = Clock.now () in
   prgm ();
-  let t1 = Unix.gettimeofday () in
+  let t1 = Clock.now () in
   assert (t1 -. t0 < 2.)
