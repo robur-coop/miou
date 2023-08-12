@@ -8,9 +8,9 @@ let prgm () =
   Miouu.run @@ fun () -> ignore (Miou.call (fun () -> Miouu.sleep 10.))
 
 let () =
-  let t0 = Unix.gettimeofday () in
+  let t0 = Clock.now () in
   let rs = try Ok (prgm ()) with exn -> Error exn in
-  let t1 = Unix.gettimeofday () in
+  let t1 = Clock.now () in
   match rs with
   | Ok () -> failwith "t09"
   | Error exn ->

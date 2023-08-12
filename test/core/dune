@@ -16,17 +16,17 @@
 (executable
  (name t04)
  (modules t04)
- (libraries miouu))
+ (libraries clock miouu))
 
 (executable
  (name t05)
  (modules t05)
- (libraries miouu))
+ (libraries clock miouu))
 
 (executable
  (name t06)
  (modules t06)
- (libraries unix miou))
+ (libraries clock unix miou))
 
 (executable
  (name t07)
@@ -41,7 +41,7 @@
 (executable
  (name t09)
  (modules t09)
- (libraries miouu))
+ (libraries clock miouu))
 
 (executable
  (name t10)
@@ -51,7 +51,7 @@
 (executable
  (name t11)
  (modules t11)
- (libraries unix miou))
+ (libraries clock unix miou))
 
 (executable
  (name t12)
@@ -66,12 +66,12 @@
 (executable
  (name t14)
  (modules t14)
- (libraries miouu))
+ (libraries clock miouu))
 
 (executable
  (name t15)
  (modules t15)
- (libraries unix miou))
+ (libraries clock unix miou))
 
 (executable
  (name t17)
@@ -106,7 +106,7 @@
 (executable
  (name t23)
  (modules t23)
- (libraries miouu))
+ (libraries clock miouu))
 
 (executable
  (name t24)

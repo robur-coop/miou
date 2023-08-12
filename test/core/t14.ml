@@ -9,9 +9,9 @@ let prgm () =
 
 let () =
   Format.printf "call_cc + Unix.sleepf:%!";
-  let t0 = Unix.gettimeofday () in
+  let t0 = Clock.now () in
   prgm ();
-  let t1 = Unix.gettimeofday () in
+  let t1 = Clock.now () in
   assert (t1 -. t0 >= 3.);
   Format.printf " ok\n%!"
 
@@ -23,9 +23,9 @@ let prgm () =
 
 let () =
   Format.printf "call + Unix.sleepf:   %!";
-  let t0 = Unix.gettimeofday () in
+  let t0 = Clock.now () in
   prgm ();
-  let t1 = Unix.gettimeofday () in
+  let t1 = Clock.now () in
   assert (t1 -. t0 < 3.);
   Format.printf " ok\n%!"
 
@@ -37,8 +37,8 @@ let prgm () =
 
 let () =
   Format.printf "call_cc + Miouu.sleep:%!";
-  let t0 = Unix.gettimeofday () in
+  let t0 = Clock.now () in
   prgm ();
-  let t1 = Unix.gettimeofday () in
+  let t1 = Clock.now () in
   assert (t1 -. t0 < 3.);
   Format.printf " ok\n%!"

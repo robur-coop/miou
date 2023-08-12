@@ -19,19 +19,19 @@ let prgm () =
   Miou.await p
 
 let rec until_its_ok () =
-  let t0 = Unix.gettimeofday () in
+  let t0 = Clock.now () in
   match prgm () with
   | Ok () ->
-      let t1 = Unix.gettimeofday () in
+      let t1 = Clock.now () in
       assert (t1 -. t0 >= 1.)
   | Error Basic_failure -> until_its_ok ()
   | _ -> failwith "t04"
 
 let rec until_its_abnormal () =
-  let t0 = Unix.gettimeofday () in
+  let t0 = Clock.now () in
   match prgm () with
   | Error Basic_failure ->
-      let t1 = Unix.gettimeofday () in
+      let t1 = Clock.now () in
       assert (t1 -. t0 < 1.)
   | Ok () -> until_its_abnormal ()
   | Error _ -> failwith "t04"

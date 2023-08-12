@@ -5,17 +5,17 @@
 (executable
  (name t01)
  (modules t01)
- (libraries miou unix))
+ (libraries clock miou unix))
 
 (executable
  (name t02)
  (modules t02)
- (libraries miou unix))
+ (libraries clock miou unix))
 
 (executable
  (name t03)
  (modules t03)
- (libraries miou unix))
+ (libraries clock miou unix))
 
 (cram
  (package miouu)
