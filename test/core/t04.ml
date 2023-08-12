@@ -24,7 +24,7 @@ let rec until_its_ok () =
   | Ok () ->
       let t1 = Clock.now () in
       assert (t1 -. t0 >= 1.)
-  | Error Basic_failure -> until_its_ok ()
+  | Error Basic_failure -> Gc.full_major (); until_its_ok ()
   | _ -> failwith "t04"
 
 let rec until_its_abnormal () =
@@ -33,7 +33,7 @@ let rec until_its_abnormal () =
   | Error Basic_failure ->
       let t1 = Clock.now () in
       assert (t1 -. t0 < 1.)
-  | Ok () -> until_its_abnormal ()
+  | Ok () -> Gc.full_major (); until_its_abnormal ()
   | Error _ -> failwith "t04"
 
 let () = until_its_ok (); until_its_abnormal ()
