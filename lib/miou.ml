@@ -3,6 +3,52 @@ exception Not_owner
 
 module Queue = Queue
 
+module Backoff = struct
+  (* Copyright (c) 2015, Théo Laurent <theo.laurent@ens.fr>
+     Copyright (c) 2016, KC Sivaramakrishnan <kc@kcsrk.info>
+     Copyright (c) 2021, Sudha Parimala <sudharg247@gmail.com>
+     Copyright (c) 2023, Vesa Karvonen <vesa.a.j.k@gmail.com>
+
+     Under ISC license. *)
+
+  let bits = 5
+  let mask = 1 lsl bits
+  let max_wait_log = 30
+  let single_mask = Bool.to_int (Domain.recommended_domain_count () = 1) - 1
+
+  let make ?(lower_wait_log = 4) ?(upper_wait_log = 17) () =
+    if
+      not
+        (0 <= lower_wait_log
+        && lower_wait_log <= upper_wait_log
+        && upper_wait_log <= max_wait_log)
+    then invalid_arg "Backoff.make";
+    (upper_wait_log lsl (bits * 2))
+    lor (lower_wait_log lsl bits)
+    lor lower_wait_log
+
+  let get_upper_wait_log t = t lsr (bits * 2)
+  let get_lower_wait_log t = (t lsr bits) land mask
+  let get_wait_log t = t land mask
+
+  let _reset t =
+    let lower_wait_log = get_lower_wait_log t in
+    t land lnot mask lor lower_wait_log
+
+  let once t =
+    let wait_log = get_wait_log t in
+    let wait_mask = (1 lsl wait_log) - 1 in
+    let v = Random.bits () land wait_mask land single_mask in
+    for _ = 0 to v do
+      Domain.cpu_relax ()
+    done;
+    let upper_wait_log = get_upper_wait_log t in
+    let next_wait_log = Int.min upper_wait_log (wait_log + 1) in
+    t lxor wait_log lor next_wait_log
+
+  let default = make ()
+end
+
 module Domain_id = struct
   type t = int
 
@@ -186,34 +232,34 @@ module Promise = struct
 
   (* XXX(dinosaure): transition state operations. *)
 
-  let rec to_consumed_with prm res =
+  let rec to_consumed_with ?(backoff = Backoff.default) prm res =
     if not (Atomic.compare_and_set prm.state Pending (Consumed res)) then
       match Atomic.get prm.state with
       | (Resolved _ | Failed _) as seen ->
           if not (Atomic.compare_and_set prm.state seen (Consumed res)) then
-            to_consumed_with prm res
+            to_consumed_with ~backoff:(Backoff.once backoff) prm res
       | _ -> ()
 
-  let rec to_consumed prm =
+  let rec to_consumed ?(backoff = Backoff.default) prm =
     match Atomic.get prm.state with
     | Resolved v as seen ->
         if not (Atomic.compare_and_set prm.state seen (Consumed (Ok v))) then
-          to_consumed prm
+          to_consumed ~backoff:(Backoff.once backoff) prm
         else Ok v
     | Failed exn as seen ->
         if not (Atomic.compare_and_set prm.state seen (Consumed (Error exn)))
-        then to_consumed prm
+        then to_consumed ~backoff:(Backoff.once backoff) prm
         else Error exn
     | Consumed res -> res
     | Pending -> raise Unresolvable_promise
 
-  let to_resolved prm value =
+  let rec to_resolved ?(backoff = Backoff.default) prm value =
     let set = Atomic.compare_and_set prm.state Pending (Resolved value) in
-    assert set
+    if not set then to_resolved ~backoff:(Backoff.once backoff) prm value
 
-  let to_failed prm exn =
+  let rec to_failed ?(backoff = Backoff.default) prm exn =
     let set = Atomic.compare_and_set prm.state Pending (Failed exn) in
-    assert set
+    if not set then to_failed ~backoff:(Backoff.once backoff) prm exn
 
   (* XXX(dinosaure): state introspections. *)
 
@@ -390,6 +436,10 @@ module Run = struct
   let rec step pool domain go = function
     | Local.Task (prm, fn) ->
         if Atomic.get prm.Promise.state = Pending then (
+          (* TODO(dinosaure): [locate] should already set [runner] to the current
+             domain. So I don't remmember why I put this [compare_and_set]. If this
+             one is really needed, we must not ignore the result and [compare_and_set]
+             until we got [true]. *)
           ignore
             (Atomic.compare_and_set prm.Promise.runner Promise.On_hold
                (Promise.Chosen domain.uid));
@@ -487,10 +537,12 @@ exception No_domain_available
 exception Resource_leak
 
 module Pool = struct
-  let assign_domain domain prm =
-    Atomic.compare_and_set prm.Promise.runner Promise.On_hold
-      (Promise.Chosen domain.uid)
-    |> fun set -> assert set
+  let rec assign_domain ?(backoff = Backoff.default) domain prm =
+    let set =
+      Atomic.compare_and_set prm.Promise.runner Promise.On_hold
+        (Promise.Chosen domain.uid)
+    in
+    if not set then assign_domain ~backoff:(Backoff.once backoff) domain prm
 
   let nothing_to_do pool domain =
     Rcdll.is_empty pool.glist
