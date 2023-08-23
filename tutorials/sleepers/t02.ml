@@ -2,15 +2,15 @@ open Miou
 
 let sleepers =
   let make () = Hashtbl.create 0x100 in
-  let key = Domain.DLS.new_key make in
-  fun () -> Domain.DLS.get key
+  let key = Stdlib.Domain.DLS.new_key make in
+  fun () -> Stdlib.Domain.DLS.get key
 
 let sleep until =
   let return () = () in
   let promise = Miou.make return in
   let sleepers = sleepers () in
   Hashtbl.add sleepers (Miou.uid promise) (promise, until);
-  match Miou.suspend promise with Ok () -> () | Error exn -> raise exn
+  Miou.suspend promise
 
 let select () =
   let sleepers = sleepers () in
@@ -26,6 +26,7 @@ let select () =
   match min with
   | None -> []
   | Some (uid, prm, until) ->
+      let until = Float.min until 0.100 in
       Hashtbl.remove sleepers uid;
       Hashtbl.filter_map_inplace
         (fun _ (prm, until') -> Some (prm, Float.max 0. (until' -. until)))

@@ -1,7 +1,7 @@
 (library
  (name miou)
  (public_name miou)
- (modules miou queue rcdll))
+ (modules miou logs heapq sequence queue state))
 
 (library
  (name miouu)

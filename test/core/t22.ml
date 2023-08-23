@@ -4,14 +4,12 @@
    regardless [Miou.call], [Miou.call_cc] and [Miou.suspend]. *)
 
 type box = Box : 'a option Atomic.t * 'a Miou.syscall -> box
-type t = (Miou.Id.t, box) Hashtbl.t
+type t = (Miou.uid, box) Hashtbl.t
 
 let dom =
   let make () : t = Hashtbl.create 0x100 in
   let dom = Domain.DLS.new_key make in
   fun () -> Domain.DLS.get dom
-
-let or_raise = function Ok value -> value | Error exn -> raise exn
 
 module Box : sig
   type 'a t
@@ -37,7 +35,7 @@ end = struct
     (prm, value)
 
   let push value u = Atomic.compare_and_set u None (Some value)
-  let take t = or_raise (Miou.suspend t)
+  let take t = Miou.suspend t
 end
 
 let select () =

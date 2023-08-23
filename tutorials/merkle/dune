@@ -5,7 +5,7 @@
 (executable
  (name main_p)
  (modules main_p)
- (libraries miou miouu fmt digestif))
+ (libraries miou fmt digestif))
 
 (executable
  (name main_s)

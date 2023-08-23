@@ -41,29 +41,29 @@ let get t =
   Miouu.Cond.until ~predicate ~fn t.non_empty
 
 let rec produce t n max =
+  Format.eprintf "[%a] puts %d\n%!" Miou.Domain.Uid.pp (Miou.Domain.self ()) n;
   let () = put t n in
   if n < max then produce t (succ n) max
 
 let rec consume t cur max =
   let n = get t in
-  if n <> cur then failwith "consume"
-  else if n = max then ()
-  else consume t (succ cur) max
-
-let perform = function
-  | `Produce (q, min, max) -> produce q min max
-  | `Consume (q, cur, max) -> consume q cur max
+  Format.eprintf "[%a] gets %d\n%!" Miou.Domain.Uid.pp (Miou.Domain.self ()) n;
+  if n <> cur then false else if n = max then true else consume t (succ cur) max
 
 let () =
-  Miouu.run ~domains:3 @@ fun () ->
+  Miouu.run ~domains:4 @@ fun () ->
   let t0 = make 20 0 and t1 = make 30 0 in
-  let ress =
-    let prm = Miou.call_cc @@ fun () -> consume t1 0 8000 in
-    Miou.await prm
-    :: Miou.parallel perform
-         [
-           `Produce (t0, 0, 10000); `Produce (t1, 0, 8000)
-         ; `Consume (t0, 0, 10000)
-         ]
+  let ok0 = ref false and ok1 = ref false in
+  let prms =
+    List.rev_map Miou.call_cc
+      [
+        (fun () -> produce t0 0 10000); (fun () -> produce t1 0 8000)
+      ; (fun () -> ok0 := consume t0 0 10000)
+      ]
   in
-  List.iter (function Ok v -> v | Error exn -> raise exn) ress
+  ok1 := consume t1 0 8000;
+  let () =
+    Miou.await_all prms
+    |> List.iter (function Ok () -> () | Error exn -> raise exn)
+  in
+  if not (!ok0 && !ok1) then failwith "t25"

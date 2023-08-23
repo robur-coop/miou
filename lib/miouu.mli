@@ -22,12 +22,13 @@ module Cond : sig
       is possible to specify your own {!type:Mutex.t} instead of letting [miou]
       create one. *)
 
-  val wait : fn:(unit -> 'a) -> t -> 'a
+  val wait : predicate:(unit -> bool) -> t -> bool
   (** [wait ~predicate t] suspends the current task on the condition variable
       [t]. The task can later be woken up after the condition variable [t] has
-      been signaled via {!val:signal} or {!val:broadcast}. [fn] is a function
-      which is executed {b after} the wait and {b protected} by the internal
-      {!type:Mutex.t} (see {!val:make}). *)
+      been signaled via {!val:signal} or {!val:broadcast}. [predicate] is a
+      function which is executed {b before} the wait to test if we need to wait
+      or not and {b protected} by the internal {!type:Mutex.t} (see
+      {!val:make}). *)
 
   val until : predicate:(unit -> bool) -> fn:(unit -> 'a) -> t -> 'a
   (** [until ~predicate ~fn t] waits as long as [predicate] is [true]. Then, we

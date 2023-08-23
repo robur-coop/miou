@@ -24,14 +24,15 @@ let rec clean orphans =
   | None -> ()
   | Some prm -> Miou.await_exn prm; clean orphans
 
-let prgm sockaddr =
+let prgm sockaddr () =
   let rec server orphans fd =
     clean orphans;
-    let fd', sockaddr = Miouu.accept fd in
-    Format.printf "- new connection from %s\n%!" (sockaddr_to_string sockaddr);
+    let fd', _sockaddr = Miouu.accept fd in
     ignore (Miou.call ~give:[ Miouu.owner fd' ] ~orphans (handler fd'));
     server orphans fd
   in
-  fun () -> server (Miou.orphans ()) (listen sockaddr)
+  let serve () = server (Miou.orphans ()) (listen sockaddr) in
+  Miou.parallel serve [ (); (); (); () ]
+  |> List.iter (function Error exn -> raise exn | Ok () -> ())
 
 let () = Miouu.run (prgm (Unix.ADDR_INET (Unix.inet_addr_loopback, 9000)))

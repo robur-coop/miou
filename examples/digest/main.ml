@@ -17,7 +17,7 @@ let rec digest ctx buf ic () =
       let ctx = Digestif.SHA256.feed_bytes ctx buf ~off:0 ~len in
       digest ctx buf ic ()
 
-let digest filename () =
+let digest filename =
   with_ic filename (digest Digestif.SHA256.empty (Bytes.create 0x100))
   |> Result.map (fun hash -> (filename, hash))
 
@@ -44,19 +44,19 @@ let filenames_of_stdin () =
   in
   go []
 
-let run filenames () =
-  let fold acc filename = Miou.call (digest filename) :: acc in
-  List.fold_left fold [] filenames
-  |> List.rev_map Miou.await
+let run filenames =
+  Miou.parallel digest filenames
   |> List.map Result.join
   |> List.mapi (fun idx ->
          Result.map_error (fun exn -> (List.nth filenames idx, exn)))
   |> List.iter print
 
+let ( $ ) f g x = f (g x)
+
 let () =
   match Sys.argv with
-  | [| _ |] -> Miou.run (run (filenames_of_stdin ()))
+  | [| _ |] -> Miou.run (run $ filenames_of_stdin)
   | _ ->
       let filenames = Array.sub Sys.argv 1 (Array.length Sys.argv - 1) in
       let filenames = Array.to_list filenames in
-      Miou.run ~domains:2 (run filenames)
+      Miou.run ~domains:2 @@ fun () -> run filenames

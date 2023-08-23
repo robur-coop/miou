@@ -12,7 +12,9 @@ let () =
   in
   let b =
     Miou.call @@ fun () ->
-    let rec until () = match !p with Some p -> p | None -> until () in
+    let rec until () =
+      match !p with Some p -> p | None -> until (Miou.yield ())
+    in
     Miou.await_exn (until ())
   in
-  Miou.await_all [ a; b ] |> ignore
+  Miou.await_exn a; Miou.await_exn b

@@ -1,13 +1,13 @@
 let sleepers =
   let make () = Hashtbl.create 0x100 in
-  let key = Domain.DLS.new_key make in
-  fun () -> Domain.DLS.get key
+  let key = Stdlib.Domain.DLS.new_key make in
+  fun () -> Stdlib.Domain.DLS.get key
 
 let sleep until =
-  let promise = Miou.make (Fun.const ()) in
+  let syscall = Miou.make (Fun.const ()) in
   let sleepers = sleepers () in
-  Hashtbl.add sleepers (Miou.uid promise) (promise, until);
-  match Miou.suspend promise with Ok () -> () | Error exn -> raise exn
+  Hashtbl.add sleepers (Miou.uid syscall) (syscall, until);
+  Miou.suspend syscall
 
 let rec consume_interrupt ic =
   if Unix.read ic (Bytes.create 1) 0 1 = 0 then consume_interrupt ic
@@ -19,39 +19,48 @@ let update sleepers n =
       Some (prm, until'))
     sleepers
 
+let minimums sleepers =
+  let cs = ref [] in
+  Hashtbl.filter_map_inplace
+    (fun _ (syscall, until) ->
+      if until <= 0. then (
+        cs := Miou.task syscall (Fun.const ()) :: !cs;
+        None)
+      else Some (syscall, until))
+    sleepers;
+  !cs
+
 let select interrupt () =
   let sleepers = sleepers () in
   Hashtbl.filter_map_inplace
-    (fun _ (prm, until) ->
-      if Miou.is_pending prm then Some (prm, until) else None)
+    (fun _ (syscall, until) ->
+      if Miou.is_pending syscall then Some (syscall, until) else None)
     sleepers;
   let min =
     Hashtbl.fold
-      (fun uid (prm, until) -> function
-        | Some (_uid', _prm', until') when until < until' ->
-            Some (uid, prm, until)
+      (fun uid (syscall, until) -> function
+        | Some (_uid', _syscall', until') when until < until' ->
+            Some (uid, syscall, until)
         | Some _ as acc -> acc
-        | None -> Some (uid, prm, until))
+        | None -> Some (uid, syscall, until))
       sleepers None
   in
   let ts =
     Option.map (fun (_, _, until) -> until) min |> function
-    | Some ts -> ts
+    | Some ts -> Float.min ts 0.100
     | None -> 0.
   in
   let t0 = Clock.now () in
   match Unix.select [ interrupt ] [] [] ts with
-  | [], _, _ -> (
+  | [], _, _ ->
       let t1 = Clock.now () in
       update sleepers (t1 -. t0);
-      match min with
-      | Some (_, prm, _) -> [ Miou.task prm (Fun.const ()) ]
-      | None -> [])
+      minimums sleepers
   | _ ->
       let t1 = Clock.now () in
       update sleepers (t1 -. t0);
       consume_interrupt interrupt;
-      []
+      minimums sleepers
 
 let events _ =
   let ic, oc = Unix.pipe ~cloexec:true () in
@@ -69,9 +78,7 @@ let program0 () =
 
 let program1 () =
   Miou.run ~events @@ fun () ->
-  let a = Miou.call (fun () -> sleep 1.) in
-  let b = Miou.call (fun () -> sleep 2.) in
-  Miou.await_all [ a; b ]
+  Miou.parallel sleep [ 1.; 2. ]
   |> List.iter (function Ok () -> () | Error exn -> raise exn)
 
 let program2 () =

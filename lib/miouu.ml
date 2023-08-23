@@ -1,7 +1,5 @@
 open Miou
 
-let or_raise = function Ok value -> value | Error exn -> raise exn
-
 type file_descr = {
     fd: Unix.file_descr
   ; owner: Ownership.t
@@ -43,7 +41,7 @@ let bind_and_listen ?(backlog = 64) { fd; owner; _ } sockaddr =
 type unix_scheduler = {
     rd: (Unix.file_descr, unit Miou.syscall) Hashtbl.t
   ; wr: (Unix.file_descr, unit Miou.syscall) Hashtbl.t
-  ; sleepers: (Id.t, float * unit Miou.syscall) Hashtbl.t
+  ; sleepers: (Miou.uid, float * unit Miou.syscall) Hashtbl.t
 }
 
 let clean_syscalls dom =
@@ -63,36 +61,50 @@ let dom =
     ; sleepers= Hashtbl.create 0x100
     }
   in
-  let dom = Domain.DLS.new_key make in
-  fun () -> Domain.DLS.get dom
+  let dom = Stdlib.Domain.DLS.new_key make in
+  fun () -> Stdlib.Domain.DLS.get dom
 
-let minimum sleepers =
-  let fold uid (until, prm) = function
-    | Some (_, until', _) when until < until' -> Some (uid, until, prm)
-    | Some _ as acc -> acc
-    | None -> Some (uid, until, prm)
+(* Sleepers *)
+
+let sleepers () =
+  let sleepers = ref [] in
+  let collect _ (until, syscall) =
+    if until <= 0. then begin
+      sleepers := syscall :: !sleepers;
+      None
+    end
+    else Some (until, syscall)
   in
-  Hashtbl.fold fold sleepers None
-
-let sleeper () =
   let dom = dom () in
-  match minimum dom.sleepers with
-  | Some (uid, _, prm) ->
-      let k () = Hashtbl.remove dom.sleepers uid in
-      [ Miou.task prm k ]
-  | None -> []
+  Hashtbl.filter_map_inplace collect dom.sleepers;
+  List.map (fun syscall -> Miou.task syscall (Fun.const ())) !sleepers
+
+let update_sleepers ~quanta () =
+  let dom = dom () in
+  Hashtbl.filter_map_inplace
+    (fun _ (until, syscall) ->
+      let until' = Float.max 0. (until -. quanta) in
+      Some (until', syscall))
+    dom.sleepers
+
+let smallest_sleeper () =
+  let fold _ (until, syscall) = function
+    | Some (until', _) when until' > until -> Some (until, syscall)
+    | Some _ as sleeper -> sleeper
+    | None -> Some (until, syscall)
+  in
+  let dom = dom () in
+  Hashtbl.fold fold dom.sleepers None
 
 let blocking_read fd =
   let dom = dom () in
   let prm = Miou.make (Fun.const ()) in
-  Hashtbl.add dom.rd fd prm;
-  or_raise (Miou.suspend prm)
+  Hashtbl.add dom.rd fd prm; Miou.suspend prm
 
 let blocking_write fd =
   let dom = dom () in
   let prm = Miou.make (Fun.const ()) in
-  Hashtbl.add dom.wr fd prm;
-  or_raise (Miou.suspend prm)
+  Hashtbl.add dom.wr fd prm; Miou.suspend prm
 
 let with_lock ~lock fn =
   Mutex.lock lock;
@@ -108,15 +120,24 @@ module Cond = struct
   type t = {
       ic: Unix.file_descr
     ; oc: Unix.file_descr
-    ; counter: int Atomic.t
-    ; mutex: Mutex.t
+    ; mutable counter: int
+    ; mutex_predicate: Mutex.t
+    ; mutex_counter: Mutex.t
     ; uid: int
   }
 
-  let make ?(mutex = Mutex.create ()) () =
+  let make ?mutex:(mutex_predicate = Mutex.create ()) () =
     let ic, oc = Unix.pipe ~cloexec:true () in
-    let counter = Atomic.make 0 in
-    let t = { ic; oc; mutex; counter; uid= gen () } in
+    let t =
+      {
+        ic
+      ; oc
+      ; mutex_predicate
+      ; mutex_counter= Mutex.create ()
+      ; counter= 0
+      ; uid= gen ()
+      }
+    in
     let close { ic; oc; _ } = Unix.close ic; Unix.close oc in
     Gc.finalise close t; t
 
@@ -131,7 +152,7 @@ module Cond = struct
     go ()
 
   let produce_signal fd =
-    let res = Bytes.make 1 '\042' in
+    let res = Bytes.make 1 '\000' in
     let rec go () =
       match Unix.single_write fd res 0 1 with
       | exception Unix.Unix_error (Unix.EINTR, _, _) -> go ()
@@ -140,30 +161,37 @@ module Cond = struct
     in
     go ()
 
-  let wait ~fn t =
-    with_lock ~lock:t.mutex (fun () -> Atomic.incr t.counter);
-    blocking_read t.ic;
-    consume_signal t.ic;
-    with_lock ~lock:t.mutex @@ fun () -> Atomic.decr t.counter; fn ()
-
-  let until ~predicate ~fn t =
-    Mutex.lock t.mutex;
-    while predicate () do
-      Atomic.incr t.counter;
-      Mutex.unlock t.mutex;
+  let wait ~predicate t =
+    let wait = with_lock ~lock:t.mutex_predicate predicate in
+    if wait then begin
+      with_lock ~lock:t.mutex_counter (fun () -> t.counter <- t.counter + 1);
       blocking_read t.ic;
       consume_signal t.ic;
-      Mutex.lock t.mutex;
-      Atomic.decr t.counter
+      with_lock ~lock:t.mutex_counter (fun () -> t.counter <- t.counter - 1);
+      with_lock ~lock:t.mutex_predicate predicate
+    end
+    else false
+
+  let until ~predicate ~fn t =
+    Mutex.lock t.mutex_predicate;
+    while predicate () do
+      with_lock ~lock:t.mutex_counter (fun () -> t.counter <- t.counter + 1);
+      Mutex.unlock t.mutex_predicate;
+      blocking_read t.ic;
+      consume_signal t.ic;
+      Mutex.lock t.mutex_predicate;
+      with_lock ~lock:t.mutex_counter (fun () -> t.counter <- t.counter - 1)
     done;
-    let finally () = Mutex.unlock t.mutex in
+    let finally () = Mutex.unlock t.mutex_predicate in
     Fun.protect ~finally fn
 
-  let signal t = blocking_write t.oc; produce_signal t.oc; yield ()
+  let signal t =
+    with_lock ~lock:t.mutex_counter @@ fun () ->
+    if t.counter > 0 then produce_signal t.oc
 
   let broadcast t =
-    with_lock ~lock:t.mutex @@ fun () ->
-    for _ = 0 to Atomic.get t.counter - 1 do
+    with_lock ~lock:t.mutex_counter @@ fun () ->
+    for _ = 0 to t.counter - 1 do
       produce_signal t.oc
     done
 end
@@ -232,11 +260,7 @@ let rec accept ?cloexec ({ fd; non_blocking; owner; _ } as file_descr) =
         blocking_read fd; accept ?cloexec file_descr
     | fd, sockaddr ->
         Unix.set_nonblock fd;
-        let close fd =
-          Unix.close fd;
-          Format.printf "%d closed\n%!" (Obj.magic fd)
-        in
-        let owner = Ownership.own ~finally:close fd in
+        let owner = Ownership.own ~finally:Unix.close fd in
         let file_descr = { fd; owner; non_blocking= true } in
         (file_descr, sockaddr))
   else
@@ -257,38 +281,38 @@ let close { fd; owner; _ } =
 let consume_interrupt interrupt =
   ignore (Unix.read interrupt (Bytes.create 1) 0 1)
 
+let of_nano ns = Int64.to_float ns /. 1_000_000_000.
+
+let quanta =
+  match Sys.getenv_opt "MIOU_UNIX_QUANTA" with
+  | Some str -> (
+      try of_nano (Int64.abs (Int64.of_string str))
+      with _ -> of_nano 1_000_000L)
+  | None -> of_nano 1_000_000L
+
 let select _domain interrupt () =
   let dom = dom () in
   clean_syscalls dom;
   let rds = Hashtbl.fold (fun fd _ acc -> fd :: acc) dom.rd [] in
   let wrs = Hashtbl.fold (fun fd _ acc -> fd :: acc) dom.wr [] in
   let ts =
-    Option.map (fun (_, until, _) -> until) (minimum dom.sleepers) |> function
-    | Some ts -> ts
-    | None when rds = [] && wrs = [] -> 0.
-    | None -> -1.
+    Option.map (fun (until, _) -> until) (smallest_sleeper ()) |> function
+    | Some ts -> min ts quanta
+    | None -> quanta
   in
   let t0 = Unix.gettimeofday () in
   match Unix.select (interrupt :: rds) wrs [] ts with
   | exception Unix.(Unix_error (EINTR, _, _)) -> []
   | [], [], _ ->
       let t1 = Unix.gettimeofday () in
-      let syscalls = sleeper () in
-      Hashtbl.filter_map_inplace
-        (fun _ (until, prm) ->
-          let until' = until -. (t1 -. t0) in
-          Some (until', prm))
-        dom.sleepers;
-      syscalls
+      let quanta = t1 -. t0 in
+      update_sleepers ~quanta (); sleepers ()
   | rds, wrs, [] ->
       if List.exists (( = ) interrupt) rds then consume_interrupt interrupt;
       let t1 = Unix.gettimeofday () in
-      Hashtbl.filter_map_inplace
-        (fun _ (until, prm) ->
-          let until' = until -. (t1 -. t0) in
-          Some (until', prm))
-        dom.sleepers;
-      let syscalls = [] in
+      let quanta = t1 -. t0 in
+      update_sleepers ~quanta ();
+      let syscalls = sleepers () in
       let syscalls =
         List.fold_left
           (fun acc fd ->
@@ -327,4 +351,4 @@ let sleep until =
   let dom = dom () in
   let prm = Miou.make (Fun.const ()) in
   Hashtbl.add dom.sleepers (Miou.uid prm) (until, prm);
-  or_raise (Miou.suspend prm)
+  Miou.suspend prm

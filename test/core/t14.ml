@@ -16,10 +16,7 @@ let () =
   Format.printf " ok\n%!"
 
 let prgm () =
-  Miou.run @@ fun () ->
-  let a = Miou.call (fun () -> Unix.sleepf 1.) in
-  let b = Miou.call (fun () -> Unix.sleepf 2.) in
-  Miou.await_all [ a; b ] |> ignore
+  Miou.run @@ fun () -> ignore (Miou.parallel Unix.sleepf [ 1.; 2. ])
 
 let () =
   Format.printf "call + Unix.sleepf:   %!";
