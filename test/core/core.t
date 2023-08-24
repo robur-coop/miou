@@ -28,6 +28,7 @@
   call + Unix.sleepf:    ok
   call_cc + Miouu.sleep: ok
   $ ./t15.exe
+  $ ./t16.exe
   $ ./t17.exe
   $ ./t18.exe
   Fatal error: exception Miou.No_domain_available

@@ -6,7 +6,7 @@ let sleep until =
   let return () = () in
   let promise = Miou.make return in
   Hashtbl.add sleepers (Miou.uid promise) (promise, until);
-  match Miou.suspend promise with Ok () -> () | Error exn -> raise exn
+  Miou.suspend promise
 
 let select () =
   let min =
@@ -20,13 +20,18 @@ let select () =
   in
   match min with
   | None -> []
-  | Some (uid, prm, until) ->
-      Hashtbl.remove sleepers uid;
+  | Some (_, _, until) ->
+      let until = Float.min 0.100 until in
+      Unix.sleepf until;
       Hashtbl.filter_map_inplace
         (fun _ (prm, until') -> Some (prm, Float.max 0. (until' -. until)))
         sleepers;
-      Unix.sleepf until;
-      [ Miou.task prm (Fun.const ()) ]
+      Hashtbl.fold
+        (fun uid (prm, until) acc ->
+          if until <= 0. then
+            Miou.task prm (fun () -> Hashtbl.remove sleepers uid) :: acc
+          else acc)
+        sleepers []
 
 let events _ = { select; interrupt= ignore }
 

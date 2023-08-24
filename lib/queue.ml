@@ -72,7 +72,7 @@ let dequeue t =
   in
   go ()
 
-let make () =
+let create () =
   let dummy = { value= Obj.magic (); next= Atomic.make None; count= 0 } in
   let t = { tail= Atomic.make dummy; head= Atomic.make dummy } in
   assert (Atomic.get t.head == Atomic.get t.tail);
@@ -130,6 +130,6 @@ let to_list t =
   iter ~f t; List.rev !res
 
 let transfer t =
-  let q = make () in
+  let q = create () in
   drop ~f:(fun x -> enqueue q x) t;
   q

@@ -9,7 +9,7 @@ let check test =
   with exn -> print_string "x"; reraise exn
 
 let () =
-  let q = Queue.make () in
+  let q = Queue.create () in
   Queue.enqueue q 1;
   Queue.enqueue q 2;
   Queue.enqueue q 3;
@@ -21,7 +21,7 @@ let () =
   check (go [] = [ 3; 2; 1 ])
 
 let test01 len =
-  let q = Queue.make () in
+  let q = Queue.create () in
   let lst = List.init len (fun _ -> Random.bits ()) in
   List.iter (Queue.enqueue q) lst;
   let rec go acc =
@@ -36,16 +36,16 @@ let () = test01 100
 let () = test01 1000
 
 let () =
-  let q = Queue.make () in
+  let q = Queue.create () in
   check (Queue.is_empty q = true)
 
 let () =
-  let q = Queue.make () in
+  let q = Queue.create () in
   Queue.enqueue q 0;
   check (Queue.is_empty q = false)
 
 let () =
-  let q = Queue.make () in
+  let q = Queue.create () in
   for i = 1 to 100 do
     Queue.enqueue q i
   done;
@@ -55,7 +55,7 @@ let () =
   check (Queue.length q = 90)
 
 let () =
-  let p = Queue.make () in
+  let p = Queue.create () in
   for i = 1 to 100 do
     Queue.enqueue p i
   done;
@@ -67,7 +67,7 @@ let () =
   check (Queue.length q = 100)
 
 let () =
-  let q = Queue.make () in
+  let q = Queue.create () in
   for i = 0 to 9 do
     Queue.enqueue q i
   done;

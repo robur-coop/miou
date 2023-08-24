@@ -1,0 +1,45 @@
+{1 A simple echo server with Miou.}
+
+In this short tutorial, we'll look at how to implement a simple "echo" server.
+The idea is to manage incoming connections and "repeat" what the user has
+written. It is equivalent to this server with "netcat":
+
+{[
+$ mknod fifo p
+$ cat fifo | nc -l 9000 > fifo
+]}
+
+We're going to use Miouu, which is an extension of Miou with some functions
+available via the Unix module. These functions are blocking and if you're
+wondering why we need a layer to implement these functions, we suggest you take
+a look at the tutorial on {!page:sleepers}.
+
+{2 A simple sequential server.}
+
+Let's start at the beginning: create a function to manage our customers and
+another function to manage the acceptance of connections.
+
+{[
+let handler fd =
+  let buf = Bytes.create 0x100 in
+  let rec go () =
+    let len = Miouu.read fd buf ~off:0 ~len:(Bytes.length buf) in
+    if len > 0 then begin
+      Miouu.write fd (Bytes.unsafe_to_string buf) ~off:0 ~len;
+      go ()
+    end else Miouu.close fd in
+  go ()
+
+let listen sockaddr =
+  let fd = Miouu.tcpv4 () in
+  Miouu.bind_and_listen fd sockaddr; fd
+
+let prgm sockaddr =
+  let rec server fd =
+    let fd', sockaddr = Miouu.accept fd in
+    handler fd';
+    server fd in
+  fun () -> server (listen sockaddr)
+
+let () = Miouu.run (prgm (Unix.ADDR_INET (Unix.inet_addr_loopback, 9000)))
+]}

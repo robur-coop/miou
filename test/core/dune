@@ -74,6 +74,11 @@
  (libraries clock unix miou))
 
 (executable
+ (name t16)
+ (modules t16)
+ (libraries clock unix miou))
+
+(executable
  (name t17)
  (modules t17)
  (libraries miou))
@@ -118,6 +123,11 @@
  (modules t25)
  (libraries miou))
 
+(executable
+ (name t27)
+ (modules t27)
+ (libraries miou))
+
 (cram
  (package miouu)
  (deps
@@ -136,6 +146,7 @@
   t13.exe
   t14.exe
   t15.exe
+  t16.exe
   t17.exe
   t18.exe
   t19.exe

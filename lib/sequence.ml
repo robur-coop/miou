@@ -15,17 +15,17 @@ external node_of_t : 'a t -> 'a node = "%identity"
 
 exception Empty
 
-let make g =
+let create g =
   let rec t = { g; prev= t; next= t } in
   t
 
 let remove node =
-  if node.active then begin
+  if node.active then (
     node.active <- false;
+    node.data <- Obj.magic ();
     let t = t_of_node node in
     t.prev.next <- t.next;
-    t.next.prev <- t.prev
-  end
+    t.next.prev <- t.prev)
 
 let is_empty (t : 'a t) = t.next == t
 let data { data; _ } = data
@@ -72,22 +72,28 @@ let take t =
   else if Random.State.bool t.g then take_r t
   else take_l t
 
+let take_r t = if is_empty t then raise Empty else take_r t
+let take_l t = if is_empty t then raise Empty else take_l t
+
 let iter ~f t =
   let rec go cur =
-    if cur != t then begin
+    if cur != t then (
       let node = node_of_t cur in
       if node.active then f node.data;
-      go node.next
-    end
+      go node.next)
   in
   go t.next
 
-let iter_on ~f t =
+let iter_node ~f t =
   let rec go cur =
-    if cur != t then begin
+    if cur != t then (
       let node = node_of_t cur in
       if node.active then f node;
-      go node.next
-    end
+      go node.next)
   in
   go t.next
+
+let to_list t =
+  let res = ref [] in
+  let f data = res := data :: !res in
+  iter ~f t; List.rev !res

@@ -18,6 +18,8 @@ let hash_of_blob filename =
   let res = go (Bytes.create 0x1000) ctx in
   close_in ic; res
 
+let empty_tree = Hash.digest_string "tree 0\000"
+
 let rec hash_of_tree filename =
   let entries = Sys.readdir filename in
   let entries =
@@ -30,37 +32,34 @@ let rec hash_of_tree filename =
   in
   hash_of_entries entries
 
-and hash_of_entries entries =
-  let entries =
-    List.rev_map
-      (function
-        | `Dir, filename ->
-            Miou.call_cc @@ fun () ->
-            let name = Filename.basename filename in
-            let hash = hash_of_tree filename in
-            Fmt.str "40000 %s\000%s" name (Hash.to_raw_string hash)
-        | `Normal, filename ->
-            Miou.call @@ fun () ->
-            let name = Filename.basename filename in
-            let hash = hash_of_blob filename in
-            Fmt.str "100644 %s\000%s" name (Hash.to_raw_string hash))
-      entries
-  in
-  let entries =
-    if [] = entries then []
-    else
-      List.rev_map
-        (function Ok str -> str | Error exn -> raise exn)
-        (Miou.await_all entries)
-  in
-  let ctx = Hash.empty in
-  let len = List.fold_left (fun acc str -> acc + String.length str) 0 entries in
-  let str = Fmt.str "tree %d\000" len in
-  let ctx = Hash.feed_string ctx str in
-  let ctx =
-    List.fold_left (fun ctx str -> Hash.feed_string ctx str) ctx entries
-  in
-  Hash.get ctx
+and perform = function
+  | `Dir, filename ->
+      let name = Filename.basename filename in
+      let hash = hash_of_tree filename in
+      Fmt.str "40000 %s\000%s" name (Hash.to_raw_string hash)
+  | `Normal, filename ->
+      let name = Filename.basename filename in
+      let hash = hash_of_blob filename in
+      Fmt.str "100644 %s\000%s" name (Hash.to_raw_string hash)
+
+and hash_of_entries = function
+  | [] -> empty_tree
+  | hd :: tl ->
+      let entries =
+        let prm = Miou.call_cc @@ fun () -> perform hd in
+        Miou.await prm :: Miou.parallel perform tl
+        |> List.map (function Ok v -> v | Error exn -> raise exn)
+      in
+      let ctx = Hash.empty in
+      let len =
+        List.fold_left (fun acc str -> acc + String.length str) 0 entries
+      in
+      let str = Fmt.str "tree %d\000" len in
+      let ctx = Hash.feed_string ctx str in
+      let ctx =
+        List.fold_left (fun ctx str -> Hash.feed_string ctx str) ctx entries
+      in
+      Hash.get ctx
 
 let run fn arg = Miou.run @@ fun () -> fn arg
 

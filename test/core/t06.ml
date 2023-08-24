@@ -4,12 +4,7 @@
    in parallel, we should consume only 1s to terminate this program. *)
 
 let sleep () = Unix.sleepf 1.
-
-let prgm () =
-  Miou.run @@ fun () ->
-  let a = Miou.call sleep in
-  let b = Miou.call sleep in
-  Miou.await_exn a; Miou.await_exn b
+let prgm () = Miou.run @@ fun () -> ignore (Miou.parallel sleep [ (); () ])
 
 let () =
   let t0 = Clock.now () in

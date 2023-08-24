@@ -1,3 +1,3 @@
 (executable
  (name main)
- (libraries miouu))
+ (libraries fmt miou))

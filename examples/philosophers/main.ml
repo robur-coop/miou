@@ -49,26 +49,29 @@ let philosopher sem state i =
     Miou.yield ();
     go ()
   in
-  go
+  go ()
 
 let () =
   let ts =
     match int_of_string Sys.argv.(1) with value -> value | exception _ -> 30
   in
-  Miouu.run ~domains:6 @@ fun () ->
+  Miouu.run @@ fun () ->
   let sem = Array.init 5 (fun _ -> Semaphore.Binary.make false) in
   let state = Array.init 5 (fun _ -> Thinking) in
   let sleep =
-    Miou.call @@ fun () ->
+    Miou.call_cc @@ fun () ->
     let finally = Array.iter Semaphore.Binary.release in
     let t = Miou.Ownership.own ~finally sem in
     Miouu.sleep (Float.of_int ts);
     finally sem;
     Miou.Ownership.disown t
   in
-  let uid01 = Miou.call (philosopher sem state 00) in
-  let uid02 = Miou.call (philosopher sem state 01) in
-  let uid03 = Miou.call (philosopher sem state 02) in
-  let uid04 = Miou.call (philosopher sem state 03) in
-  let uid05 = Miou.call (philosopher sem state 04) in
-  Miou.await_first [ uid01; uid02; uid03; uid04; uid05; sleep ] |> ignore
+  let philosophers =
+    List.init (Stdlib.Domain.recommended_domain_count () - 1) Fun.id
+  in
+  let philosophers =
+    Miou.call_cc @@ fun () ->
+    ignore (Miou.parallel (philosopher sem state) philosophers)
+  in
+  Miou.yield ();
+  Miou.await_first [ philosophers; sleep ] |> ignore
