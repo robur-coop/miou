@@ -9,7 +9,7 @@ module Cond : sig
 
       This module reimplements the {!module:Condition} with [miou]. The
       behaviour remains the same, except that the user can
-      {!val:Miou.cancel} a task while it is waiting for a signal/broadcast. 
+      {!val:Miou.cancel} a task while it is waiting for a signal/broadcast.
     *)
 
   type t
@@ -85,7 +85,7 @@ val sleep : float -> unit
 val of_file_descr :
   ?non_blocking:bool -> ?owner:Ownership.t -> Unix.file_descr -> file_descr
 (** [of_file_descr ?non_blocking ?owner fd] creates a new {!type:file_descr}.
-    Depending on [non_blocking] (defaults to true), we set the given [fd] to
+    Depending on [non_blocking] (defaults to [true]), we set the given [fd] to
     non-blocking mode or not. The user can also specify the owner of the given
     [fd]. Otherwise, we consider the current task as the owner. *)
 
@@ -93,7 +93,7 @@ val to_file_descr : file_descr -> Unix.file_descr
 (** [to_file_descr fd] returns the {i real} {!type:Unix.file_descr}. *)
 
 val owner : file_descr -> Ownership.t
-(** [owner own] returns the witness of the task's ownership. Its useful to pass
+(** [owner fd] returns the witness of the task's ownership. It is useful to pass
     the ownership to a sub-task:
 
     {[
@@ -110,7 +110,7 @@ val tcpv6 : unit -> file_descr
 (** [tcpv6 ()] allocates a new socket owned by the current task. *)
 
 val transfer : file_descr -> file_descr
-(** [transfer fd] transfers the ownership of [fd] into the parent of the given
+(** [transfer fd] transfers the ownership of [fd] into the parent of the current
     task. *)
 
 val disown : file_descr -> unit

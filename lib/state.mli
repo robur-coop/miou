@@ -9,9 +9,6 @@
     - the communist idea of being able to fairly share the CPU time to our tasks
 
     In this sense, the scheduler needs basic operations in the manipulation of
-    tasks. Tasks are the functions (in the OCaml sense) to be executed.
-
-    In this sense, the scheduler needs basic operations in the manipulation of
     tasks. Tasks are the functions (in the OCaml sense) to be executed. The
     scheduler must be able to:
     1) launch a task / apply a function
