@@ -75,9 +75,9 @@ module Ownership : sig
       Note that even in this situation, [miou] calls the finaliser. *)
 
   val transfer : t -> unit
-  (** [tranfer t] transfers the ownership to the parent. This can be interesting
-      when the resource is locked into a small promise in conjunction with
-      others and the parent will make real use of it such as:
+  (** [transfer t] transfers the ownership to the parent. This can be
+      interesting when the resource is locked into a small promise in
+      conjunction with others and the parent will make real use of it such as:
 
       {[
         # exception Timeout
@@ -221,7 +221,7 @@ val parallel : ('a -> 'b) -> 'a list -> ('b, exn) result list
     designated points in the program, to "join" (merge) at a subsequent point
     and resume sequential execution.
 
-    Let's take the example of a sequential merge-sorte:
+    Let's take the example of a sequential merge-sort:
 
     {[
       let sort ~compare (arr, lo, hi) =
@@ -434,7 +434,7 @@ val cancel : 'a t -> unit
         Miou.await_exn p ;;
       Resolved!
       Exception: Miou.Cancelled.
-    ]} 
+    ]}
 
     We can only {!val:cancel} for a promise that the task has created.
 

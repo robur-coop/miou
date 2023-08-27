@@ -35,4 +35,4 @@ val to_list : 'a t -> 'a list
 val transfer : 'a t -> 'a t
 (** [transfer q] returns new queue in which we have added all of [q]'s elements,
     then clears [q]. It's an atomically safe equivalent to the sequence
-    [let q' = make () in drop ~f:(fun x -> enqueue q x) q'; q']. *)
+    [let q' = make () in drop ~f:(fun x -> enqueue q' x) q; q']. *)
