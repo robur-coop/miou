@@ -2,7 +2,7 @@ module Queue : sig
   (** A lock-free queue.
 
       To be able to implement a scheduler across multiple domains, we must
-      have a Thread-safe Queue. This thread-safe implementation provides basic
+      have a domain-safe Queue. This domain-safe implementation provides basic
       operations for a queue: {!val:enqueue} & {!val:dequeue}. *)
 
   type 'a t
@@ -37,6 +37,28 @@ module Queue : sig
 end
 
 module Ownership : sig
+  (** {2 Ownership of resources.}
+
+      {v La propriété, c'est le vol v}
+
+      Beyond the capitalist idea (even if certain libertarians would qualify the
+      notion of private property), it is often useful to associate resources
+      with the execution of a task in order to free them as soon as the said
+      task is completed (abnormally or not).
+
+      Miou offers such a mechanism where the user can associate a resource ['a]
+      with a promise (with {!val:own}). When the task associated with this
+      promise is terminated, Miou will check that all the resources have been
+      released (using {!val:disown}). If this is not the case, Miou will call
+      the "finaliser" specified by the user and fail with an "uncatchable"
+      exception: [Resource_leak].
+
+      Note that the user must release these resources {b and} {!val:disown}. In
+      fact, {!val:disown} does {b not} call the finaliser (which is only
+      executed in an abnormal situation: when the task has raised an exception
+      or when a resource has not been released).
+  *)
+
   type t
   (** The type of ownerships. *)
 
@@ -54,7 +76,12 @@ module Ownership : sig
           await_exn p ;;
         Resource released!
         Exception: Failure "p".
-      }] *)
+      }]
+
+      {b NOTE}: Finaliser has no effect. This is because it is not "ordered"
+      like a usual task. Using Miou functions (such as {!val:await} or
+      {!val:cancel}) in the finaliser will raise an exception:
+      {!exn:Stdlib.Effect.Unhandled}. *)
 
   val disown : t -> unit
   (** [disown t] informs [miou] that you have properly released the resource. If
@@ -96,8 +123,12 @@ module Ownership : sig
 
   val check : t -> unit
   (** [check t] verifies that the given resource [t] is owned by the current
-      task. *)
+      task. If a task tries to use a resource that does not belong to it,
+      {!val:check} will raise an {i uncatchable} exception [Not_owner]. *)
 end
+
+type 'a t
+(** Type of promises. *)
 
 module Domain : sig
   module Uid : sig
@@ -106,6 +137,7 @@ module Domain : sig
     val equal : t -> t -> bool
     val compare : t -> t -> int
     val pp : Format.formatter -> t -> unit
+    val to_int : t -> int
   end
 
   val self : unit -> Uid.t
@@ -119,12 +151,9 @@ module Promise : sig
     val compare : t -> t -> int
     val pp : Format.formatter -> t -> unit
   end
+
+  val pp : Format.formatter -> 'a t -> unit
 end
-
-exception Cancelled
-
-type 'a t
-(** Type of promises. *)
 
 (** {2 Daemon and orphan tasks.}
 
@@ -132,11 +161,23 @@ type 'a t
     user to considering certain anti-patterns. The best known is the
     {i background} task: it consists of running a task that we would like to
     {i detach} from the main task so that it can continue its life in autonomy.
+    For OCaml/[lwt] aficionados, this corresponds to [Lwt.async]:
 
-    Not that we want to impose an authoritarian family approach, but the fact
-    remains that these {i orphaned} tasks have resources that we need to manage
-    and free-up (even in an abnormal situation). And we'd like to sleep easy
-    tonight.
+    {[
+      val detach : (unit -> unit t) -> unit
+    ]}
+
+    Not that we want to impose an authoritarian family approach between parent
+    and children, but the fact remains that these {i orphaned} tasks have
+    resources that we need to manage and free-up (even in an abnormal
+    situation). We consider detachment to be an {i anti-pattern}, since it
+    requires the developer to take particular care (compared to other promises)
+    not to 'forget' resources that could lead to memory leaks.
+
+    Instead of letting the developer commit to using a function that might be
+    problematic, Miou offers a completely different interface that consists of
+    assisting the developer in a coherent (and consistent) approach to
+    responding to a particular design that is not all that systematic.
 
     So a promise can be associated with an {!type:orphans}. The latter will then
     collect the results of the associated promise tasks and give you back the
@@ -186,7 +227,7 @@ val call_cc :
 
 val call : ?orphans:'a orphans -> ?give:Ownership.t list -> (unit -> 'a) -> 'a t
 (** [call fn] returns a promise {!type:t} representing the state of the task
-    given as an argu,ent. The task will be run in parallel: the domain used to
+    given as an argument. The task will be run in parallel: the domain used to
     run the task is different from the domain with the promise. This assertion
     is always true:
 
@@ -255,7 +296,7 @@ val parallel : ('a -> 'b) -> 'a list -> ('b, exn) result list
 
     [miou] does not interact with the system, only with the OCaml runtime. As a
     result, it does not implement the usual input/output operations.
-    Nevertheless, it offers a farily simple API for using functions that
+    Nevertheless, it offers a fairly simple API for using functions that
     interact with the system (and that can, above all, block).
 
     One of the rules of [miou] is never to give it blocking functions to eat (in
@@ -269,10 +310,10 @@ val parallel : ('a -> 'b) -> 'a list -> ('b, exn) result list
     an user's defined function, which you can specify using the {!val:run}
     function (see [events] argument).
 
-    This user's defined function return a {!type:task} which requires our
+    This user's defined function return a {!type:continue} which requires our
     {!type:syscall} (which made the suspension point) and a non-blocking
-    function ([unit -> unit]). At last, [miou] will be able to continue from our
-    suspension point.
+    function ([unit -> unit]). With this value, [miou] will be able to continue
+    from our suspension point.
 
     For more information on this API, a tutorial is available on how to
     implement {!page:sleepers}: tasks that block your process for a time. *)
@@ -286,21 +327,30 @@ type 'a syscall
 type uid = private int [@@immediate]
 (** The type of unique IDs of {!type:syscall}s. *)
 
-type continue
-type events = { select: unit -> continue list; interrupt: unit -> unit }
-
-val task : 'a syscall -> (unit -> unit) -> continue
-
 val make : (unit -> 'a) -> 'a syscall
 (** [make return] creates a {i syscall} which permits the user to create a new
-    suspension point. *)
+    suspension point via {!val:suspend}. *)
 
 val suspend : 'a syscall -> 'a
 (** [suspend syscall] creates an user's defined suspension point. [miou] will
-    keep it and only the user is able to {i continue} it via {!type:events}. *)
+    keep it internally and only the user is able to {i continue} it via
+    {!type:events} and a {!type:continue}. *)
 
 val uid : 'a syscall -> uid
 (** [uid syscall] returns the unique ID of the syscall. *)
+
+type continue
+(** The type of continuations.
+
+    A continuation is a suspension point and a function which can "unblock" the
+    suspension point. *)
+
+val task : 'a syscall -> (unit -> unit) -> continue
+(** [task syscall fn] creates a {!type:continue} value which can be used by
+    [miou] to unlock via the given [fn] the user's defined suspension point
+    represented by the given [syscall]. *)
+
+type events = { select: unit -> continue list; interrupt: unit -> unit }
 
 val is_pending : 'a syscall -> bool
 (** [is_pending syscall] checks the status of the suspension point. A suspension
@@ -356,8 +406,6 @@ val await_all : 'a t list -> ('a, exn) result list
     reraises the said exception. All tasks are waited for, regardless of whether
     any fail. *)
 
-val await_one : 'a t list -> ('a, exn) result
-
 val await_first : 'a t list -> ('a, exn) result
 (** [await_first prms] waits for a task to finish (by exception or normally) and
     cancels all the others. If several tasks finish "at the same time", one of
@@ -370,6 +418,20 @@ val await_first : 'a t list -> ('a, exn) result
         let p1 = Miou.call_cc @@ fun () -> Miouu.sleep 2.; raise Timeout in
         Miou.await_first [ p0; p1 ] ;;
       - : (unit, exn) result = Ok ()
+    ]} *)
+
+val await_one : 'a t list -> ('a, exn) result
+(** [await_one prms] waits for a task to finish (by exception or normally).
+    Despite {!val:await_first}, {!val:await_one} does {b not} cancel all the
+    others. The user must {!val:await} them otherwise [miou] will not consider
+    these promises as resolved and will raise [Still_has_children].
+
+    {[
+      # Miou.run @@ fun () ->
+        Miou.await_one
+          [ Miou.call_cc (Fun.const 1)
+          ; Miou.call_cc (Fun.const 2) ] ;;
+      Exception: Miou.Still_has_children
     ]} *)
 
 val yield : unit -> unit
@@ -395,6 +457,9 @@ val yield : unit -> unit
     ]} *)
 
 (** {2 Cancellation.} *)
+
+exception Cancelled
+(** Used when a task is cancelled by {!val:cancel}. *)
 
 val cancel : 'a t -> unit
 (** [cancel prm] {i asynchronously} cancels the given promise [prm]. [miou]
@@ -440,7 +505,7 @@ val cancel : 'a t -> unit
 
     {b NOTE}: Cancellation {i asynchronicity} means that other concurrent tasks
     can run while the cancellation is in progress. In fact, in the case of an
-    cancellation of a parallel task (see {!val:call}, the cancellation may take
+    cancellation of a parallel task (see {!val:call}), the cancellation may take
     a certain amount of time (the time it takes for the domains to synchronise)
     which should not affect the opportunity for other concurrent tasks to run.
 *)

@@ -5,14 +5,12 @@
    terminate with [Fatal error: exception Miou.Still_has_children]. *)
 
 let prgm () =
-  Miouu.run @@ fun () -> ignore (Miou.call (fun () -> Miouu.sleep 10.))
+  Miouc.run @@ fun () -> ignore (Miou.call (fun () -> Miouc.sleep 10))
 
 let () =
-  let t0 = Clock.now () in
   let rs = try Ok (prgm ()) with exn -> Error exn in
-  let t1 = Clock.now () in
   match rs with
   | Ok () -> failwith "t09"
   | Error exn ->
-      assert (t1 -. t0 < 10.);
+      assert (Atomic.get Miouc.tick = 0);
       raise exn

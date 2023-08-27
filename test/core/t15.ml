@@ -4,12 +4,10 @@
 *)
 
 let prgm () =
-  Miou.run @@ fun () ->
-  let p = Miou.call_cc (fun () -> Unix.sleepf 1.) in
+  Miouc.run @@ fun () ->
+  let p = Miou.call_cc (fun () -> Miouc.sleep 1) in
   Miou.yield (); Miou.cancel p
 
 let () =
-  let t0 = Clock.now () in
-  prgm ();
-  let t1 = Clock.now () in
-  assert (t1 -. t0 >= 1.)
+  let () = prgm () in
+  assert (Atomic.get Miouc.tick = 0)
