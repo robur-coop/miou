@@ -14,9 +14,9 @@ let rec consume_interrupt ic =
 
 let update sleepers n =
   Hashtbl.filter_map_inplace
-    (fun _ (prm, until) ->
+    (fun _ (syscall, until) ->
       let until' = Float.max 0. (until -. n) in
-      Some (prm, until'))
+      Some (syscall, until'))
     sleepers
 
 let minimums sleepers =
@@ -50,14 +50,14 @@ let select interrupt () =
     | Some ts -> Float.min ts 0.100
     | None -> 0.
   in
-  let t0 = Clock.now () in
+  let t0 = Unix.gettimeofday () in
   match Unix.select [ interrupt ] [] [] ts with
   | [], _, _ ->
-      let t1 = Clock.now () in
+      let t1 = Unix.gettimeofday () in
       update sleepers (t1 -. t0);
       minimums sleepers
   | _ ->
-      let t1 = Clock.now () in
+      let t1 = Unix.gettimeofday () in
       update sleepers (t1 -. t0);
       consume_interrupt interrupt;
       minimums sleepers
@@ -69,45 +69,36 @@ let events _ =
   in
   { Miou.select= select ic; interrupt }
 
-let program0 () =
-  Miou.run ~events @@ fun () ->
-  let a = Miou.call_cc (fun () -> sleep 1.) in
-  let b = Miou.call_cc (fun () -> sleep 2.) in
-  Miou.await_all [ a; b ]
-  |> List.iter (function Ok () -> () | Error exn -> raise exn)
-
-let program1 () =
-  Miou.run ~events @@ fun () ->
-  Miou.parallel sleep [ 1.; 2. ]
-  |> List.iter (function Ok () -> () | Error exn -> raise exn)
-
-let program2 () =
-  Miou.run ~events @@ fun () ->
-  let a = Miou.call (fun () -> sleep 10.) in
-  sleep 1.;
-  Miou.cancel a;
-  match Miou.await a with Error Miou.Cancelled -> () | _ -> failwith "test"
+let () =
+  let t0 = Unix.gettimeofday () in
+  let () =
+    Miou.run ~events @@ fun () ->
+    let a = Miou.call_cc (fun () -> sleep 1.) in
+    let b = Miou.call_cc (fun () -> sleep 2.) in
+    Miou.await_all [ a; b ]
+    |> List.iter (function Ok () -> () | Error exn -> raise exn)
+  in
+  let t1 = Unix.gettimeofday () in
+  assert (t1 -. t0 < 3.)
 
 let () =
-  Format.eprintf "[0]: %!";
-  let t0 = Clock.now () in
-  program0 ();
-  let t1 = Clock.now () in
-  assert (t1 -. t0 < 3.);
-  Format.eprintf "ok\n%!"
+  let t0 = Unix.gettimeofday () in
+  let () =
+    Miou.run ~events @@ fun () ->
+    Miou.parallel sleep [ 1.; 2. ]
+    |> List.iter (function Ok () -> () | Error exn -> raise exn)
+  in
+  let t1 = Unix.gettimeofday () in
+  assert (t1 -. t0 < 3.)
 
 let () =
-  Format.eprintf "[1]: %!";
-  let t0 = Clock.now () in
-  program1 ();
-  let t1 = Clock.now () in
-  assert (t1 -. t0 < 3.);
-  Format.eprintf "ok\n%!"
-
-let () =
-  Format.eprintf "[2]: %!";
-  let t0 = Clock.now () in
-  program2 ();
-  let t1 = Clock.now () in
-  assert (t1 -. t0 < 10.);
-  Format.eprintf "ok\n%!"
+  let t0 = Unix.gettimeofday () in
+  let () =
+    Miou.run ~events @@ fun () ->
+    let a = Miou.call (fun () -> sleep 10.) in
+    sleep 1.;
+    Miou.cancel a;
+    match Miou.await a with Error Miou.Cancelled -> () | _ -> failwith "test"
+  in
+  let t1 = Unix.gettimeofday () in
+  assert (t1 -. t0 < 10.)

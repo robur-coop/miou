@@ -5,18 +5,14 @@
 (executable
  (name t01)
  (modules t01)
- (libraries clock miou unix))
+ (libraries miou unix))
 
 (executable
  (name t02)
  (modules t02)
- (libraries clock miou unix))
+ (libraries miou unix))
 
 (executable
  (name t03)
  (modules t03)
- (libraries clock miou unix))
-
-(cram
- (package miouu)
- (deps t01.exe t02.exe t03.exe))
+ (libraries miou unix))

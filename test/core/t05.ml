@@ -4,14 +4,12 @@
    [Miou.Cancelled] and we check that we did not spend 10s. *)
 
 let prgm () =
-  Miouu.run @@ fun () ->
-  let a = Miou.call (fun () -> Miouu.sleep 10.) in
-  Miouu.sleep 1.;
+  Miouc.run ~domains:1 @@ fun () ->
+  let a = Miou.call (fun () -> Miouc.sleep 10) in
+  Miouc.sleep 1;
   Miou.cancel a;
   match Miou.await a with Error Miou.Cancelled -> () | _ -> failwith "t05"
 
 let () =
-  let t0 = Clock.now () in
-  prgm ();
-  let t1 = Clock.now () in
-  assert (t1 -. t0 < 10.)
+  let () = prgm () in
+  assert (Atomic.get Miouc.tick < 10)

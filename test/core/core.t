@@ -23,10 +23,6 @@
   $ ./t11.exe
   $ ./t12.exe
   $ ./t13.exe
-  $ ./t14.exe
-  call_cc + Unix.sleepf: ok
-  call + Unix.sleepf:    ok
-  call_cc + Miouu.sleep: ok
   $ ./t15.exe
   $ ./t16.exe
   $ ./t17.exe

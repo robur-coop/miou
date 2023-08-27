@@ -12,6 +12,7 @@ module Domain_uid = struct
   let equal = Int.equal
   let compare = Int.compare
   let pp = Format.pp_print_int
+  let to_int x = x
 
   let gen, reset =
     let value = Atomic.make (null + 1) in
@@ -905,7 +906,7 @@ module Domain = struct
     | exception Heapq.Empty -> unblock_awaits_with_system_tasks pool domain
     | _tick, elt ->
         once pool domain elt;
-        if system_tasks_suspended domain then
+        if all_tasks_await domain && system_tasks_suspended domain then
           unblock_awaits_with_system_tasks pool domain
 end
 

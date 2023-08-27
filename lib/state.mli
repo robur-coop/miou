@@ -24,7 +24,7 @@
     {i quanta} effects (which we will of course have to manage). The {i quanta}
     is the number of effects the task can produce.
 
-    {3 Note about the {!module:Effect} module.}
+    {3 Note about the [Effect] module.}
 
     If you follow us well and you are already familiar with the effects module
     in OCaml, you suspect that our implementation currently uses the
