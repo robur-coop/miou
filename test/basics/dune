@@ -1,18 +1,18 @@
 (executable
  (name t01)
  (modules t01)
- (libraries miouu))
+ (libraries miou.unix))
 
 (executable
  (name t02)
  (modules t02)
- (libraries miouu))
+ (libraries miou.unix))
 
 (executable
  (name t03)
  (modules t03)
- (libraries miouu))
+ (libraries miou.unix))
 
 (cram
- (package miouu)
+ (package miou)
  (deps t01.exe t02.exe t03.exe))

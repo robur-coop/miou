@@ -31,4 +31,4 @@ let prgm () =
   Miou.parallel perform [ `Push (box, ()); `Wait; `Wait ]
   |> List.iter @@ function Error exn -> raise exn | Ok () -> ()
 
-let () = Miouu.run ~domains:3 prgm
+let () = Miou_unix.run ~domains:3 prgm

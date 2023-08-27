@@ -66,7 +66,7 @@
 (executable
  (name t14)
  (modules t14)
- (libraries miouc miouu))
+ (libraries miouc miou.unix))
 
 (executable
  (name t15)
@@ -129,7 +129,7 @@
  (libraries miou))
 
 (cram
- (package miouu)
+ (package miou)
  (deps
   t01.exe
   t02.exe

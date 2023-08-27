@@ -1,6 +1,6 @@
 let listen sockaddr =
-  let fd = Miouu.tcpv4 () in
-  Miouu.bind_and_listen fd sockaddr;
+  let fd = Miou_unix.tcpv4 () in
+  Miou_unix.bind_and_listen fd sockaddr;
   fd
 
 let sockaddr_to_string = function
@@ -11,11 +11,11 @@ let sockaddr_to_string = function
 let handler fd =
   let buf = Bytes.create 0x100 in
   let rec go () =
-    let len = Miouu.read fd buf ~off:0 ~len:(Bytes.length buf) in
+    let len = Miou_unix.read fd buf ~off:0 ~len:(Bytes.length buf) in
     if len > 0 then (
-      Miouu.write fd (Bytes.unsafe_to_string buf) ~off:0 ~len;
+      Miou_unix.write fd (Bytes.unsafe_to_string buf) ~off:0 ~len;
       go ())
-    else Miouu.close fd
+    else Miou_unix.close fd
   in
   go
 
@@ -27,12 +27,12 @@ let rec clean orphans =
 let prgm sockaddr () =
   let rec server orphans fd =
     clean orphans;
-    let fd', _sockaddr = Miouu.accept fd in
-    ignore (Miou.call ~give:[ Miouu.owner fd' ] ~orphans (handler fd'));
+    let fd', _sockaddr = Miou_unix.accept fd in
+    ignore (Miou.call ~give:[ Miou_unix.owner fd' ] ~orphans (handler fd'));
     server orphans fd
   in
   let serve () = server (Miou.orphans ()) (listen sockaddr) in
   Miou.parallel serve [ (); (); (); () ]
   |> List.iter (function Error exn -> raise exn | Ok () -> ())
 
-let () = Miouu.run (prgm (Unix.ADDR_INET (Unix.inet_addr_loopback, 9000)))
+let () = Miou_unix.run (prgm (Unix.ADDR_INET (Unix.inet_addr_loopback, 9000)))

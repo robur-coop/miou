@@ -6,8 +6,8 @@ type 'a p = {
   ; mutable rdpos: int
   ; mutable wrpos: int
   ; lock: Mutex.t
-  ; non_empty: Miouu.Cond.t
-  ; non_full: Miouu.Cond.t
+  ; non_empty: Miou_unix.Cond.t
+  ; non_full: Miou_unix.Cond.t
 }
 
 let make size v =
@@ -17,8 +17,8 @@ let make size v =
   ; lock
   ; rdpos= 0
   ; wrpos= 0
-  ; non_empty= Miouu.Cond.make ~mutex:lock ()
-  ; non_full= Miouu.Cond.make ~mutex:lock ()
+  ; non_empty= Miou_unix.Cond.make ~mutex:lock ()
+  ; non_full= Miou_unix.Cond.make ~mutex:lock ()
   }
 
 let put t data =
@@ -26,19 +26,19 @@ let put t data =
   let fn () =
     t.buffer.(t.wrpos) <- data;
     t.wrpos <- (t.wrpos + 1) mod Array.length t.buffer;
-    Miouu.Cond.signal t.non_empty
+    Miou_unix.Cond.signal t.non_empty
   in
-  Miouu.Cond.until ~predicate ~fn t.non_full
+  Miou_unix.Cond.until ~predicate ~fn t.non_full
 
 let get t =
   let predicate () = t.wrpos = t.rdpos in
   let fn () =
     let data = t.buffer.(t.rdpos) in
     t.rdpos <- (t.rdpos + 1) mod Array.length t.buffer;
-    Miouu.Cond.signal t.non_full;
+    Miou_unix.Cond.signal t.non_full;
     data
   in
-  Miouu.Cond.until ~predicate ~fn t.non_empty
+  Miou_unix.Cond.until ~predicate ~fn t.non_empty
 
 let rec produce t n max =
   let () = put t n in
@@ -55,7 +55,7 @@ let perform = function
   | `Consume (q, cur, max) -> consume q cur max
 
 let () =
-  Miouu.run ~domains:3 @@ fun () ->
+  Miou_unix.run ~domains:3 @@ fun () ->
   let t0 = make 20 0 and t1 = make 30 0 in
   let ress =
     let prm = Miou.call_cc @@ fun () -> consume t1 0 8000 in
