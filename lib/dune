@@ -4,7 +4,7 @@
  (modules miou logs heapq sequence queue state))
 
 (library
- (name miouu)
- (public_name miouu)
- (modules miouu)
+ (name miou_unix)
+ (public_name miou.unix)
+ (modules miou_unix)
  (libraries miou unix))

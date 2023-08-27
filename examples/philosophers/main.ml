@@ -17,7 +17,7 @@ let think i =
   let duration = 1. +. Random.float 5. in
   with_lock output (fun () ->
       Format.printf "%02d is thinking %fs\n%!" i duration);
-  Miouu.sleep duration
+  Miou_unix.sleep duration
 
 let take_forks sem state i =
   let () =
@@ -31,7 +31,7 @@ let take_forks sem state i =
 let eat i =
   let duration = 1. +. Random.float 5. in
   with_lock output (fun () -> Format.printf "%02d is eating\n%!" i);
-  Miouu.sleep duration
+  Miou_unix.sleep duration
 
 let put_forks sem state i =
   with_lock critical @@ fun () ->
@@ -55,14 +55,14 @@ let () =
   let ts =
     match int_of_string Sys.argv.(1) with value -> value | exception _ -> 30
   in
-  Miouu.run @@ fun () ->
+  Miou_unix.run @@ fun () ->
   let sem = Array.init 5 (fun _ -> Semaphore.Binary.make false) in
   let state = Array.init 5 (fun _ -> Thinking) in
   let sleep =
     Miou.call_cc @@ fun () ->
     let finally = Array.iter Semaphore.Binary.release in
     let t = Miou.Ownership.own ~finally sem in
-    Miouu.sleep (Float.of_int ts);
+    Miou_unix.sleep (Float.of_int ts);
     finally sem;
     Miou.Ownership.disown t
   in

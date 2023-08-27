@@ -1,18 +1,18 @@
-(* NOTE(dinosaure): This code show a basic usage of [Miouu.Cond.t]. *)
+(* NOTE(dinosaure): This code show a basic usage of [Miou_unix.Cond.t]. *)
 
 let () =
-  Miouu.run @@ fun () ->
+  Miou_unix.run @@ fun () ->
   let v = ref None in
   let m = Mutex.create () in
-  let t = Miouu.Cond.make ~mutex:m () in
+  let t = Miou_unix.Cond.make ~mutex:m () in
   let p0 () =
     Mutex.lock m;
     v := Some ();
-    Miouu.Cond.signal t;
+    Miou_unix.Cond.signal t;
     Mutex.unlock m
   in
   let p1 () =
-    while Miouu.Cond.wait ~predicate:(fun () -> Option.is_none !v) t do
+    while Miou_unix.Cond.wait ~predicate:(fun () -> Option.is_none !v) t do
       ()
     done;
     match !v with Some v -> v | None -> failwith "p1"
