@@ -3,11 +3,11 @@ open Miou
 module Cond : sig
   (** Due to our scheduler, we must re-implement few things like "Condition" to
       be able to wait and signal (or broadcast) our tasks. The suspension of a
-      task must always be notified to [miou]. It is possible to use real
-      {!type:Condition.t} with [miou] - however, some mechanisms such as
+      task must always be notified to Miou. It is possible to use real
+      {!type:Condition.t} with Miou - however, some mechanisms such as
       cancellation will not work.
 
-      This module reimplements the {!module:Condition} with [miou]. The
+      This module reimplements the {!module:Condition} with Miou. The
       behaviour remains the same, except that the user can
       {!val:Miou.cancel} a task while it is waiting for a signal/broadcast.
     *)
@@ -19,7 +19,7 @@ module Cond : sig
   (** [make ?mutex ()] creates and return a new condition variable. A condition
       needs a {!type:Mutex.t} to have internal inter-domain synchronization
       mechanisms. This mutex can be used by several conditions {!type:t}, so it
-      is possible to specify your own {!type:Mutex.t} instead of letting [miou]
+      is possible to specify your own {!type:Mutex.t} instead of letting Miou
       create one. *)
 
   val wait : predicate:(unit -> bool) -> t -> bool
@@ -45,9 +45,9 @@ module Cond : sig
       [t], if there is one. If there is none, this call has no effect. *)
 end
 
-(** {1 The Unix layer of [miou].}
+(** {1 The Unix layer of Miou.}
 
-    This module offers a re-implementation of the I/O according to [miou]'s
+    This module offers a re-implementation of the I/O according to Miou's
     model. In addition to managing possible suspensions due to I/O, the module
     also provides a notion of "ownership" which checks {i at runtime} whether
     the task is able to perform I/O on the {!type:file_descr} used. It also
@@ -68,11 +68,11 @@ val write : file_descr -> string -> off:int -> len:int -> unit
     [fd]. *)
 
 val connect : file_descr -> Unix.sockaddr -> unit
-(** [connect fd sockaddr] is a [miou] friendly {!val:Unix.connect}. The function
+(** [connect fd sockaddr] is a Miou friendly {!val:Unix.connect}. The function
     accepts only {!type:file_descr}s in non-blocking mode. *)
 
 val accept : ?cloexec:bool -> file_descr -> file_descr * Unix.sockaddr
-(** [accept ?cloexec fd] is a [miou] friendly {!Unix.accept} which returns
+(** [accept ?cloexec fd] is a Miou friendly {!Unix.accept} which returns
     file descritptors in non-blocking mode. *)
 
 val close : file_descr -> unit
@@ -114,7 +114,7 @@ val transfer : file_descr -> file_descr
     task. *)
 
 val disown : file_descr -> unit
-(** [disown fd] informs [miou] that the current task is not the owner of the
+(** [disown fd] informs Miou that the current task is not the owner of the
     given [fd] anymore. It's useful when you want to {i pass} the given
     [fd] to another task. *)
 
