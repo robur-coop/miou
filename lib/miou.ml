@@ -2,6 +2,7 @@ let failwith fmt = Format.kasprintf failwith fmt
 let str fmt = Format.kasprintf Fun.id fmt
 
 module Queue = Queue
+module State = State
 
 (** Uid modules *)
 

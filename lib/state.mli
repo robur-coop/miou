@@ -1,4 +1,4 @@
-(** {1:An introduction about Miou's internals.}
+(** {1 An introduction about Miou's internals.}
 
     This module proposes a re-interpretation of the effects management offered
     by OCaml 5 centered on the idea necessary in the implementation of a
@@ -11,11 +11,11 @@
     In this sense, the scheduler needs basic operations in the manipulation of
     tasks. Tasks are the functions (in the OCaml sense) to be executed. The
     scheduler must be able to:
-    1) launch a task / apply a function
-    2) stop a task at a specific point according to a metric
-    3) have a representation of this suspended task (a {i state}) and be able to
-       store it
-    4) restart a task from its state
+    + launch a task / apply a function
+    + stop a task at a specific point according to a metric
+    + have a representation of this suspended task (a {i state}) and be able to
+      store it
+    + restart a task from its state
 
     Usually, the metric used to "stop" a task is time. That is to say that we
     could stop a task after 100ms has elapsed for example. Unfortunately, it
@@ -51,7 +51,7 @@
 
     {3 The goal of this interface.}
 
-    This module therefore allows us to "direct" our development on these
+    This module therefore allows us to "drive" our development on these
     principles described above - indeed, the {!module:Effect} module is perhaps
     a little too permissive. Thus, if you have to modify this module and
     specifically this interface, beware of a "balkanization" effect which could
@@ -88,7 +88,12 @@ val make : ('a -> 'b) -> 'a -> 'b t
     state (see {!constructor:Send}), {i discontinue} it with an exception (see
     {!constructor:Fail}), do nothing (see {!constructor:Intr}) or replace the
     current effect by an another one (see {!constructor:Cont} as long as it
-    expects the same type as the previous effect). *)
+    expects the same type as the previous effect).
+
+    {!constructor:Yield} actually {i continue} the execution of the given
+    function state but then stops, even if there is still a number of {i quanta}
+    available when {!val:run} is used. It behaves in the same way as
+    {!constructor:Send} if you use {!val:once}. *)
 type 'a step =
   | Send of 'a
   | Fail of exn
@@ -120,9 +125,13 @@ val run : quanta:int -> perform:perform -> 'a t -> 'a t
 (** [run ~quanta ~perform state] applies {!val:once} [quanta] times. If
     [perform] responds with {!constructor:Intr} (and therefore does nothing),
     even though there may be a few {i quanta} left, the function returns the
-    last state obtained. *)
+    last state obtained.
 
-(** / **)
+    The same applies to {!constructor:Yield}, except that the continuation has
+    burnt itself out. In other words, {!constructor:Yield} is equivalent to
+    [Send (); Intr] but costs only one {i quanta}. *)
+
+(**/**)
 
 val continue_with : ('a, 'b) continuation -> 'a -> 'b t
 val discontinue_with : ('a, 'b) continuation -> exn -> 'b t
