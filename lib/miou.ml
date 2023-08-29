@@ -1,6 +1,8 @@
 let failwith fmt = Format.kasprintf failwith fmt
 let str fmt = Format.kasprintf Fun.id fmt
 
+external reraise : exn -> unit = "%reraise"
+
 module Queue = Queue
 module State = State
 
@@ -872,7 +874,7 @@ module Domain = struct
   let unblock_awaits_with_system_tasks pool domain =
     let open Effect.Deep in
     let retc = Fun.id in
-    let exnc = raise in
+    let exnc = reraise in
     let effc : type c. c Effect.t -> ((c, 'a) continuation -> 'b) option =
       function
       | Syscall_exists uid ->
