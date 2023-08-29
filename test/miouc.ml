@@ -47,7 +47,7 @@ let clean_syscalls () =
       if Miou.is_pending syscall then Some (until, syscall) else None)
     (dom ()).sleepers
 
-let select () =
+let select _domain () =
   clean_syscalls ();
   match Atomic.get (dom ()).interrupt with
   | true ->
@@ -66,12 +66,13 @@ let select () =
       in
       (dom ()).tick <- Atomic.get tick;
       update_sleepers ~quanta ();
+      Unix.sleepf 0.100;
       sleepers ()
 
-let events _ =
+let events domain =
   let dom = dom () in
   let interrupt () = Atomic.set dom.interrupt true in
-  { Miou.interrupt; select }
+  { Miou.interrupt; select= select domain }
 
 let sleep until =
   let syscall = Miou.make (Fun.const ()) in
