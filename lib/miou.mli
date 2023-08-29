@@ -13,10 +13,10 @@
     {3 A task.}
     
     A task is a function on which several operations required by Miou exist:
-    1) a task can be launched/executed
-    2) a task can be stopped (suspended)
-    3) stopping a task produces a state of the task
-    4) a task can be restarted from its state
+    + a task can be launched/executed
+    + a task can be stopped (suspended)
+    + stopping a task produces a state of the task
+    + a task can be restarted from its state
     
     The {!module:State} module offers a more concrete definition of these
     operations with what the OCaml 5 {!module:Effect} module offers. Suspension
@@ -24,11 +24,11 @@
     therefore chosen to be able to suspend a task as soon as it emits an effect.
     
     This is perhaps the most important thing to remember about this definition:
-    a task is suspended as soon as it emits one effect.
+    a task is suspended as soon as it emits {b one} effect.
     
     {3 Suspension.}
     
-    Suspension consists of obtaining a state for the task which we can be
+    Suspension consists of obtaining a {i state} for the task which we can be
     "stored" and which allows us to {i continue} the task. The task has stopped
     at a specific point and its state consists roughly of:
     - the point where the task stopped
@@ -66,14 +66,23 @@
     cannot be 2 tasks executing at the same time. However, the order in which
     the tasks are executed is decided by the scheduler.
     
-    The point of concurrency cen be to "prioritise" the tasks so that the other
+    The policy of concurrency can be to "prioritise" some tasks so that other
     tasks, which depend on the result of the first tasks, can be unblocked. In
-    this case, Miou does {b not} prioritise tasks but has a re-scheduling and
+    our case, Miou does {b not} prioritise tasks but has a re-scheduling and
     execution policy which ensures that all tasks have the same opportunity to
     be executed (and that those producing a result needed by others can be
     executed just as well as the others).
     
-    The user can launch a concurrently-running task using {!val:call_cc}.
+    The user can launch a concurrently-running task using {!val:call_cc}. The
+    function returns {i a promise} ({!type:t}), {i a witness} to the execution
+    of the task. This witness can be used to obtain the result of the task:
+
+    {[
+      # Miou.run @@ fun () ->
+        let promise = Miou.call_cc @@ fun () -> 21 + 21 in
+        Miou.await_exn promise ;;
+      - : int = 42
+    ]}
 
     {3 Parallelism.}
     
@@ -90,8 +99,10 @@
     {!module:Atomic} module.
 
     The user can launch tasks in parallel using {!val:call}. Note that the
-    {i witness} for the task (the promise {!type:t}) is of the same type as that
-    produced by {!val:call_cc}.
+    {i witness} for the parallel task (the promise {!type:t}) is of the same
+    type as that produced by {!val:call_cc}.
+
+    We recommend that you let Miou decide how many domains to allocate.
     
     {4 Domains.}
     
@@ -99,23 +110,31 @@
     it is able to create {!type:Domain.t}. However, the number of domains is
     {b limited}: it is counter-productive to launch 10 domains when we only have
     (physically) 4 cores, for example.
+
+    Miou also differentiates between [dom0] (the main domain that runs your
+    program) and the other domains. The main difference is that {!val:call} (or
+    {!val:parallel}) will {b never} assign a new task in parallel to [dom0].
     
     {3 Synchronisation points.}
     
-    We mentioned earlier that some tasks can 'wait' for the results of other
+    We mentioned earlier that some tasks can "wait" for the results of other
     tasks. We call these "synchronisation points". Since tasks can run
     concurrently and/or in parallel, Miou offers functions where a particular
     state of the tasks (the termination state) is expected.
     
     Miou will then be in a waiting state (it will simply observe the state of
-    the said task until this state has changed) with regard to concurrent and/or
-    parallel tasks:
+    the said task until this state has changed):
     - while waiting for a concurrent task, Miou will then re-schedule and
       execute other tasks in order to "unblock" the first one
     - while waiting for a task to run in parallel, Miou will suggest that other
-      tasks assigned to the same core can run while the first one continues to
-      run (on another core) and return to a waiting state until the task in
+      tasks assigned to the same domain can run while the first one continues to
+      run (on another domain) and return to a waiting state until the task in
       question has finished.
+
+    It may be possible to wait for one ({!val:await}) or more tasks
+    ({!val:await_all}) using their promises. It is also possible to wait for one
+    of the available tasks ({!val:await_first} or {!val:await_one}). The result
+    of the first task to finish will be given when it is used.
     
     {3 System events.}
     
@@ -130,25 +149,27 @@
     ([write]), as well as other system events.
     
     What makes these points of synchronisation of system events different from
-    waiting for the result of a _pure_ task (which does not interact with the
-    system) is that we cannot calculate the waiting time. We can wait a few
+    waiting for the result of a {i pure} task (which does not interact with the
+    system) is that we cannot calculate the {i waiting time}. We can wait a few
     milliseconds or 1 hour for the arrival of a TCP/IP connection, for example.
     
     This makes it difficult to prioritise tasks in relation to each other, as
     we lack too much information to find the optimum order for executing tasks.
+    Once again, Miou doesn't prioritise tasks.
     
     {2 The "round-robin" scheduler.}
     
     Miou implements what is known as a round-robin scheduler. This is a
     scheduler with very simple rules:
-    1) if a task arrives, execute it up to a certain {i quanta}
-    2) if the task has finished, give the result
-    3) if not, re-order the task at the end of the to-do list
-    4) take the next task and repeat the operation.
+    + if a task arrives, execute it up to a certain {i quanta}
+    + if the task has finished, give the result
+    + if not, re-order the task at the end of the to-do list
+    + take the next task and repeat the operation.
     
     The special feature of a round-robin scheduler is that it does not
-    prioritise tasks according to their status. It simply allocates a fair
-    amount of time/{i quanta} of core usage to all tasks (a bit like communism).
+    prioritise tasks according to their status. It simply allocates {b a fair}
+    amount of time/{i quanta} of domain usage to all tasks (a bit like
+    communism).
     
     So, by default, Miou suggests that a task can only emit one and only one
     effect, which is our {!section:quanta}. Most of the functions proposed by
@@ -166,8 +187,8 @@
     fact, the system keeps these events until the application space requests
     them (with [select()]) and consumes them ([read()], [accept()], etc.).
     Miou's objective is to ensure that several tasks (dependent on these events)
-    can all respond to the consumption of these events by the system, without
-    one of them being able to have exclusive execution time on a core.
+    can all respond to the consumption of these events from the system, without
+    one of them being able to have exclusive execution time on a domain.
     
     In this way, a Miou application can respond to the consumption of a [read()]
     and an [accept()] without one of these tasks blocking the other - even
@@ -192,8 +213,8 @@
     
     {3 The famine problem.}
     
-    The prioritisation of tasks coupled with the limited use of cores can lead
-    to a starvation problem. Indeed, through prioritisation, a task can be be
+    The prioritisation of tasks coupled with the limited use of domains can lead
+    to a starvation problem. Indeed, through prioritisation, a task can be
     excluded from using one of the available domains - because it has been
     decided that other tasks have priority there. However, this excluded task
     may be necessary (and even central) to the completion of our program.
@@ -207,8 +228,8 @@
     
     {3 Tuning.}
     
-    It is possible to modify Miou's behaviour depending on the execution
-    context. Choosing to allow a task to emit only one effect can have serious
+    It is possible to modify Miou's behaviour depending on the purpose of your
+    program. Choosing to allow a task to emit only one effect can have serious
     implications for the application's performance. Miou therefore suggests that
     the user can decide how many {i quantas} that tasks can consume.
     
@@ -262,49 +283,12 @@
 *)
 
 module State = State
-
-module Queue : sig
-  (** A lock-free queue.
-
-      To be able to implement a scheduler across multiple domains, we must
-      have a domain-safe Queue. This domain-safe implementation provides basic
-      operations for a queue: {!val:enqueue} & {!val:dequeue}. *)
-
-  type 'a t
-  (** Type of lock-free queues. *)
-
-  exception Empty
-  (** Raised when {!dequeue} is applied to an empty queue. *)
-
-  val enqueue : 'a t -> 'a -> unit
-  (** [enqueue t x] adds the element [x] at the end of the queue [t]. *)
-
-  val dequeue : 'a t -> 'a
-  (** [dequeue t] removes and returns the first element in the queue [t],
-      or raise {!exception:Empty} if the queue is empty. *)
-
-  val create : unit -> 'a t
-  (** [create ()] returns a new queue, initially empty. *)
-
-  val is_empty : 'a t -> bool
-  (** [is_empty] returns [true] if the given queue is empty, it returns [false]
-      otherwise. *)
-
-  val transfer : 'a t -> 'a t
-  (** [transfer q] returns a new queue which contains all of [q]'s elements,
-      then clears [q]. *)
-
-  val length : 'a t -> int
-  (** Return the number of elements in a queue. *)
-
-  val to_list : 'a t -> 'a list
-  (** Return a list representation of the given queue. *)
-end
+module Queue = Queue
 
 module Ownership : sig
   (** {2 Ownership of resources.}
 
-      {v La propriété, c'est le vol v}
+      {v La propriété, c'est le vol! v}
 
       Beyond the capitalist idea (even if certain libertarians would qualify the
       notion of private property), it is often useful to associate resources
@@ -343,10 +327,15 @@ module Ownership : sig
         Exception: Failure "p".
       ]}
 
-      {b NOTE}: Finaliser has no effect. This is because it is not "ordered"
-      like a usual task. Using Miou functions (such as {!val:await} or
-      {!val:cancel}) in the finaliser will raise an exception:
-      {!exception:Effect.Unhandled}. *)
+      {b NOTE}: Finaliser can not perform OCaml's effects. This is because it is
+      not "ordered" like a usual task. Using Miou functions (such as
+      {!val:await} or {!val:cancel}) in the finaliser will raise an exception:
+      {!exception:Effect.Unhandled}.
+
+      It is also important to note that if a task finishes abnormally, as well
+      as freeing up the resources of that task, the resources owned by the
+      children will also be freed up (hence the uselessness of using await or
+      cancel). *)
 
   val disown : t -> unit
   (** [disown t] informs Miou that you have properly released the resource. If
@@ -519,7 +508,10 @@ val call : ?orphans:'a orphans -> ?give:Ownership.t list -> (unit -> 'a) -> 'a t
     ]}
 
     To ensure that tasks are properly allocated to all domains, you need to use
-    {!val:parallel}. *)
+    {!val:parallel}.
+
+    {b NOTE}: {!val:call} will never run a task on {i dom0} (the main domain).
+    Only the other domains can manage tasks in parallel. *)
 
 val parallel : ('a -> 'b) -> 'a list -> ('b, exn) result list
 (** [parallel fn lst] is the {i fork-join} model: it is a way of setting up and
@@ -555,7 +547,10 @@ val parallel : ('a -> 'b) -> 'a list -> ('b, exn) result list
     Note that {!val:parallel} launches tasks ({i fork}) and waits for them
     ({i join}). Conceptually, this corresponds to a {!val:call} on each elements
     of the given list and a {!val:await_all} on all of them, with tasks
-    allocated equally to the domains. *)
+    allocated equally to the domains.
+
+    {b NOTE}: This function will never assign a task to {i dom0} - only the
+    other domains can run tasks in parallel. *)
 
 (** {2 System events.}
 

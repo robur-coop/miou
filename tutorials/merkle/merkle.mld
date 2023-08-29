@@ -1,61 +1,59 @@
 {1 Merkle tree and parallelism.}
 
-The purpose of this short tutorial is to introduce you to some of the subtleties
-you need to know about [miou] and parallelism in relation to "basic" algorithms.
-We're going to try and parallelize the calculation of a hash of a folder, its
-sub-folders and its files: a sort of Git-style Merkle-tree.
+Miou allows you to perform tasks in parallel. This short tutorial will introduce
+2 concepts offered by Miou:
+- how to launch and obtain the results of parallel tasks
+- how to optimise Miou according to the type of application.
 
-First of all, before you start coding, you need to be clear about one thing: not
-everything can be parallelized! Parallelization requires what we call
-{i synchronisation mechanisms}. These mechanisms can be more or less cumbersome
-because they have to adapt to a multitude of situations of varying complexity
-when it comes to calculating and sharing information between processors. In this
-respect, there are tasks that would be far too complex to parallelize and whose
-final gain would surely be disappointing.
+The first problem relates more generally to parallel programming, while the
+second relates more specifically to Miou and its round-robin scheduler.
 
-Parallelization essentially consists of finding a point in your code where
-launching the task in parallel and obtaining its result would not be so costly
-compared to what the task does. In other words, if the synchronisation time
-required remains marginal compared to what the task does, we can imagine that
-running the task in parallel could save us some time.
+We would also like to make it clear that "not everything is parallel". In the
+case of parallelism, ensuring that 2 tasks can agree on a specific memory state
+requires synchronisation mechanisms which can be costly.
 
-Parallelization is not synonymous with performance either. In fact, it can be
-useful to parallelize tasks in order to separate them conceptually as well. For
-example, parallelizing a task when a connection is received is not really
-intended to make the server faster - but rather to separate the logic of the
-server from that of managing a client.
+The key question is not whether or not you can parallelise, but at what level
+you should parallelise and whether it's worth it.
 
-Parallelization is therefore not an option:
-1) systematic
-2) not just for performance reasons
+{2 Basics.}
 
-{2 The pool of domains.}
+{3 The pool of domains.}
 
-Miou has a very basic design as far as parallelization is concerned: it will
+Miou has a very basic design as far as parallelisation is concerned: it will
 allocate several domains (depending on your number of cores) and put them on
-standby for tasks. So, a call to Miou.call corresponds to sending a task to
-these domains. Finally, one of these domains will take charge of the task and
-run it in parallel with dom0, which runs your main code.
+standby for tasks. So, a call to {!val:Miou.call} corresponds to sending a task
+to these domains. Finally, one of these domains will take charge of the task and
+run it in parallel with [dom0], which runs your main code.
 
 This is called a domain pool. It's a fairly basic design that has the advantage
-of taking care of domain allocation and management (as well as synchronization)
+of taking care of domain allocation and management (as well as synchronisation)
 while allowing the user to run a task in parallel.
 
-This also highlights a fairly simple pattern in parallel programming: fork &
-join.
+{3 Fork & Join.}
 
-{[
-  let tasks = List.map (fun fn -> Miou.call fn) tasks in (* fork *)
-  Miou.await_all tasks (* and join *)
-]}
+A recurring pattern in parallel programming the {i fork and join}. It consists
+of "divide and conquer". It is often possible to divide a long task into several
+smaller tasks and then implement a way of {i merging} the results of these
+smaller tasks to obtain the expected final result.
 
-This pattern is still the simplest: launch tasks in parallel and wait for the
-results of all these tasks. Here, our synchronisation mechanism corresponds to
-{!val:Miou.await_all}, and using such a pattern with Miou is quite free.
+This is perhaps the simplest pattern to use and one that can be applied to a
+whole host of basic problems. Miou drives the user to use such a pattern via
+the {!val:Miou.parallel} function.
 
-You can imagine several other patterns, but limiting yourself to this one is
-still good practice, as the others involve more complex synchronisation
-mechanisms.
+{3 The [dom0].}
+
+Miou allocates and makes available domains which expect tasks to run in parallel
+with [dom0]. [dom0] is the main domain on which your program runs - it is
+allocated by the system.
+
+[dom0] is different from the other domains in that it is the domain that
+considers the termination of your program. The other domains have neither the
+possibility nor the ability to stop your program. They do, however, have the
+prerogative to stop if [dom0] so wishes.
+
+In this sense, [dom0] cannot receive tasks from other domains. A parallel task
+(launched by {!val:Miou.call_cc} or {!val:Miou.parallel}) will never run on
+[dom0]. However, [dom0] can launch concurrent tasks (via {!val:Miou.call_cc}).
 
 {2 A Merkle-tree.}
 
@@ -88,8 +86,8 @@ let hash_of_blob filename =
 This code basically calculates the hash of a file "à la Git" and returns the
 result. The calculation for a directory is a little more complex, and consists
 of using {!val:Sys.readdir}, sorting the result and calculating the hash for all
-the items in the directory, then serialising these hashes in a certain form and
-calculating the hash of this serialisation:
+the items in the directory, then serialising (merging?) these hashes in a
+certain form and calculating the hash of this serialisation:
 
 {[
 let ( / ) = Filename.concat
@@ -161,6 +159,8 @@ aa146b5524a5c7ed221efda5382beeabcbc58d54
 
 {2 Parallelisation.}
 
+{3 First iteration.}
+
 If you followed our explanation of patterns for parallel programming, you can
 already see where we might use {!val:Miou.call} rather than sequentially
 executing the code. We're talking, of course, about the [List.map] in our
@@ -186,11 +186,9 @@ and hash_of_entries entries =
       entries
   in
   let entries =
-    if [] = entries then []
-    else
-      List.rev_map
-        (function Ok str -> str | Error exn -> raise exn)
-        (Miou.await_all entries)
+    List.rev_map
+      (function Ok str -> str | Error exn -> raise exn)
+      (Miou.await_all entries)
   in
   let ctx = Hash.empty in
   let len = List.fold_left (fun acc str -> acc + String.length str) 0 entries in
@@ -202,10 +200,165 @@ and hash_of_entries entries =
   Hash.get ctx
 ]}
 
-Note the double use of {!val:List.rev_map} instead of {!val:List.map}, wich
-provides a {i tail-rec} function. Finally, {!val:Miou.await_all} necessarily
-expects a non-empty list - otherwise it raises an exception. However, this code
-won't work, it will even wait indefinitely.
+Note the double use of {!val:List.rev_map} instead of {!val:List.map}, which
+provides a {i tail-rec} function.
+
+{3 Second iteration.}
+
+We have just applied our "fork and join" pattern where we divide the
+calculation of the hashes of our entries using {!val:Miou.call_ccc} and we
+finish by:
+1) waiting for the results of all these tasks ({!val:Miou.await_all})
+2) merge the results to obtain a final hash
+
+However, Miou is quite precise when it comes to assigning tasks in parallel to
+domains - it does so randomly! So it {b may} happen that one of the domains has
+more tasks than another.
+
+If we want to have a fair distribution of tasks across domains, we should use
+{!val:Miou.parallel}:
+
+{[
+and perform = function
+  | `Dir, filename ->
+      let name = Filename.basename filename in
+      let hash = hash_of_tree filename in
+      Fmt.str "40000 %s\000%s" name (Hash.to_raw_string hash)
+  | `Normal, filename ->
+      let name = Filename.basename filename in
+      let hash = hash_of_blob filename in
+      Fmt.str "100644 %s\000%s" name (Hash.to_raw_string hash))
+
+and hash_of_entries entries =
+  let entries = Miou.parallel perform entries in
+  let ctx = Hash.empty in
+  let len = List.fold_left (fun acc str -> acc + String.length str) 0 entries in
+  let str = Fmt.str "tree %d\000" len in
+  let ctx = Hash.feed_string ctx str in
+  let ctx =
+    List.fold_left (fun ctx str -> Hash.feed_string ctx str) ctx entries
+  in
+  Hash.get ctx
+]}
+
+Note that parallel starts and waits for tasks. Thus, the use of await_all is no
+longer necessary.
+
+{3 Third iteration.}
+
+There is one final problem with our code. If you've read our definitions
+carefully, you'll see that [dom0] does nothing but wait. This isn't always a
+problem because [dom0] could be busy doing something other than waiting, but in
+this specific application, all we're doing is trying to calculate the hashes.
+
+So it can be interesting to involve [dom0] in the work. It is also said that,
+even if [dom0] cannot be assigned by the other domains to do a task in parallel,
+it can still do concurrently.
+
+As far as our application is concerned, we are essentially doing 2 things, one
+of which may take some time:
++ we 'traverse' the structure of our folders (by going into sub-folders and
+  sub-sub-folders)
++ we calculate the file hash
+
+The task that takes the longest is the one we would parallelise (to share the
+time). The other task could be assigned to our [dom0]! In this way, the
+traversal could be taken by [dom0] and the rest in parallel:
+
+{[
+and perform = function
+  | `Dir, filename ->
+      Miou.call_cc @@ fun () ->
+      let name = Filename.basename filename in
+      let hash = hash_of_tree filename in
+      Fmt.str "40000 %s\000%s" name (Hash.to_raw_string hash)
+  | `Normal, filename ->
+      Miou.call @@ fun () ->
+      let name = Filename.basename filename in
+      let hash = hash_of_blob filename in
+      Fmt.str "100644 %s\000%s" name (Hash.to_raw_string hash))
+
+and hash_of_entries entries =
+  let entries = List.rev_map perform entries in
+  let entries =
+    List.rev_map
+      (function Ok str -> str | Error exn -> raise exn)
+      (Miou.await_all entries)
+  in
+  let ctx = Hash.empty in
+  let len = List.fold_left (fun acc str -> acc + String.length str) 0 entries in
+  let str = Fmt.str "tree %d\000" len in
+  let ctx = Hash.feed_string ctx str in
+  let ctx =
+    List.fold_left (fun ctx str -> Hash.feed_string ctx str) ctx entries
+  in
+  Hash.get ctx
+]}
+
+As you can see, we've just returned to the previous code with the subtlety of
+using {!Miou.call_cc} as soon as we need to traverse a directory.
+
+It was also mentioned that the assignment of a task to a domain is random and
+that one domain may have more tasks than another. However, for a large number of
+tasks, we can consider that the distribution is {i normal} - and that, roughly
+speaking, the tasks are assigned equitably.
+
+{2 Miou and large computations.}
+
+{3 Pure and impure tasks.}
+
+The code we have just developed involves fairly limited system interaction
+(reading a folder or file) which does not, in this case, involve the use of
+{!module:Miou_unix}.
+
+In this regard, the tasks in our application can be considered pure in the sense
+that they do not emit {i a suspension effect} that is necessary when waiting for
+a system event. With a little hindsight, this means that we can roughly
+calculate the time it will take our tasks to execute.
+
+It can then be interesting to prioritise tasks in relation to what they depend
+on. For example, we could have 2 {!val:Miou.await}s, one for a task calculating
+the hash of a 1KB file, another for a task calculating the hash of a 1GB file.
+In this particular case, it would be more interesting to try the first
+{!val:Miou.await} rather than the second (which would take longer).
+
+This is task prioritisation and can be very useful for 'large computations'.
+However, Miou is more concerned with the development of system and network
+applications for which availability is more important (even if it means wasting
+time waiting for our second task rather than the first).
+
+{3 Involvement in performance.}
+
+The availability of tasks means that Miou can often attempt an {!val:Miou.await}
+on a promise which associated task has not yet finished. We then waste some of
+our time observing, only to do nothing - and then move on to the next task.
+
+This problem can be solved in 2 ways:
++ don't use Miou and prefer a scheduler that implements task prioritisation
+ (which may have other implications/flaws)
++ modify Miou's behaviour
+
+{3 Quanta.}
+
+In truth, in our example, the real bottleneck slowing down our code is the
+number of {i quantas}. In the case of our [dom0], this limitation will consist
+of our domain launching a task (1 quanta) and then spending 1 quanta waiting for
+another task (which is certainly not finished) to finally reschedule the launch
+of a new task (1 quanta).
+
+In other words, the launch of all our tasks is intermittently disrupted by
+unnecessary awaits... However, we definitely wanted to launch lots of tasks and
+then wait for all of them ({!val:Miou.await_all}). But Miou makes sure that all
+the tasks (whether they are waiting and/or launching other tasks) consume the
+same number of quantas.
+
+One way would be to allow a task, particularly the one we run on [dom0], to
+consume enough quantas (and launch all our sub-tasks) without it having the
+intermittency of an {!val:Miou.await} for the sake of fairness.
+
+{3 Tuning & results.}
+
+{2 Conclusion.}
 
 {3 Starvation problem.}
 
@@ -228,11 +381,11 @@ prioritisation} - however, this method would be contrary to one of our precepts
 {2 Parallelism & concurrency.}
 
 So how do we get around this? Well, the real question is: what's the point in
-parallelizing? If we deduce the execution of our code, it's easy to see that
+parallelising? If we deduce the execution of our code, it's easy to see that
 [hash_of_blob] is surely the longest function, as it may have to calculate the
 hash for large files. [hash_of_entries] remains fairly basic; we could have 1
 million entries, but it would still be smalled than a 1 GB file. In other words,
-we should only parallelize the calculation of a file and only have one
+we should only parallelise the calculation of a file and only have one
 {!val:Miou.call}, when the entry is a file ([`Normal]).
 
 Another problem persists, this time with the OCaml type system. If we delete the
@@ -264,7 +417,7 @@ executed {i later} on the {b which created} the promise. For OCaml aficionados,
 this is a return to the idea of pre-OCaml 5.0 concurrent scheduling!
 
 The idea is that hashes for directories will {b only} be calculted on the main
-domain and only the calculation for files will be parallelized for the other
+domain and only the calculation for files will be parallelised for the other
 domains - the latter will no longer depend on the result of a recursion.
 
 So we've mixed parallelism and concurrency.
@@ -272,45 +425,51 @@ So we've mixed parallelism and concurrency.
 {2 Results.}
 
 We're going to compare the results and to do this, we're simply going to try and
-calculate the hash of our [".opam"]:
+calculate the hash of our [".opam/5.0.0"]:
 
 {[
-dinosaure@turbine:~$ hyperfine --warmup=1 './miou_p.out ~/.opam/5.0.0' './miou_s.out ~/.opam/5.0.0'
-Benchmark 1: ./miou_p.out ~/.opam/5.0.0
-  Time (mean ± σ):     760.1 ms ±  45.1 ms    [User: 6148.9 ms, System: 760.8 ms]
-  Range (min … max):   661.5 ms … 840.8 ms    10 runs
+dinosaure@turbine:~$ hyperfine --warmup=1 \
+  'MIOU_QUANTA=1000000 ./miou_p.out ~/.opam/5.0.0' \
+  './miou_s.out ~/.opam/5.0.0'
+Benchmark 1: MIOU_QUANTA=1000000 ./miou_p.out ~/.opam/5.0.0
+  Time (mean ± σ):     894.8 ms ±  25.3 ms    [User: 5394.3 ms, System: 1176.7 ms]
+  Range (min … max):   852.1 ms … 939.8 ms    10 runs
  
 Benchmark 2: ./miou_s.out ~/.opam/5.0.0
-  Time (mean ± σ):      2.723 s ±  0.016 s    [User: 2.414 s, System: 0.305 s]
-  Range (min … max):    2.694 s …  2.748 s    10 runs
+  Time (mean ± σ):      2.720 s ±  0.013 s    [User: 2.382 s, System: 0.334 s]
+  Range (min … max):    2.702 s …  2.742 s    10 runs
  
 Summary
-  ./miou_p.out ~/.opam/5.0.0 ran
-    3.58 ± 0.21 times faster than ./miou_s.out ~/.opam/5.0.0
+  MIOU_QUANTA=1000000 ./miou_p.out ~/.opam/5.0.0 ran
+    3.04 ± 0.09 times faster than ./miou_s.out ~/.opam/5.0.0
 ]}
 
 The first version ["miou_p"] is the on that uses {!val:Miou.call}. The second
-["miou_s"] corresponds to our first code. The parallelized version is at least
-3 times faster!
+["miou_s"] corresponds to our first code (without parallelisation). The
+parallelised version is at least 3 times faster!
+
+Note the use of [MIOU_QUANTA], which allows you to specify the number of quanta
+that a task can consume. In this case, to avoid wasting time (checking "awaits"
+unnecessarily), we consider that a task can consume up to 1000000 quantas (and
+therefore produce 1000000 effects, which is equivalent to saying: to launch
+1000000 tasks at once without interruption).
 
 {2 Conclusion.}
 
-As you can see, parallelising code is never a simple matter. The example here is
-basic, but it highlights the starvation problem. Using system resources is
-always difficult and choices can be made based on speed, security and ease of
-use. As far as we're concerned, Miou remains fairly basic in what it proposes
-and concentrates mainly on system and network programming where security issues
-may appear to be crucial - even if this is at the expense of apparent
-simplicity.
+This tutorial shows the subtleties that Miou can have with regard to parallel
+tasks. The second part also shows that Miou is not a scheduler that looks for
+the {b optimal} order in which to execute tasks (considering, of factor, the
+intermittency of system events). Miou is more interested in the availability of
+tasks to be synchronised with system events than in prioritising tasks.
 
-This tutorial explains the two ways of making a promise with Miou that {i will}
-be executed. You can launch a {i local} task to the domain where you are or
-launch a task on another domain. The two have different properties. Here's an
-example:
-- for the first, the use of data structures such as {!module:Hashtbl} can be
-  considered
-- for the second, synchronisation mechanism are required (Condition, Mutex) but
-  offer the lattitude to use all your computer's calculating resources
+In this case, the example is not a system application: its interactions are not
+notified (quite rightly) to Miou - reading a file or folder is rarely blocking.
+Nonetheless, knowing the facts, it is still possible to obtain a
+high-performance application. The {!val:Miou.run} function can be set so that
+tasks can consume more than one quanta.
 
-Other properties exist, but we won't lis them all here. Welcome to the world of
-parallelism!
+This small example shows that the task execution management policy has an impact
+on the way an application is written. There is no one way of writing a scheduler
+and it is perhaps fairer to inform the user of the implications that our
+implementation may have in the development of applications (as we do in this
+tutorial) than to oversell a product.
