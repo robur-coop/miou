@@ -9,10 +9,10 @@ $ mknod fifo p
 $ cat fifo | nc -l 9000 > fifo
 ]}
 
-We're going to use Miouu, which is an extension of Miou with some functions
-available via the Unix module. These functions are blocking and if you're
-wondering why we need a layer to implement these functions, we suggest you take
-a look at the tutorial on {!page:sleepers}.
+We're going to use {!module:Miou_unix}, which is an extension of Miou with some
+functions available via the {!module:Unix} module. These functions are blocking
+and if you're wondering why we need a layer to implement these functions, we
+suggest you take a look at the tutorial on {!page:sleepers}.
 
 {2 A simple sequential server.}
 
@@ -28,18 +28,220 @@ let handler fd =
       Miouu.write fd (Bytes.unsafe_to_string buf) ~off:0 ~len;
       go ()
     end else Miouu.close fd in
-  go ()
+  go
 
 let listen sockaddr =
   let fd = Miouu.tcpv4 () in
   Miouu.bind_and_listen fd sockaddr; fd
 
-let prgm sockaddr =
+let server sockaddr =
   let rec server fd =
     let fd', sockaddr = Miouu.accept fd in
-    handler fd';
+    handler fd' ();
     server fd in
   fun () -> server (listen sockaddr)
 
-let () = Miouu.run (prgm (Unix.ADDR_INET (Unix.inet_addr_loopback, 9000)))
+let addr = Unix.ADDR_INET (Unix.inet_addr_loopback, 9000)
+let () = Miouu.run (server addr) 
 ]}
+
+This small program provides a systematic structure for implementing a server:
++ a loop that accepts TCP/IP connections
++ a handler which manages a connection
+
+{2 Concurrency.}
+
+The main problem with this implementation is that you can only manage one
+connection, so it can terminate and then wait for and receive a new connection.
+In other words, our server only manages one client.
+
+The way to manage several clients is to create {b asynchronous} tasks. The aim
+of asynchronous tasks is to run concurrently without one blocking the others. If
+a task appears to be blocking, it will be suspended and the scheduler will try
+to execute another one.
+
+In our case, our [handler] is blocking on the {!val:Miou_unix.read} operation.
+So we're going to give Miou the ability to suspend our [handler] in order to
+check whether {!val:Miou_unix.accept} is also waiting or whether a connection
+has just arrived.
+
+To specify an asynchronous task with Miou, we use {!val:Miou.call_cc}:
+
+{[
+let server sockaddr =
+  let rec server prms fd =
+    let fd', sockaddr = Miouu.accept fd in
+    let prm = Miou.call_cc ~give:[ Miou_unix.owner fd' ] (handler fd') in
+    server (prm :: prms) fd in
+  fun () -> server [] (listen sockaddr)
+]}
+
+Using {!val:Miou.call_cc} returns a "promise". It's a kind of {i witness} for
+our task that lets us know the status of it:
+- whether it is running
+- whether it has finished successfully
+- if it has stopped abnormally (by raising an exception)
+
+It is possible to manipulate this promise and wait for our task to finish:
+
+{[
+let server sockaddr =
+  let rec server fd =
+    let fd', sockaddr = Miouu.accept fd in
+    let prm = Miou.call_cc @@ fun () -> handler fd' in
+    ignore (Miou.await_exn prm);
+    server fd in
+  fun () -> server (listen sockaddr)
+]}
+
+The problem with the code above is that we're back to the same behaviour we
+started with. Namely, waiting for our [handler] to finish before managing a new
+connection (and therefore only managing one client at a time).
+
+{3 Ownership.}
+
+Miou has a mechanism for 'attaching' resources to a task. The aim of this
+mechanism is to bind the use of a resource to a function - a bit like Rust, but
+in a {i dynamic} way. Operations such as {!Miou_unix.read} or {!Miou_unix.write}
+will check that the function has the given file-descriptor - if not, a
+[Not_owner] exception is thrown.
+
+In our case, {!Miou_unix.accept} {i creates} the file-descriptor, so it belongs
+to our [server] function. We therefore need to pass the ownership to our task
+[handler] via the [give] argument.
+
+Ownership is mainly used to "finalise" a resource in an abnormal case. As a
+developer, we have a duty to release all our resources (even in abnormal cases).
+So, if our [handler] function raises an exception, Miou will take care of
+closing our associated file-descritptor.
+
+{2 Detachment and Miou.}
+
+Miou enforce good practice and one of them is to always take care of these
+promises. In this case, we'd like to both keep our promise and launch others
+concurrently.
+
+One possibility available in other schedulers is to {i detach} a task. Promises
+allow you to keep {i a link} with a task (since they are a witness to tasks).
+But if we can "forget" a promise and therefore let a task run without it being
+linked, we could solve our initial problem.
+
+The next problem with such an approach is that we also forget the resources
+associated with the task (particularly the {!type:Miou_unix.file_descr}s), and
+these resources should be freed ({!Miou_unix.close}) up in any case (specially
+the abnormal case when we trigger an exception). So you end up having to manage
+the termination of a task (and the release of resources) while at the same time
+trying to forget about the task. But initially, the simple fact of wanting to
+detach a task {b is} a leakage of resources.
+
+Miou proposes another mechanism, which is to keep our promises somewhere and
+'clean up' the ones that have finished. So we're going to introduce the use of
+an {!type:Miou.orphans} value.
+
+{[
+let rec clean_up orphans = match Miou.care orphans with
+  | Some promise -> Miou.await_exn prm; clean_up orphans
+  | None -> ()
+
+let server sockaddr =
+  let rec server orphans fd =
+    clean_up orphans;
+    let fd', sockaddr = Miouu.accept fd in
+    let _ = Miou.call_cc
+      ~give:[ Miou_unix.owner fd' ] ~orphans (handler fd') in
+    server fd in
+  fun () ->
+    let orphans = Miou.orphans () in
+    server orphans (listen sockaddr)
+]}
+
+The orphans value will aggregate the promises (which are the children of the
+[server] task) which then become {i orphans}.
+
+The advantage then resides in the {!val:Miou.care} function, which will return an
+orphan ready to be waited for. In this case, using {!val:Miou.await} on this
+orphan will {b not} block. {i The orphans are cleaned up.} This operation is
+repeated each time a TCP/IP connection is received. In this way, we avoid
+detaching our tasks and we can take a real interest in how our tasks ended (in
+our case, we ignore the result).
+
+It can be annoying to have to manage promises systematically (and not be able to
+forget them). However, apart from the fact that it is illegal to forget one's
+children, detachment involves checks on the part of the developer which, if
+forgotten, can lead to a memory leak. Indeed, even if you could forget a task,
+the scheduler doesn't!
+
+From our experience and from using and implementing large software packages,
+this is perhaps one of the anti-patterns that we have found most frequently and
+that still causes problems.
+
+{2 Parallelism.}
+
+One of the big advantages of Miou is that it is easy to consider the
+parallelization of a task. In this case, {!val:Miou.call_cc} can easily be
+replaced by {!val:Miou.call}.
+
+{[
+let server sockaddr =
+  let rec server orphans fd =
+    clean_up orphans;
+    let fd', sockaddr = Miouu.accept fd in
+    let _ = Miou.call
+      ~give:[ Miou_unix.owner fd' ] ~orphans (handler fd') in
+    server fd in
+  fun () ->
+    let orphans = Miou.orphans () in
+    server orphans (listen sockaddr)
+]}
+
+However, there is a bottleneck. In this case, our [dom0] is the only one to
+manage the server task. In other words: a single domain manages the reception of
+connections.
+
+Once again, Miou is interested in the development of system and network
+applications where {b the availability} of the application to receive events
+from the system is essential. We could imagine that instead of having a single
+domain that manages the reception of connections, we could have several?
+
+{[
+let server sockaddr =
+  let rec server orphans fd =
+    clean_up orphans;
+    let fd', sockaddr = Miouu.accept fd in
+    let _ = Miou.call
+      ~give:[ Miou_unix.owner fd' ] ~orphans (handler fd') in
+    server fd in
+  let orphans = Miou.orphans () in
+  server orphans (listen sockaddr)
+
+let addr = Unix.ADDR_INET (Unix.inet_addr_loopback, 9000)
+
+let () = Miou.run @@ fun () ->
+  Miou.parallel server
+    (List.init (Miou.Domain.count ()) (Fun.const addr))
+  |> List.iter (function Ok () -> () | Error exn -> raise exn)
+]}
+
+So we've gone from 1 domain handling all the connections to several domains
+implementing a parallel echo server!
+
+{2 Conclusion.}
+
+Developing a system and network application with Miou addresses several points:
+- always keep an eye on resources (including tasks) so that there can be no
+  memory leaks
+- provide a high level of availability in order to manage trillions of
+  connections
+- Finally, take advantage of parallelism.
+
+This tutorial shows what Miou is finally proposing. However, there are a few
+caveats:
++ The question of availability is better explained in our tutorial about
+  {{!page:merkle}merkle-trees}.
++ The extension of Miou to other system events is explained in more detail in
+  our tutorial on {!page:sleepers}.
+
+We therefore recommend that you read these tutorials to learn more about Miou's
+design, its reasons and its implications. At the very least, we hope that this
+tutorial lets you imagine the possibility of implementing your service using
+our library.
