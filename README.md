@@ -227,4 +227,4 @@ of its users), welcome!
 [documentation]: https://roburio.github.io/miou/
 [sleepers]: https://roburio.github.io/miou/miou/sleepers.html
 [merkle-tree]: https://roburio.github.io/miou/miou/merkle.html
-[merkle-tree]: https://roburio.github.io/miou/miou/echo.html
+[echo]: https://roburio.github.io/miou/miou/echo.html
