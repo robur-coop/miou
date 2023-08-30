@@ -1,0 +1,7 @@
+(documentation
+ (package miou)
+ (mld_files echo))
+
+(executable
+ (name main)
+ (libraries miou.unix))

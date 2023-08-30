@@ -25,6 +25,9 @@ Miou meets these objectives by:
 - conservative and stable rules for the library's behaviour
 - an API that delegates suspension management to the user
 
+You can read a simple tutorial explaining how to implement an echo server with
+Miou [here][echo].
+
 ### Rules
 
 Miou complies with several rules that the user must respect. These rules (which
@@ -173,7 +176,7 @@ management of system resources, although intrinsic to task management, is:
 As such and in our objective of composability with exotic systems, we have
 decided to offer the user two libraries:
 - `miou`, which is the core of our project
-- `miouu`, which is an extension of our core with I/O
+- `miou.unix`, which is an extension of our core with I/O
 
 The second takes advantage of the API of the first regarding suspension. There
 is a [tutorial][sleepers] explaining this API step by step and how to use it so
@@ -188,6 +191,20 @@ suspend the execution of a program. Our documentation and tutorials explain
 those cases that we consider *marginal* in the interest of internalizing
 suspension mecanism rather than exporting it to the user (but which are equally
 important in the design of an application).
+
+### A round-robin scheduler
+
+Miou implements what is known as a round-robin scheduler. In other words, a
+scheduler that gives equivalent opportunities to all tasks to consume a certain
+amount of CPU time. This kind of task execution order management is intended to
+improve the availability of tasks to be synchronised with system events.
+
+The round-robin scheduler also allows us to avoid domain starvation problems.
+
+However, we would like to warn the user that Miou does not correspond to all
+applications. To find out more about this, we recommend that you read the
+tutorial on implementing an application that calculates the hash of a folder:
+[merkle-tree][merkle-tree].
 
 ## Genesis
 
@@ -209,3 +226,5 @@ of its users), welcome!
 [github]: https://github.com/roburio/miou
 [documentation]: https://roburio.github.io/miou/
 [sleepers]: https://roburio.github.io/miou/miou/sleepers.html
+[merkle-tree]: https://roburio.github.io/miou/miou/merkle.html
+[merkle-tree]: https://roburio.github.io/miou/miou/echo.html

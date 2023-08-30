@@ -15,7 +15,7 @@ requires synchronisation mechanisms which can be costly.
 The key question is not whether or not you can parallelise, but at what level
 you should parallelise and whether it's worth it.
 
-{2 Basics.}
+{2 Definitions of terms.}
 
 {3 The pool of domains.}
 
@@ -206,7 +206,7 @@ provides a {i tail-rec} function.
 {3 Second iteration.}
 
 We have just applied our "fork and join" pattern where we divide the
-calculation of the hashes of our entries using {!val:Miou.call_ccc} and we
+calculation of the hashes of our entries using {!val:Miou.call_cc} and we
 finish by:
 1) waiting for the results of all these tasks ({!val:Miou.await_all})
 2) merge the results to obtain a final hash

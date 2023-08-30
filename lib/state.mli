@@ -68,10 +68,10 @@ type ('a, 'b) continuation
 
     The state of a function is its execution state. A function can finish with
     its return value or an exception, or it can suspend on an
-    {!type:'a Effect.t}. In the case of a suspension, the user can "continue"
-    the execution via what is expected by the function depending on the effect
-    and the function {!val:once}. Note that {!val:once} can only be used
-    {b once} on a given value (otherwise, an exception
+    {!type:Effect.t}. In the case of a suspension, the user can "continue" the
+    execution via what is expected by the function depending on the effect and
+    the function {!val:once}. Note that {!val:once} can only be used {b once} on
+    a given value (otherwise, an exception
     {!exception:Continuation_already_resumed} is raised by OCaml). *)
 type 'a t = private
   | Finished of ('a, exn) result

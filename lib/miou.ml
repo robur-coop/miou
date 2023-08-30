@@ -131,6 +131,8 @@ module Resource = struct
   let make ~finaliser value =
     let uid = Uid.gen () in
     Resource { uid; value; finaliser }
+
+  let equal (Resource { uid= a; _ }) (Resource { uid= b; _ }) = Uid.equal a b
 end
 
 (** Promise *)
@@ -202,6 +204,15 @@ module Promise = struct
   let is_consumed prm =
     match Atomic.get prm.state with Consumed _ -> true | _ -> false
 
+  let disown_resources ress prm =
+    let nodes = ref [] in
+    let f node =
+      let resource = Sequence.data node in
+      if List.exists (Resource.equal resource) ress then nodes := node :: !nodes
+    in
+    Sequence.iter_node ~f prm.resources;
+    List.iter Sequence.remove !nodes
+
   let make :
       type a.
          resources:resource list
@@ -210,8 +221,10 @@ module Promise = struct
       -> unit
       -> _ t =
    fun ~resources:ress ~runner ?parent () ->
+    (* TODO(dinosaure): replace [Random.State.make_self_init] or delete it. *)
     let resources = Sequence.create (Random.State.make_self_init ()) in
     List.iter (fun res -> Sequence.push res resources) ress;
+    Option.iter (disown_resources ress) parent;
     let parent = Option.map (fun parent -> Pack parent) parent in
     {
       uid= Uid.gen ()
@@ -255,6 +268,7 @@ end
 
 type ty = Concurrent | Parallel of Domain_uid.t
 type _ Effect.t += Domain_uid : Domain_uid.t Effect.t
+type _ Effect.t += Domain_count : int Effect.t
 type _ Effect.t += Spawn : ty * resource list * (unit -> 'a) -> 'a t Effect.t
 type _ Effect.t += Yield : unit Effect.t
 type _ Effect.t += Cancel : 'a t -> unit Effect.t
@@ -355,6 +369,7 @@ module Domain = struct
     }
 
   let self () = Effect.perform Domain_uid
+  let count () = Effect.perform Domain_count
 
   (* It tries to aggregate all the events/[task] that involve the given promise
      with the unique ID [uid]. This function is used for cancellation. It is
@@ -632,6 +647,7 @@ module Domain = struct
     let perform : type a b. (a, b) State.k =
      fun k -> function
       | Domain_uid -> k (State.Send domain.uid)
+      | Domain_count -> k (State.Send (List.length pool.domains))
       | Domains ->
           let uids = List.map (fun { uid; _ } -> uid) pool.domains in
           k (State.Send uids)
