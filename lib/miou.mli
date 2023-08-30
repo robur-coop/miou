@@ -395,6 +395,7 @@ module Domain : sig
   end
 
   val self : unit -> Uid.t
+  val count : unit -> int
 end
 
 module Promise : sig

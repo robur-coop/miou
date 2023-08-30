@@ -268,6 +268,7 @@ end
 
 type ty = Concurrent | Parallel of Domain_uid.t
 type _ Effect.t += Domain_uid : Domain_uid.t Effect.t
+type _ Effect.t += Domain_count : int Effect.t
 type _ Effect.t += Spawn : ty * resource list * (unit -> 'a) -> 'a t Effect.t
 type _ Effect.t += Yield : unit Effect.t
 type _ Effect.t += Cancel : 'a t -> unit Effect.t
@@ -368,6 +369,7 @@ module Domain = struct
     }
 
   let self () = Effect.perform Domain_uid
+  let count () = Effect.perform Domain_count
 
   (* It tries to aggregate all the events/[task] that involve the given promise
      with the unique ID [uid]. This function is used for cancellation. It is
@@ -645,6 +647,7 @@ module Domain = struct
     let perform : type a b. (a, b) State.k =
      fun k -> function
       | Domain_uid -> k (State.Send domain.uid)
+      | Domain_count -> k (State.Send (List.length pool.domains))
       | Domains ->
           let uids = List.map (fun { uid; _ } -> uid) pool.domains in
           k (State.Send uids)
