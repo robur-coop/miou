@@ -33,12 +33,18 @@ let pp_exec_header =
   in
   pp_header
 
+let make_formatter oc =
+  Format.make_formatter (output_substring oc) (fun () -> flush oc)
+
+(* NOTE(dinosaure): it's mandatory to make our own formatter to avoid data-race
+   condition if the user uses something like [logs]. *)
+let stdout = make_formatter stdout
+let stderr = make_formatter stderr
+
 let report level ~over k msgf =
   let k _ = over (); k () in
   msgf @@ fun ?(domain = Domain.self ()) ?header fmt ->
-  let ppf =
-    if level = App then Format.std_formatter else Format.err_formatter
-  in
+  let ppf = if level = App then stdout else stderr in
   Format.kfprintf k ppf
     ("%a@[" ^^ fmt ^^ "@]@.")
     pp_exec_header (domain, level, header)
