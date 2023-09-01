@@ -696,6 +696,16 @@ val await_one : 'a t list -> ('a, exn) result
       Exception: Miou.Still_has_children
     ]} *)
 
+val both : 'a t -> 'b t -> ('a, exn) result * ('b, exn) result
+(** [both prm0 prm1] waits [prm0] {b and}) [prm1]. It's equivalent to:
+
+    {[
+      let both prm0 prm1 =
+        let a = Miou.await prm0 in
+        let b = Miou.await prm1 in
+        (a, b)
+    ]} *)
+
 val yield : unit -> unit
 (** [yield ()] reschedules tasks and give an opportunity to carry out the tasks
     that have been on hold the longest. For intance:

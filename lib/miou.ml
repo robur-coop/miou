@@ -281,6 +281,7 @@ type _ Effect.t +=
   | Await : 'a t -> ('a, exn) result Effect.t
   | Await_all : 'a t list -> ('a, exn) result list Effect.t
   | Await_one : bool * 'a t list -> ('a, exn) result Effect.t
+  | Both : 'a t * 'b t -> (('a, exn) result * ('b, exn) result) Effect.t
 
 type 'a ownership =
   | Check : resource -> unit ownership
@@ -577,6 +578,28 @@ module Domain = struct
             Promise.consume prm;
             State.Send (Promise.to_result prm))
 
+  let both prm0 prm1 =
+    if Promise.is_pending prm0 = false && Promise.is_pending prm1 = false then begin
+      Logs.debug (fun m ->
+          m "consumes %a and %a" Promise.pp prm0 Promise.pp prm1);
+      Promise.consume prm0;
+      Promise.consume prm1;
+      let unreachable_exception =
+        match
+          (unreachable_exception [ prm0 ], unreachable_exception [ prm1 ])
+        with
+        | Some exn, _ | _, Some exn -> Some exn
+        | _ -> None
+      in
+      match unreachable_exception with
+      | Some exn -> State.Fail exn
+      | None ->
+          let[@warning "-8"] (Consumed v0) = Atomic.get prm0.state in
+          let[@warning "-8"] (Consumed v1) = Atomic.get prm1.state in
+          State.Send (v0, v1)
+    end
+    else State.Intr
+
   let error_syscall_exists =
     Invalid_argument "Miou.is_pending can be used only in events.select"
 
@@ -696,6 +719,12 @@ module Domain = struct
       | Await_one (and_cancel, prms) ->
           if List.for_all (Promise.is_a_children ~parent:current) prms then
             k (await_one ~and_cancel pool domain prms)
+          else k (State.Fail Not_a_child)
+      | Both (prm0, prm1) ->
+          if
+            Promise.is_a_children ~parent:current prm0
+            && Promise.is_a_children ~parent:current prm1
+          then k (both prm0 prm1)
           else k (State.Fail Not_a_child)
       | Yield ->
           Logs.debug (fun m ->
@@ -883,6 +912,7 @@ module Domain = struct
     let f (_, task) =
       match task with
       | Suspended (_, State.Suspended (_, Yield))
+      | Suspended (_, State.Suspended (_, Both _))
       | Suspended (_, State.Suspended (_, Await _))
       | Suspended (_, State.Suspended (_, Await_all _)) ->
           ()
@@ -934,6 +964,7 @@ module Domain = struct
     let exception No in
     let f (_, task) =
       match task with
+      | Suspended (_, State.Suspended (_, Both _))
       | Suspended (_, State.Suspended (_, Await _))
       | Suspended (_, State.Suspended (_, Await_all _)) ->
           ()
@@ -1157,6 +1188,7 @@ external reraise : exn -> 'a = "%reraise"
 let await_exn prm =
   match await prm with Ok value -> value | Error exn -> reraise exn
 
+let both prm0 prm1 = Effect.perform (Both (prm0, prm1))
 let task (Syscall (uid, _) : _ syscall) fn = Continue (uid, fn)
 
 let quanta =
