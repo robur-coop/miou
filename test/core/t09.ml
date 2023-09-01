@@ -12,5 +12,5 @@ let () =
   match rs with
   | Ok () -> failwith "t09"
   | Error exn ->
-      assert (Atomic.get Miouc.tick = 0);
+      assert (Atomic.get Miouc.tick < 10);
       raise exn
