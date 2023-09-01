@@ -615,7 +615,7 @@ module Domain = struct
         else k (State.Fail (error_already_owned prm res))
     | Disown (Resource { uid; _ } as res) ->
         Logs.debug (fun m ->
-            m "%a disown [%a]\n%!" Promise.pp prm Resource_uid.pp uid);
+            m "%a disown [%a]" Promise.pp prm Resource_uid.pp uid);
         if own_it prm res then begin
           let to_delete = ref None in
           let f node =
@@ -903,7 +903,6 @@ module Domain = struct
     let fn () =
       List.iter (transfer_system_task pool domain) (domain.events.select ())
     in
-    Logs.debug (fun m -> m "[%a] asks a system event" Domain_uid.pp domain.uid);
     match_with fn () handler
 
   let system_tasks_suspended domain = Hashtbl.length domain.system_tasks > 0
@@ -976,9 +975,7 @@ module Pool = struct
         transfer_all_tasks pool domain;
         pool.working_counter <- pool.working_counter + 1;
         Mutex.unlock pool.mutex;
-        Logs.debug (fun m -> m "[%a] wake up" Domain_uid.pp domain.uid);
         Domain.run pool domain;
-        Logs.debug (fun m -> m "[%a] sleep" Domain_uid.pp domain.uid);
         Mutex.lock pool.mutex;
         pool.working_counter <- pool.working_counter - 1;
         if (not pool.stop) && Int.equal pool.working_counter 0 then
