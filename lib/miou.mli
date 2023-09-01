@@ -408,6 +408,7 @@ module Promise : sig
   end
 
   val pp : Format.formatter -> 'a t -> unit
+  val uid : 'a t -> Uid.t
 end
 
 (** {2:orphans Daemon and orphan tasks.}

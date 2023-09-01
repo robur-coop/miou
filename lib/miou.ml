@@ -260,6 +260,8 @@ module Promise = struct
     in
     Queue.iter ~f:check prm.children;
     not !result
+
+  let uid { uid; _ } = uid
 end
 
 (** Effects *)
