@@ -408,6 +408,7 @@ module Promise : sig
   end
 
   val pp : Format.formatter -> 'a t -> unit
+  val uid : 'a t -> Uid.t
 end
 
 (** {2:orphans Daemon and orphan tasks.}
@@ -693,6 +694,16 @@ val await_one : 'a t list -> ('a, exn) result
           [ Miou.call_cc (Fun.const 1)
           ; Miou.call_cc (Fun.const 2) ] ;;
       Exception: Miou.Still_has_children
+    ]} *)
+
+val both : 'a t -> 'b t -> ('a, exn) result * ('b, exn) result
+(** [both prm0 prm1] waits [prm0] {b and}) [prm1]. It's equivalent to:
+
+    {[
+      let both prm0 prm1 =
+        let a = Miou.await prm0 in
+        let b = Miou.await prm1 in
+        (a, b)
     ]} *)
 
 val yield : unit -> unit

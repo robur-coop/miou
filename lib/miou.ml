@@ -260,6 +260,8 @@ module Promise = struct
     in
     Queue.iter ~f:check prm.children;
     not !result
+
+  let uid { uid; _ } = uid
 end
 
 (** Effects *)
@@ -279,6 +281,7 @@ type _ Effect.t +=
   | Await : 'a t -> ('a, exn) result Effect.t
   | Await_all : 'a t list -> ('a, exn) result list Effect.t
   | Await_one : bool * 'a t list -> ('a, exn) result Effect.t
+  | Both : 'a t * 'b t -> (('a, exn) result * ('b, exn) result) Effect.t
 
 type 'a ownership =
   | Check : resource -> unit ownership
@@ -575,6 +578,28 @@ module Domain = struct
             Promise.consume prm;
             State.Send (Promise.to_result prm))
 
+  let both prm0 prm1 =
+    if Promise.is_pending prm0 = false && Promise.is_pending prm1 = false then begin
+      Logs.debug (fun m ->
+          m "consumes %a and %a" Promise.pp prm0 Promise.pp prm1);
+      Promise.consume prm0;
+      Promise.consume prm1;
+      let unreachable_exception =
+        match
+          (unreachable_exception [ prm0 ], unreachable_exception [ prm1 ])
+        with
+        | Some exn, _ | _, Some exn -> Some exn
+        | _ -> None
+      in
+      match unreachable_exception with
+      | Some exn -> State.Fail exn
+      | None ->
+          let[@warning "-8"] (Consumed v0) = Atomic.get prm0.state in
+          let[@warning "-8"] (Consumed v1) = Atomic.get prm1.state in
+          State.Send (v0, v1)
+    end
+    else State.Intr
+
   let error_syscall_exists =
     Invalid_argument "Miou.is_pending can be used only in events.select"
 
@@ -613,7 +638,7 @@ module Domain = struct
         else k (State.Fail (error_already_owned prm res))
     | Disown (Resource { uid; _ } as res) ->
         Logs.debug (fun m ->
-            m "%a disown [%a]\n%!" Promise.pp prm Resource_uid.pp uid);
+            m "%a disown [%a]" Promise.pp prm Resource_uid.pp uid);
         if own_it prm res then begin
           let to_delete = ref None in
           let f node =
@@ -694,6 +719,12 @@ module Domain = struct
       | Await_one (and_cancel, prms) ->
           if List.for_all (Promise.is_a_children ~parent:current) prms then
             k (await_one ~and_cancel pool domain prms)
+          else k (State.Fail Not_a_child)
+      | Both (prm0, prm1) ->
+          if
+            Promise.is_a_children ~parent:current prm0
+            && Promise.is_a_children ~parent:current prm1
+          then k (both prm0 prm1)
           else k (State.Fail Not_a_child)
       | Yield ->
           Logs.debug (fun m ->
@@ -876,10 +907,12 @@ module Domain = struct
           | [] -> Promise.cancel prm
           | _ -> assert false)
 
-  let all_tasks_await domain =
+  let all_tasks_await_or_yield domain =
     let exception No in
     let f (_, task) =
       match task with
+      | Suspended (_, State.Suspended (_, Yield))
+      | Suspended (_, State.Suspended (_, Both _))
       | Suspended (_, State.Suspended (_, Await _))
       | Suspended (_, State.Suspended (_, Await_all _)) ->
           ()
@@ -901,7 +934,6 @@ module Domain = struct
     let fn () =
       List.iter (transfer_system_task pool domain) (domain.events.select ())
     in
-    Logs.debug (fun m -> m "[%a] asks a system event" Domain_uid.pp domain.uid);
     match_with fn () handler
 
   let system_tasks_suspended domain = Hashtbl.length domain.system_tasks > 0
@@ -925,8 +957,20 @@ module Domain = struct
     | exception Heapq.Empty -> unblock_awaits_with_system_tasks pool domain
     | _tick, elt ->
         once pool domain elt;
-        if all_tasks_await domain && system_tasks_suspended domain then
+        if all_tasks_await_or_yield domain && system_tasks_suspended domain then
           unblock_awaits_with_system_tasks pool domain
+
+  let all_tasks_await domain =
+    let exception No in
+    let f (_, task) =
+      match task with
+      | Suspended (_, State.Suspended (_, Both _))
+      | Suspended (_, State.Suspended (_, Await _))
+      | Suspended (_, State.Suspended (_, Await_all _)) ->
+          ()
+      | _ -> raise_notrace No
+    in
+    try Heapq.iter f domain.tasks; true with No -> false
 end
 
 module Pool = struct
@@ -974,9 +1018,7 @@ module Pool = struct
         transfer_all_tasks pool domain;
         pool.working_counter <- pool.working_counter + 1;
         Mutex.unlock pool.mutex;
-        Logs.debug (fun m -> m "[%a] wake up" Domain_uid.pp domain.uid);
         Domain.run pool domain;
-        Logs.debug (fun m -> m "[%a] sleep" Domain_uid.pp domain.uid);
         Mutex.lock pool.mutex;
         pool.working_counter <- pool.working_counter - 1;
         if (not pool.stop) && Int.equal pool.working_counter 0 then
@@ -1146,6 +1188,7 @@ external reraise : exn -> 'a = "%reraise"
 let await_exn prm =
   match await prm with Ok value -> value | Error exn -> reraise exn
 
+let both prm0 prm1 = Effect.perform (Both (prm0, prm1))
 let task (Syscall (uid, _) : _ syscall) fn = Continue (uid, fn)
 
 let quanta =
