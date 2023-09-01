@@ -878,10 +878,11 @@ module Domain = struct
           | [] -> Promise.cancel prm
           | _ -> assert false)
 
-  let all_tasks_await domain =
+  let all_tasks_await_or_yield domain =
     let exception No in
     let f (_, task) =
       match task with
+      | Suspended (_, State.Suspended (_, Yield))
       | Suspended (_, State.Suspended (_, Await _))
       | Suspended (_, State.Suspended (_, Await_all _)) ->
           ()
@@ -926,8 +927,19 @@ module Domain = struct
     | exception Heapq.Empty -> unblock_awaits_with_system_tasks pool domain
     | _tick, elt ->
         once pool domain elt;
-        if all_tasks_await domain && system_tasks_suspended domain then
+        if all_tasks_await_or_yield domain && system_tasks_suspended domain then
           unblock_awaits_with_system_tasks pool domain
+
+  let all_tasks_await domain =
+    let exception No in
+    let f (_, task) =
+      match task with
+      | Suspended (_, State.Suspended (_, Await _))
+      | Suspended (_, State.Suspended (_, Await_all _)) ->
+          ()
+      | _ -> raise_notrace No
+    in
+    try Heapq.iter f domain.tasks; true with No -> false
 end
 
 module Pool = struct
