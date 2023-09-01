@@ -1,0 +1,9 @@
+(library
+ (name happy)
+ (modules happy)
+ (libraries miou.unix mtime.clock.os ipaddr.unix happy-eyeballs))
+
+(executable
+ (name main)
+ (modules main)
+ (libraries logs.fmt logs.threaded fmt.tty mtime.clock.os duration happy))
