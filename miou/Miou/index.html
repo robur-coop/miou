@@ -66,7 +66,10 @@ Exception: Miou.Still_has_children.</code></pre></div></div><div class="odoc-spe
   Miou.await_one
     [ Miou.call_cc (Fun.const 1)
     ; Miou.call_cc (Fun.const 2) ] ;;
-Exception: Miou.Still_has_children</code></pre></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-yield"><a href="#val-yield" class="anchor"></a><code><span><span class="keyword">val</span> yield : <span>unit <span class="arrow">&#45;&gt;</span></span> unit</span></code></div><div class="spec-doc"><p><code>yield ()</code> reschedules tasks and give an opportunity to carry out the tasks that have been on hold the longest. For intance:</p><pre class="language-ocaml"><code># Miou.run @@ fun () -&gt;
+Exception: Miou.Still_has_children</code></pre></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-both"><a href="#val-both" class="anchor"></a><code><span><span class="keyword">val</span> both : <span><span><span class="type-var">'a</span> <a href="#type-t">t</a></span> <span class="arrow">&#45;&gt;</span></span> <span><span><span class="type-var">'b</span> <a href="#type-t">t</a></span> <span class="arrow">&#45;&gt;</span></span> <span><span>(<span class="type-var">'a</span>, exn)</span> <span class="xref-unresolved">Stdlib</span>.result</span> * <span><span>(<span class="type-var">'b</span>, exn)</span> <span class="xref-unresolved">Stdlib</span>.result</span></span></code></div><div class="spec-doc"><p><code>both prm0 prm1</code> waits <code>prm0</code> <b>and</b>) <code>prm1</code>. It's equivalent to:</p><pre class="language-ocaml"><code>let both prm0 prm1 =
+  let a = Miou.await prm0 in
+  let b = Miou.await prm1 in
+  (a, b)</code></pre></div></div><div class="odoc-spec"><div class="spec value anchored" id="val-yield"><a href="#val-yield" class="anchor"></a><code><span><span class="keyword">val</span> yield : <span>unit <span class="arrow">&#45;&gt;</span></span> unit</span></code></div><div class="spec-doc"><p><code>yield ()</code> reschedules tasks and give an opportunity to carry out the tasks that have been on hold the longest. For intance:</p><pre class="language-ocaml"><code># Miou.run @@ fun () -&gt;
   let p = Miou.call_cc @@ fun () -&gt; print_endline &quot;Hello&quot; in
   print_endline &quot;World&quot;;
   Miou.await_exn p ;;
