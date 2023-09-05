@@ -16,25 +16,32 @@ module Cond : sig
   (** The type of condition variables. *)
 
   val make : ?mutex:Mutex.t -> unit -> t
-  (** [make ?mutex ()] creates and return a new condition variable. A condition
-      needs a {!type:Mutex.t} to have internal inter-domain synchronization
-      mechanisms. This mutex can be used by several conditions {!type:t}, so it
-      is possible to specify your own {!type:Mutex.t} instead of letting Miou
-      create one. *)
+  (** [make ?mutex ()] creates and return a new condition variable. The mutex
+      is used in the {!val:until} function to observe the validity of a
+      predicate. It is recommended that any change of state of this predicate
+      should be protected by this same mutex. *)
 
-  val wait : predicate:(unit -> bool) -> t -> bool
-  (** [wait ~predicate t] suspends the current task on the condition variable
-      [t]. The task can later be woken up after the condition variable [t] has
-      been signaled via {!val:signal} or {!val:broadcast}. [predicate] is a
-      function which is executed {b before} the wait to test if we need to wait
-      or not and {b protected} by the internal {!type:Mutex.t} (see
-      {!val:make}). *)
+  val wait : t -> unit
+  (** [wait t] suspends the current task on the condition variable [t]. The task
+      can later be woken up after the condition variable [t] has been signaled
+      via {!val:signal} or {!val:broadcast}. {!val:wait} does {b not} lock the
+      internal mutex passed as a parameter to the {!val:make} function. Spurious
+      wakeups does not happen - only {!val:signal} or {!val:broadcast} can
+      wakeup the task.
+
+      {b NOTE}: A signal can be sent {b before} the other task {!val:wait}s. In
+      this case (and according to our documentation), if you only intend to send
+      one signal, the other task will still be suspended. *)
 
   val until : predicate:(unit -> bool) -> fn:(unit -> 'a) -> t -> 'a
   (** [until ~predicate ~fn t] waits as long as [predicate] is [true]. Then, we
       execute [fn] as soon as the process has unblocked. The execution of
-      [predicate] and [fn] is protected by the mutex internal to condition [t].
-    *)
+      [predicate] and [fn] is protected by the mutex internal to condition [t]
+      (passed as a parameter to the {!val:make} function).
+
+      {b NOTE}: The function [fn] should recheck the [predicate]. Indeed, in
+      parallel programming (see {!val:Miou.call}), it can happen that a domain
+      re-invalidates the expected predicate before [fn] is executed. *)
 
   val signal : t -> unit
   (** [signal t] wakes up one of the tasks waiting on the condition variable
