@@ -21,9 +21,7 @@ depends: [
   "hxd"               {with-test}
   "mirage-crypto-rng" {with-test}
   "ipaddr"            {with-test}
-]
-
-pin-depends: [
-  [ "dns.dev" "git+https://github.com/dinosaure/ocaml-dns.git#7776079e5889c603b860f440471741bf407ccad2" ]
-  [ "dns-client.dev" "git+https://github.com/dinosaure/ocaml-dns.git#7776079e5889c603b860f440471741bf407ccad2" ]
+  "logs"              {with-test & >= "0.7.0"}
+  "dns"               {with-test}
+  "dns-client"        {with-test}
 ]

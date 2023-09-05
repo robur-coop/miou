@@ -25,15 +25,19 @@ let select () =
   in
   match min with
   | None -> []
-  | Some (uid, syscall, until) ->
+  | Some (_, _, until) ->
       let until = Float.min until 0.100 in
-      Hashtbl.remove sleepers uid;
+      Unix.sleepf until;
       Hashtbl.filter_map_inplace
         (fun _ (syscall, until') ->
           Some (syscall, Float.max 0. (until' -. until)))
         sleepers;
-      Unix.sleepf until;
-      [ Miou.task syscall (Fun.const ()) ]
+      Hashtbl.fold
+        (fun uid (syscall, until) acc ->
+          if until <= 0. then
+            Miou.task syscall (fun () -> Hashtbl.remove sleepers uid) :: acc
+          else acc)
+        sleepers []
 
 let events _ = { select; interrupt= ignore }
 
