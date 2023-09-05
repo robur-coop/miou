@@ -161,16 +161,11 @@ module Cond = struct
     in
     go ()
 
-  let wait ~predicate t =
-    let wait = with_lock ~lock:t.mutex_predicate predicate in
-    if wait then begin
-      with_lock ~lock:t.mutex_counter (fun () -> t.counter <- t.counter + 1);
-      blocking_read t.ic;
-      consume_signal t.ic;
-      with_lock ~lock:t.mutex_counter (fun () -> t.counter <- t.counter - 1);
-      with_lock ~lock:t.mutex_predicate predicate
-    end
-    else false
+  let wait t =
+    with_lock ~lock:t.mutex_counter (fun () -> t.counter <- t.counter + 1);
+    blocking_read t.ic;
+    consume_signal t.ic;
+    with_lock ~lock:t.mutex_counter (fun () -> t.counter <- t.counter - 1)
 
   let until ~predicate ~fn t =
     Mutex.lock t.mutex_predicate;
