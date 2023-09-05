@@ -26,19 +26,17 @@ and addr = Ipaddr.t * int
 and cancel = attempt * Miou_unix.file_descr Miou.t
 and action = [ `Connect_ip of state Atomic.t * addr list ]
 
-type t = {
-    timeout: int64
-  ; mutable cancel_connecting: cancel list Happy_eyeballs.Waiter_map.t
+type stack = {
+    mutable cancel_connecting: cancel list Happy_eyeballs.Waiter_map.t
   ; mutable waiters: state Atomic.t Happy_eyeballs.Waiter_map.t
   ; condition: Miou_unix.Cond.t
   ; queue: action Miou.Queue.t
   ; connections: (Miou.Promise.Uid.t, entry) Hashtbl.t
 }
 
-let create ~timeout =
+let create_daemon () =
   {
-    timeout
-  ; cancel_connecting= Happy_eyeballs.Waiter_map.empty
+    cancel_connecting= Happy_eyeballs.Waiter_map.empty
   ; waiters= Happy_eyeballs.Waiter_map.empty
   ; condition= Miou_unix.Cond.make ()
   ; queue= Miou.Queue.create ()
@@ -64,7 +62,7 @@ let try_connect addr () =
 let disown fd = Miou_unix.disown fd; Miou_unix.to_file_descr fd
 let getpeername fd = try Some (Unix.getpeername fd) with _exn -> None
 
-let connect t ~connections:orphans host id attempt addr =
+let connect t ~conns:orphans host id attempt addr =
   let connection = Miou.call ~orphans (try_connect addr) in
   Hashtbl.add t.connections
     (Miou.Promise.uid connection)
@@ -75,9 +73,9 @@ let connect t ~connections:orphans host id attempt addr =
       (function None -> Some [ entry ] | Some cs -> Some (entry :: cs))
       t.cancel_connecting
 
-let handle_one_action t ~connections = function
+let handle_one_action t ~conns = function
   | Happy_eyeballs.Connect (host, id, attempt, addr) ->
-      connect t ~connections host id attempt addr
+      connect t ~conns host id attempt addr
   | Happy_eyeballs.Connect_failed (host, id, reason) ->
       Log.warn (fun m ->
           m "connection to %a failed: %s" Domain_name.pp host reason);
@@ -103,7 +101,7 @@ let handle_one_action t ~connections = function
           | Connected (_, fd) ->
               let sockaddr = getpeername fd in
               let fd = Miou_unix.of_file_descr fd in
-              Log.debug (fun m ->
+              Log.warn (fun m ->
                   m "close the file-descriptor of %a (%a): %s" Domain_name.pp
                     host
                     Fmt.(option ~none:(const string "<none>") pp_sockaddr)
@@ -155,12 +153,15 @@ let handle_connection t connection =
       t.waiters <- waiters;
       let transition waiter =
         let addr = to_sockaddr addr in
+        Log.debug (fun m -> m "disown the file-descr of %a" Domain_name.pp host);
         let fd = disown fd in
         let connected = Connected (addr, fd) in
         let set = Atomic.compare_and_set waiter In_progress connected in
+        Log.debug (fun m ->
+            m "transfer the file-descriptor for %a" Domain_name.pp host);
         if not set then (
           let fd = Miou_unix.of_file_descr fd in
-          Log.debug (fun m ->
+          Log.warn (fun m ->
               m "close the file-descriptor of %a" Domain_name.pp host);
           Miou_unix.close fd)
       in
@@ -178,21 +179,19 @@ let handle_connections t he connections actions =
   in
   go he actions
 
-exception Timeout
-
-let timeout () =
-  Miou.call_cc @@ fun () ->
-  Miou_unix.sleep he_timer_interval;
-  raise Timeout
-
 let await_actions t he =
   Miou.call_cc @@ fun () ->
   let user's_actions =
     Miou_unix.Cond.until
-      ~predicate:(fun () -> Miou.Queue.is_empty t.queue)
+      ~predicate:(fun () ->
+        Log.debug (fun m ->
+            m "got an user's action? %b"
+              (Fun.negate Miou.Queue.is_empty t.queue));
+        Miou.Queue.is_empty t.queue)
       ~fn:(fun () -> Miou.Queue.(to_list (transfer t.queue)))
       t.condition
   in
+  Log.debug (fun m -> m "got %d action(s)" (List.length user's_actions));
   let fold (he, actions) = function
     | `Connect_ip (waiter, addrs) ->
         let waiters, id = Happy_eyeballs.Waiter_map.register waiter t.waiters in
@@ -202,45 +201,53 @@ let await_actions t he =
   in
   List.fold_left fold (he, []) user's_actions
 
-let await_events t ~connections he =
+let await_events t he ~conns =
   Miou.call_cc @@ fun () ->
   let rec go he =
-    match handle_connections t he connections [] with
+    match handle_connections t he conns [] with
     | he, [] -> Miou.yield (); go he
     | he, actions -> (he, actions)
   in
   go he
 
-let suspend t he ~connections =
-  match
-    Miou.await_first
-      [ timeout (); await_actions t he; await_events t ~connections he ]
-  with
-  | Error Timeout -> (he, [])
+let suspend t he ~conns =
+  let timeout he =
+    Miou.call_cc @@ fun () ->
+    Miou_unix.sleep he_timer_interval;
+    (he, [])
+  in
+  let prms = [ timeout he; await_actions t he; await_events t he ~conns ] in
+  match Miou.await_first prms with
   | Error exn -> raise exn
   | Ok (he, actions) -> (he, actions)
 
-let daemon t =
-  let connections = Miou.orphans () in
-  let rec go he actions =
-    let he, cont, actions' = Happy_eyeballs.timer he (clock ()) in
-    match (cont, List.append actions actions') with
+let launch_daemon ~timeout:connect_timeout t () =
+  let conns = Miou.orphans () in
+  let rec go he () =
+    let he, cont, actions = Happy_eyeballs.timer he (clock ()) in
+    match (cont, actions) with
     | `Suspend, [] ->
-        let he, actions = suspend t he ~connections in
-        go he actions
+        Log.debug (fun m -> m "the daemon is suspended to a new event");
+        let he, actions' = suspend t he ~conns in
+        List.iter (handle_one_action ~conns t) (List.append actions actions');
+        go he ()
     | _, actions ->
-        let he, actions = handle_connections t he connections actions in
-        List.iter (handle_one_action ~connections t) actions;
-        go he []
+        let he, actions = handle_connections t he conns actions in
+        List.iter (handle_one_action ~conns t) actions;
+        go he ()
   in
-  let he = Happy_eyeballs.create ~connect_timeout:t.timeout (clock ()) in
-  let he, actions = suspend ~connections t he in
-  go he actions
+  let he = Happy_eyeballs.create ~connect_timeout (clock ()) in
+  Log.debug (fun m -> m "the daemon is launched");
+  let he, actions = suspend ~conns t he in
+  Log.debug (fun m -> m "consume %d action(s)" (List.length actions));
+  List.iter (handle_one_action ~conns t) actions;
+  go he ()
 
 let connect_ip t nss =
   let waiter = Atomic.make In_progress in
   Miou.Queue.enqueue t.queue (`Connect_ip (waiter, nss));
   Miou_unix.Cond.signal t.condition;
+  Log.debug (fun m -> m "the daemon was signaled about another user's action");
   waiter
 
 let to_pairs lst =
@@ -251,13 +258,124 @@ let connect_to_nameservers t nameservers =
   let waiter = connect_ip t nss in
   let rec wait () =
     match Atomic.get waiter with
-    | In_progress -> wait (Miou.yield ())
+    | In_progress ->
+        Log.debug (fun m -> m "waiting for a file-descr");
+        wait (Miou.yield ())
     | Connected (addr, fd) -> (addr, fd)
     | Failed msg -> failwith msg
   in
   let addr, fd = Miou.await_exn (Miou.call_cc wait) in
   (addr, Miou_unix.of_file_descr fd)
 
-let create ~timeout =
-  let t = create ~timeout in
-  (Miou.call_cc (fun () -> daemon t), t)
+type daemon = unit Miou.t
+
+let daemon ~timeout =
+  let v = create_daemon () in
+  (Miou.call (launch_daemon ~timeout v), v)
+
+let kill = Miou.cancel
+
+type +'a io = 'a
+type io_addr = [ `Plaintext of Ipaddr.t * int ]
+
+type t = {
+    nameservers: io_addr list
+  ; proto: Dns.proto
+  ; timeout: float
+  ; stack: stack
+}
+
+type context = float * Miou_unix.file_descr
+
+let nameservers { nameservers; proto; _ } = (proto, nameservers)
+let bind x f = f x
+let lift = Fun.id
+let rng = Mirage_crypto_rng.generate ?g:None
+
+let connect t =
+  try
+    let _addr, fd = connect_to_nameservers t.stack t.nameservers in
+    Ok (`Tcp, (t.timeout, fd))
+  with Failure msg -> Error (`Msg msg)
+
+let rec read_loop ?(linger = Cstruct.empty) ~id proto fd =
+  let process rx =
+    let rec handle_data ({ Cstruct.len= rx_len; _ } as rx) =
+      if rx_len > 2 then
+        let len = Cstruct.BE.get_uint16 rx 0 in
+        if rx_len - 2 >= len then
+          let packet, rest =
+            if rx_len - 2 = len then (rx, Cstruct.empty)
+            else Cstruct.split rx (len + 2)
+          in
+          let id' = Cstruct.BE.get_uint16 packet 2 in
+          if id = id' then packet else handle_data rest
+        else read_loop ~linger:rx ~id proto fd
+      else read_loop ~linger:rx ~id proto fd
+    in
+    let rx =
+      if Cstruct.length linger = 0 then rx else Cstruct.append linger rx
+    in
+    handle_data rx
+  in
+  match proto with
+  | `Tcp ->
+      let buf = Bytes.create 0x10 in
+      let len = Miou_unix.read fd ~off:0 ~len:(Bytes.length buf) buf in
+      Log.debug (fun m -> m "got %d byte(s) from the resolver" len);
+      if len > 0 then process (Cstruct.of_bytes ~off:0 ~len buf)
+      else failwith "End of file reading from resolver"
+
+exception Timeout
+
+let with_timeout ~timeout ?give fn =
+  let timeout () = Miou_unix.sleep timeout; raise Timeout in
+  Miou.await_first [ Miou.call_cc timeout; Miou.call_cc ?give fn ]
+
+external happy_translate_so_type : int -> Unix.socket_type
+  = "happy_translate_so_type"
+
+let type_of_socket fd =
+  let fd = Miou_unix.to_file_descr fd in
+  let ty = Unix.getsockopt_int fd Unix.SO_TYPE in
+  happy_translate_so_type ty
+
+let send_recv (timeout, fd) ({ Cstruct.len; _ } as tx) =
+  if len > 4 then begin
+    match type_of_socket fd with
+    | Unix.SOCK_STREAM -> (
+        let fn () =
+          Log.debug (fun m -> m "send a packet to resolver");
+          Miou_unix.write fd ~off:0 ~len (Cstruct.to_string tx);
+          let id = Cstruct.BE.get_uint16 tx 2 in
+          Log.debug (fun m -> m "recv a packet from resolver");
+          let packet = read_loop ~id `Tcp fd in
+          (packet, Miou_unix.transfer fd)
+        in
+        match with_timeout ~timeout ~give:[ Miou_unix.owner fd ] fn with
+        | Ok (packet, _) ->
+            Log.debug (fun m -> m "Got a DNS packet from the resolver");
+            Ok packet
+        | Error Timeout ->
+            Log.warn (fun m -> m "DNS request timeout");
+            error_msgf "DNS request timeout"
+        | Error (Failure msg) ->
+            Log.warn (fun m -> m "Got a failure: %s" msg);
+            Error (`Msg msg)
+        | Error exn ->
+            error_msgf "Got an unexpected exception: %S"
+              (Printexc.to_string exn))
+    | _ -> error_msgf "Invalid type of file-descriptor"
+  end
+  else error_msgf "Invalid context (data length <= 4)"
+
+let close (_, fd) = Miou_unix.close fd
+let of_ns ns = Int64.to_float ns /. 1_000_000_000.
+
+let create ?nameservers ~timeout stack =
+  let proto, nameservers =
+    match nameservers with
+    | None -> (`Tcp, [ `Plaintext (Ipaddr.of_string_exn "8.8.8.8", 53) ])
+    | Some (a, nss) -> (a, nss)
+  in
+  { nameservers; proto; timeout= of_ns timeout; stack }
