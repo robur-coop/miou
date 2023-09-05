@@ -919,19 +919,6 @@ module Domain = struct
           | [] -> Promise.cancel prm
           | _ -> assert false)
 
-  let all_tasks_await_or_yield domain =
-    let exception No in
-    let f (_, task) =
-      match task with
-      | Suspended (_, State.Suspended (_, Yield))
-      | Suspended (_, State.Suspended (_, Both _))
-      | Suspended (_, State.Suspended (_, Await _))
-      | Suspended (_, State.Suspended (_, Await_all _)) ->
-          ()
-      | _ -> raise_notrace No
-    in
-    try Heapq.iter f domain.tasks; true with No -> false
-
   let unblock_awaits_with_system_tasks pool domain =
     let open Effect.Deep in
     let retc = Fun.id in
@@ -966,23 +953,13 @@ module Domain = struct
 
   let run pool domain =
     match Heapq.pop_minimum domain.tasks with
-    | exception Heapq.Empty -> unblock_awaits_with_system_tasks pool domain
+    | exception Heapq.Empty ->
+        if system_tasks_suspended domain then
+          unblock_awaits_with_system_tasks pool domain
     | _tick, elt ->
         once pool domain elt;
-        if all_tasks_await_or_yield domain && system_tasks_suspended domain then
+        if system_tasks_suspended domain then
           unblock_awaits_with_system_tasks pool domain
-
-  let all_tasks_await domain =
-    let exception No in
-    let f (_, task) =
-      match task with
-      | Suspended (_, State.Suspended (_, Both _))
-      | Suspended (_, State.Suspended (_, Await _))
-      | Suspended (_, State.Suspended (_, Await_all _)) ->
-          ()
-      | _ -> raise_notrace No
-    in
-    try Heapq.iter f domain.tasks; true with No -> false
 end
 
 module Pool = struct
@@ -1208,6 +1185,26 @@ let quanta =
   | Some str -> ( try int_of_string str with _ -> 1)
   | None -> 1
 
+(* NOTE(dinosaure): this function is a bit precise. We can probably relax it
+   when domains signal [dom0] for any sleeps/wakeups. *)
+let await_only_domains dom0 =
+  let exception No in
+  let f (_, task) =
+    match task with
+    | Suspended (_, State.Suspended (_, Both (prm0, prm1))) ->
+        if prm0.runner = 0 || prm1.runner = 0 then raise_notrace No
+    | Suspended (_, State.Suspended (_, Await prm)) ->
+        if prm.runner = 0 then raise_notrace No
+    | Suspended (_, State.Suspended (_, Await_all prms)) ->
+        if List.exists (fun prm -> prm.runner = 0) prms then raise_notrace No
+    | Suspended (_, State.Suspended (_, Await_one (_, prms))) ->
+        if List.exists (fun prm -> prm.runner = 0) prms then raise_notrace No
+    | _ -> raise_notrace No
+  in
+  if not (Heapq.is_empty dom0.tasks) then
+    try Heapq.iter f dom0.tasks; true with No -> false
+  else true
+
 let run ?(quanta = quanta) ?(events = Fun.const dummy_events)
     ?(g = Random.State.make_self_init ()) ?domains fn =
   Domain.Uid.reset ();
@@ -1217,7 +1214,7 @@ let run ?(quanta = quanta) ?(events = Fun.const dummy_events)
   let pool, domains = Pool.make ~quanta ~g ?domains events in
   while Promise.is_pending prm0 do
     Domain.run pool dom0;
-    if Domain.all_tasks_await dom0 && Domain.system_tasks_suspended dom0 = false
+    if await_only_domains dom0 && Domain.system_tasks_suspended dom0 = false
     then Pool.wait pool
   done;
   let result = Promise.to_result prm0 in
