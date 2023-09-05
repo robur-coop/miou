@@ -625,7 +625,9 @@ module Domain = struct
       type a b c. c t -> (a State.step -> b State.t) -> a ownership -> b State.t
       =
    fun prm k -> function
-    | Check res ->
+    | Check (Resource { uid; _ } as res) ->
+        Logs.debug (fun m ->
+            m "check if %a owns [%a]" Promise.pp prm Resource_uid.pp uid);
         if own_it prm res = false then k (State.Fail Not_owner)
         else k (State.Send ())
     | Own (Resource { uid; _ } as res) ->
@@ -638,7 +640,8 @@ module Domain = struct
         else k (State.Fail (error_already_owned prm res))
     | Disown (Resource { uid; _ } as res) ->
         Logs.debug (fun m ->
-            m "%a disown [%a]" Promise.pp prm Resource_uid.pp uid);
+            m "%a disown [%a] (own it? %b)" Promise.pp prm Resource_uid.pp uid
+              (own_it prm res));
         if own_it prm res then begin
           let to_delete = ref None in
           let f node =
@@ -745,9 +748,15 @@ module Domain = struct
             let prms = List.filter (Fun.negate pack_is_cancelled) prms in
             k (await_cancellation_of prms ~and_return)
       | Cancel prm when Promise.is_cancelled prm ->
+          Logs.debug (fun m ->
+              m "[%a] %a cancels %a" Domain_uid.pp domain.uid Promise.pp current
+                Promise.pp prm);
           if Promise.is_a_children ~parent:current prm then k (State.Send ())
           else k (State.Fail Not_a_child)
       | Cancel prm when Promise.is_consumed prm ->
+          Logs.debug (fun m ->
+              m "[%a] %a cancels %a" Domain_uid.pp domain.uid Promise.pp current
+                Promise.pp prm);
           if Promise.is_a_children ~parent:current prm then k (State.Send ())
           else k (State.Fail Not_a_child)
       | Cancel prm ->
@@ -838,7 +847,10 @@ module Domain = struct
     | State.Finished (Ok value) ->
         Logs.debug (fun m -> m "%a resolved" Promise.pp prm);
         if Promise.children_terminated prm = false then raise Still_has_children
-        else if resource_leak prm then raise Resource_leak
+        else if resource_leak prm then begin
+          Logs.err (fun m -> m "%a leaked a resource" Promise.pp prm);
+          raise Resource_leak
+        end
         else Promise.transition prm (Ok value)
     | State.Suspended (k, Suspend syscall) ->
         suspend_system_call domain syscall prm k
