@@ -3,7 +3,7 @@ let handler fd =
   let rec go () =
     let len = Miou_unix.read fd buf ~off:0 ~len:(Bytes.length buf) in
     if len > 0 then begin
-      Miou_unix.write fd (Bytes.unsafe_to_string buf) ~off:0 ~len;
+      Miou_unix.write fd buf ~off:0 ~len;
       go ()
     end
     else Miou_unix.close fd

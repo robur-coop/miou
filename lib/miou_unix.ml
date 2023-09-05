@@ -208,24 +208,24 @@ let rec read ({ fd; non_blocking; owner; _ } as file_descr) buf ~off ~len =
     in
     blocking_read fd; go ()
 
-let rec write ({ fd; non_blocking; owner; _ } as file_descr) str ~off ~len =
+let rec write ({ fd; non_blocking; owner; _ } as file_descr) bytes ~off ~len =
   Miou.Ownership.check owner;
   if non_blocking then
-    match Unix.write fd (Bytes.unsafe_of_string str) off len with
+    match Unix.write fd bytes off len with
     | exception Unix.(Unix_error (EINTR, _, _)) ->
-        write file_descr str ~off ~len
+        write file_descr bytes ~off ~len
     | exception Unix.(Unix_error ((EAGAIN | EWOULDBLOCK), _, _)) ->
         blocking_write fd;
-        write file_descr str ~off ~len
+        write file_descr bytes ~off ~len
     | len' when len' < len ->
-        write file_descr str ~off:(off + len') ~len:(len - len')
+        write file_descr bytes ~off:(off + len') ~len:(len - len')
     | _ -> ()
   else
     let rec go () =
-      match Unix.write fd (Bytes.unsafe_of_string str) off len with
+      match Unix.write fd bytes off len with
       | exception Unix.(Unix_error (EINTR, _, _)) -> go ()
       | len' when len' < len ->
-          write file_descr str ~off:(off + len') ~len:(len - len')
+          write file_descr bytes ~off:(off + len') ~len:(len - len')
       | _ -> ()
     in
     blocking_write fd; go ()

@@ -70,7 +70,7 @@ val read : file_descr -> bytes -> off:int -> len:int -> int
 (** [read fd buf ~off ~len] reads [len] bytes from [fd] into [buf] starting at
     [off]. Return the number of bytes actually read. *)
 
-val write : file_descr -> string -> off:int -> len:int -> unit
+val write : file_descr -> bytes -> off:int -> len:int -> unit
 (** [write fd str ~off ~len] writes [len] bytes starting at [off] from [str] on
     [fd]. *)
 

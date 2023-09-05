@@ -346,7 +346,7 @@ let send_recv (timeout, fd) ({ Cstruct.len; _ } as tx) =
     | Unix.SOCK_STREAM -> (
         let fn () =
           Log.debug (fun m -> m "send a packet to resolver");
-          Miou_unix.write fd ~off:0 ~len (Cstruct.to_string tx);
+          Miou_unix.write fd ~off:0 ~len (Cstruct.to_bytes tx);
           let id = Cstruct.BE.get_uint16 tx 2 in
           Log.debug (fun m -> m "recv a packet from resolver");
           let packet = read_loop ~id `Tcp fd in
