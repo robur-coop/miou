@@ -223,8 +223,8 @@ you in its approach (and that of its maintainers), and its objectives (and those
 of its users), welcome!
 
 [repository]: https://git.robur.coop/robur/miou
-[github]: https://github.com/roburio/miou
-[documentation]: https://roburio.github.io/miou/
-[sleepers]: https://roburio.github.io/miou/miou/sleepers.html
-[merkle-tree]: https://roburio.github.io/miou/miou/merkle.html
-[echo]: https://roburio.github.io/miou/miou/echo.html
+[github]: https://github.com/robur-coop/miou
+[documentation]: https://robur-coop.github.io/miou/
+[sleepers]: https://robur-coop.github.io/miou/miou/sleepers.html
+[merkle-tree]: https://robur-coop.github.io/miou/miou/merkle.html
+[echo]: https://robur-coop.github.io/miou/miou/echo.html
