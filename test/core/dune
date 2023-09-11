@@ -128,6 +128,11 @@
  (modules t27)
  (libraries miou))
 
+(executable
+ (name t28)
+ (modules t28)
+ (libraries miou))
+
 (cram
  (package miou)
  (deps
@@ -155,4 +160,5 @@
   t22.exe
   t23.exe
   t24.exe
-  t25.exe))
+  t25.exe
+  t28.exe))

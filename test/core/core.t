@@ -44,3 +44,4 @@
   Fatal error: exception Miou.Still_has_children
   [2]
   $ ./t25.exe
+  $ ./t28.exe

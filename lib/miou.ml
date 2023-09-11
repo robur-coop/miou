@@ -331,7 +331,6 @@ and pool = {
 
 and continue = Continue : Syscall_uid.t * (unit -> unit) -> continue
 and events = { select: unit -> continue list; interrupt: unit -> unit }
-and effect = Effect : 'a Effect.t -> effect
 and uid = Syscall_uid.t
 
 type _ Effect.t += Syscall : (unit -> 'a) -> 'a syscall Effect.t
@@ -339,8 +338,6 @@ type _ Effect.t += Suspend : 'a syscall -> 'a Effect.t
 type _ Effect.t += Syscall_exists : Syscall_uid.t -> bool Effect.t
 
 let dummy_events = { select= Fun.const []; interrupt= ignore }
-
-exception Invalid_effect of effect
 
 module Domain = struct
   module Uid = Domain_uid
@@ -769,9 +766,7 @@ module Domain = struct
           else k (State.Fail Not_a_child)
       | Suspend _ -> k State.Intr
       | Ownership action -> ownership current k action
-      | effect ->
-          Logs.err (fun m -> m "Unhandled effect");
-          k (State.Fail (Invalid_effect (Effect effect)))
+      | effect -> k (State.None effect)
     in
     { State.perform }
 
@@ -855,6 +850,9 @@ module Domain = struct
     | State.Suspended (k, Suspend syscall) ->
         suspend_system_call domain syscall prm k
     | State.Suspended _ as state ->
+        let state = invariant prm state in
+        add_task domain (Suspended (prm, state))
+    | State.Unhandled _ as state ->
         let state = invariant prm state in
         add_task domain (Suspended (prm, state))
 
