@@ -613,6 +613,7 @@ val task : 'a syscall -> (unit -> unit) -> continue
     represented by the given [syscall]. *)
 
 type events = { select: unit -> continue list; interrupt: unit -> unit }
+type handler = { handler: 'a 'b. ('a -> 'b) -> 'a -> 'b } [@@unboxed]
 
 val is_pending : 'a syscall -> bool
 (** [is_pending syscall] checks the status of the suspension point. A suspension
@@ -787,5 +788,6 @@ val run :
   -> ?events:(Domain.Uid.t -> events)
   -> ?g:Random.State.t
   -> ?domains:int
+  -> ?handler:handler
   -> (unit -> 'a)
   -> 'a

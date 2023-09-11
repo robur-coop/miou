@@ -1,7 +1,7 @@
 type _ Effect.t += Foo : unit Effect.t
 
 let prgm () =
-  let prm = Miou.call_cc @@ fun () -> Effect.perform Foo in
+  let prm = Miou.call @@ fun () -> Effect.perform Foo in
   Miou.await_exn prm
 
 let handler fn v =
@@ -15,4 +15,4 @@ let handler fn v =
   in
   match_with fn v { retc; exnc; effc }
 
-let () = handler (fun () -> Miou.run prgm) ()
+let () = handler (fun () -> Miou.run ~handler:{ Miou.handler } prgm) ()

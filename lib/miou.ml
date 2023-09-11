@@ -1,6 +1,7 @@
 let failwith fmt = Format.kasprintf failwith fmt
 let str fmt = Format.kasprintf Fun.id fmt
 
+external apply : ('a -> 'b) -> 'a -> 'b = "%apply"
 external reraise : exn -> unit = "%reraise"
 
 module Queue = Queue
@@ -331,6 +332,7 @@ and pool = {
 
 and continue = Continue : Syscall_uid.t * (unit -> unit) -> continue
 and events = { select: unit -> continue list; interrupt: unit -> unit }
+and handler = { handler: 'u 'v. ('u -> 'v) -> 'u -> 'v } [@@unboxed]
 and uid = Syscall_uid.t
 
 type _ Effect.t += Syscall : (unit -> 'a) -> 'a syscall Effect.t
@@ -338,6 +340,7 @@ type _ Effect.t += Suspend : 'a syscall -> 'a Effect.t
 type _ Effect.t += Syscall_exists : Syscall_uid.t -> bool Effect.t
 
 let dummy_events = { select= Fun.const []; interrupt= ignore }
+let dummy_handler = { handler= apply }
 
 module Domain = struct
   module Uid = Domain_uid
@@ -853,6 +856,8 @@ module Domain = struct
         let state = invariant prm state in
         add_task domain (Suspended (prm, state))
     | State.Unhandled _ as state ->
+        Logs.debug (fun m ->
+            m "%a suspended due to unhandled effect" Promise.pp prm);
         let state = invariant prm state in
         add_task domain (Suspended (prm, state))
 
@@ -993,7 +998,7 @@ module Pool = struct
      goes back to sleep until the next signal. Domains can communicate with
      [dom0] (the launcher) by signaling that all domains are dormant ([idle]).
      Finally, [dom0] can communicate with the domains asking to stop. *)
-  let worker pool domain =
+  let worker pool domain _ =
     let exception Exit in
     try
       while true do
@@ -1053,6 +1058,7 @@ module Pool = struct
     wait pool
 
   let make ?(quanta = 2) ?(g = Random.State.make_self_init ())
+      ?(handler = dummy_handler)
       ?(domains = max 0 (Stdlib.Domain.recommended_domain_count () - 1)) events
       =
     let domains = List.init domains @@ fun _ -> Domain.make ~quanta ~g events in
@@ -1068,7 +1074,9 @@ module Pool = struct
       ; domains
       }
     in
-    let spawn domain = Stdlib.Domain.spawn @@ fun () -> worker pool domain in
+    let spawn domain =
+      Stdlib.Domain.spawn (handler.handler (worker pool domain))
+    in
     (pool, List.map spawn domains)
 end
 
@@ -1204,12 +1212,12 @@ let await_only_domains dom0 =
   else true
 
 let run ?(quanta = quanta) ?(events = Fun.const dummy_events)
-    ?(g = Random.State.make_self_init ()) ?domains fn =
+    ?(g = Random.State.make_self_init ()) ?domains ?handler fn =
   Domain.Uid.reset ();
   let dom0 = Domain.make ~quanta ~g events in
   let prm0 = Promise.make ~resources:[] ~runner:dom0.uid () in
   Domain.add_task dom0 (Arrived (prm0, fn));
-  let pool, domains = Pool.make ~quanta ~g ?domains events in
+  let pool, domains = Pool.make ~quanta ~g ?domains ?handler events in
   while Promise.is_pending prm0 do
     Domain.run pool dom0;
     if await_only_domains dom0 && Domain.system_tasks_suspended dom0 = false
