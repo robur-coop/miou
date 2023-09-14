@@ -954,7 +954,7 @@ module Domain = struct
       false
     with Yes -> true
 
-  let run pool domain =
+  let run pool domain () =
     match Heapq.pop_minimum domain.tasks with
     | exception Heapq.Empty ->
         if system_tasks_suspended domain then
@@ -1010,7 +1010,7 @@ module Pool = struct
         transfer_all_tasks pool domain;
         pool.working_counter <- pool.working_counter + 1;
         Mutex.unlock pool.mutex;
-        Domain.run pool domain;
+        Domain.run pool domain ();
         Mutex.lock pool.mutex;
         pool.working_counter <- pool.working_counter - 1;
         if (not pool.stop) && Int.equal pool.working_counter 0 then
@@ -1074,6 +1074,8 @@ module Pool = struct
       ; domains
       }
     in
+    (* NOTE(dinosaure): we apply the user's handler here but we probably use it
+       when we call [Domain.run] as [dom0] does. *)
     let spawn domain =
       Stdlib.Domain.spawn (handler.handler (worker pool domain))
     in
@@ -1212,14 +1214,15 @@ let await_only_domains dom0 =
   else true
 
 let run ?(quanta = quanta) ?(events = Fun.const dummy_events)
-    ?(g = Random.State.make_self_init ()) ?domains ?handler fn =
+    ?(g = Random.State.make_self_init ()) ?domains ?(handler = dummy_handler) fn
+    =
   Domain.Uid.reset ();
   let dom0 = Domain.make ~quanta ~g events in
   let prm0 = Promise.make ~resources:[] ~runner:dom0.uid () in
   Domain.add_task dom0 (Arrived (prm0, fn));
-  let pool, domains = Pool.make ~quanta ~g ?domains ?handler events in
+  let pool, domains = Pool.make ~quanta ~g ?domains ~handler events in
   while Promise.is_pending prm0 do
-    Domain.run pool dom0;
+    handler.handler (Domain.run pool dom0) ();
     if await_only_domains dom0 && Domain.system_tasks_suspended dom0 = false
     then Pool.wait pool
   done;
