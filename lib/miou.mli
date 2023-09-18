@@ -782,6 +782,7 @@ val cancel : 'a t -> unit
     which should not affect the opportunity for other concurrent tasks to run.
 *)
 
+type handler = { handler: 'a 'b. ('a -> 'b) -> 'a -> 'b } [@@unboxed]
 (** {2 Composition.}
 
     It is possible to compose Miou with a library that also generates effects.
@@ -825,7 +826,6 @@ val cancel : 'a t -> unit
     the effect will be produced only as soon as the said task has its execution
     slot.
 *)
-type handler = { handler: 'a 'b. ('a -> 'b) -> 'a -> 'b } [@@unboxed]
 
 val run :
      ?quanta:int
