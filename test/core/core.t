@@ -44,4 +44,9 @@
   Fatal error: exception Miou.Still_has_children
   [2]
   $ ./t25.exe
+  $ ./t26.exe
+  Fatal error: exception Infinite_loop
+  [2]
+  $ ./t27.exe
+  1
   $ ./t28.exe
