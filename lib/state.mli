@@ -76,6 +76,7 @@ type ('a, 'b) continuation
 type 'a t = private
   | Finished of ('a, exn) result
   | Suspended : ('a, 'b) continuation * 'a Effect.t -> 'b t
+  | Unhandled : ('a, 'b) continuation * 'a -> 'b t
 
 val make : ('a -> 'b) -> 'a -> 'b t
 (** [make fn value] makes a new {i function state} by executing the function
@@ -99,6 +100,7 @@ type 'a step =
   | Fail of exn
   | Intr
   | Cont : 'a Effect.t -> 'a step
+  | None : 'a Effect.t -> 'a step
   | Yield : unit step
 
 type ('a, 'b) k = ('a step -> 'b t) -> 'a Effect.t -> 'b t

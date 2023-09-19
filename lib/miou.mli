@@ -782,10 +782,56 @@ val cancel : 'a t -> unit
     which should not affect the opportunity for other concurrent tasks to run.
 *)
 
+type handler = { handler: 'a 'b. ('a -> 'b) -> 'a -> 'b } [@@unboxed]
+(** {2 Composition.}
+
+    It is possible to compose Miou with a library that also generates effects.
+    The user can compose in 2 ways:
+    - simply apply his/her effect manager with its function in Miou
+      [Miou.call{,_cc} @@ fun () -> handler fn ()]
+    - inform Miou of an effect handler that should comply with the {b "quanta"
+      rule}
+
+    Remember that Miou suspends a task as soon as it emits an effect. The second
+    case can be interesting in order to always ensure the availability of the
+    application regardless effect handlers. Here's a basic example of how to
+    compose.
+
+    {[
+      type _ Effect.t += Foo : unit Effect.t
+
+      let handler fn v =
+        let open Effect.Deep in
+        let retc = Fun.id and exnc = raise in
+        let effc : type c. c Effect.t -> ((c, 'a) continuation -> 'b) option =
+          function Foo -> Some (fun k -> continue k ())
+                 | _ -> None in
+        match_with fn v { retc; exnc; effc; }
+
+      let () = Miou.run ~handler:{ Miou.handler } @@ fun () ->
+        let prm = Miou.call @@ fun () -> Effect.perform Foo in
+        Miou.await_exn prm
+    ]}
+
+    The user can also compose several effects managers:
+
+    {[
+      # let compose { Miou.handler= a } { Miou.handler= b } =
+        { Miou.handler= fun fn v -> (a (b fn)) v } ;;
+      val compose : Miou.handler -> Miou.handler -> Miou.handler = <fun>
+    ]}
+
+    {b NOTE}: We want to reiterate that such a composition implies that the
+    effect will not be executed {i immediately}: the task will be suspended and
+    the effect will be produced only as soon as the said task has its execution
+    slot.
+*)
+
 val run :
      ?quanta:int
   -> ?events:(Domain.Uid.t -> events)
   -> ?g:Random.State.t
   -> ?domains:int
+  -> ?handler:handler
   -> (unit -> 'a)
   -> 'a
