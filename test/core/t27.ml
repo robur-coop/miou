@@ -1,3 +1,6 @@
+(* NOTE(dinosaure): this test shows the order chosen by Miou
+   to execute tasks. *)
+
 let () =
   Miou.run @@ fun () ->
   let v = ref 0 in
@@ -13,4 +16,4 @@ let () =
     v := 2
   in
   ignore (Miou.await_all [ p0; p1 ]);
-  print_int !v
+  Format.printf "%d\n%!" !v

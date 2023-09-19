@@ -6,7 +6,15 @@ let sleep until =
   let return = Fun.const () in
   let promise = Miou.make return in
   Hashtbl.add sleepers (Miou.uid promise) (promise, until);
-  match Miou.suspend promise with Ok () -> () | Error exn -> raise exn
+  Miou.suspend promise
 
-let dummy _ = { select= Fun.const []; interrupt= ignore }
+exception Infinite_loop
+
+let () =
+  Printexc.register_printer @@ function
+  | Infinite_loop -> Some "Infinite_loop"
+  | _ -> None
+
+let infinite_loop () = raise Infinite_loop
+let dummy _ = { select= infinite_loop; interrupt= ignore }
 let () = Miou.(run ~events:dummy @@ fun () -> sleep 1.; ())

@@ -124,6 +124,11 @@
  (libraries miou))
 
 (executable
+ (name t26)
+ (modules t26)
+ (libraries miou))
+
+(executable
  (name t27)
  (modules t27)
  (libraries miou))
@@ -161,4 +166,6 @@
   t23.exe
   t24.exe
   t25.exe
+  t26.exe
+  t27.exe
   t28.exe))
