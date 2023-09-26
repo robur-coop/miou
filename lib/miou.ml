@@ -464,7 +464,13 @@ module Domain = struct
           m "[%a] signals the cancellation of %a to [%a]" Domain_uid.pp
             domain.uid Promise.pp prm Domain_uid.pp domain'.uid);
       interrupt ~domain:domain')
-    else add_task domain (Cancelled prm)
+    else begin
+      Hashtbl.filter_map_inplace
+        (fun _ (System_call_suspended (_, _, prm', _) as v) ->
+          if Promise.equal prm prm' then None else Some v)
+        domain.system_tasks;
+      add_task domain (Cancelled prm)
+    end
 
   (* XXX(dinosaure): Promises can end with "uncatchable" exceptions. This means
      that these exceptions terminate the program in any case. The user cannot
