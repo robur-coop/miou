@@ -205,6 +205,9 @@ module Promise = struct
   let is_consumed prm =
     match Atomic.get prm.state with Consumed _ -> true | _ -> false
 
+  let is_resolved prm =
+    match Atomic.get prm.state with Resolved _ -> true | _ -> false
+
   let disown_resources ress prm =
     let nodes = ref [] in
     let f node =
@@ -461,7 +464,13 @@ module Domain = struct
           m "[%a] signals the cancellation of %a to [%a]" Domain_uid.pp
             domain.uid Promise.pp prm Domain_uid.pp domain'.uid);
       interrupt ~domain:domain')
-    else add_task domain (Cancelled prm)
+    else begin
+      Hashtbl.filter_map_inplace
+        (fun _ (System_call_suspended (_, _, prm', _) as v) ->
+          if Promise.equal prm prm' then None else Some v)
+        domain.system_tasks;
+      add_task domain (Cancelled prm)
+    end
 
   (* XXX(dinosaure): Promises can end with "uncatchable" exceptions. This means
      that these exceptions terminate the program in any case. The user cannot
@@ -556,6 +565,11 @@ module Domain = struct
     match List.partition Promise.is_pending prms with
     | _pending, [] -> State.Intr
     | _, terminated when and_cancel -> (
+        let terminated =
+          match List.partition Promise.is_resolved terminated with
+          | [], _ -> terminated
+          | terminated, _ -> terminated
+        in
         let len = List.length terminated in
         let prm = List.nth terminated (Random.State.int domain.g len) in
         let to_cancel = List.filter (Fun.negate (Promise.equal prm)) prms in
@@ -570,6 +584,11 @@ module Domain = struct
             let and_return = Promise.to_result prm in
             await_cancellation_of ~and_return to_cancel)
     | _, terminated -> (
+        let terminated =
+          match List.partition Promise.is_resolved terminated with
+          | [], _ -> terminated
+          | terminated, _ -> terminated
+        in
         let len = List.length terminated in
         let prm = List.nth terminated (Random.State.int domain.g len) in
         match unreachable_exception prms with
