@@ -205,6 +205,9 @@ module Promise = struct
   let is_consumed prm =
     match Atomic.get prm.state with Consumed _ -> true | _ -> false
 
+  let is_resolved prm =
+    match Atomic.get prm.state with Resolved _ -> true | _ -> false
+
   let disown_resources ress prm =
     let nodes = ref [] in
     let f node =
@@ -556,6 +559,11 @@ module Domain = struct
     match List.partition Promise.is_pending prms with
     | _pending, [] -> State.Intr
     | _, terminated when and_cancel -> (
+        let terminated =
+          match List.partition Promise.is_resolved terminated with
+          | [], _ -> terminated
+          | terminated, _ -> terminated
+        in
         let len = List.length terminated in
         let prm = List.nth terminated (Random.State.int domain.g len) in
         let to_cancel = List.filter (Fun.negate (Promise.equal prm)) prms in
@@ -570,6 +578,11 @@ module Domain = struct
             let and_return = Promise.to_result prm in
             await_cancellation_of ~and_return to_cancel)
     | _, terminated -> (
+        let terminated =
+          match List.partition Promise.is_resolved terminated with
+          | [], _ -> terminated
+          | terminated, _ -> terminated
+        in
         let len = List.length terminated in
         let prm = List.nth terminated (Random.State.int domain.g len) in
         match unreachable_exception prms with
