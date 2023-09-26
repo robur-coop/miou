@@ -33,11 +33,16 @@ let epr fmt =
 
 let pp_msg ppf (`Msg msg) = Fmt.string ppf msg
 let osau_re = Domain_name.(host_exn (of_string_exn "osau.re"))
+let google_com = Domain_name.(host_exn (of_string_exn "google.com"))
 
 let () =
   Miou_unix.run @@ fun () ->
   let daemon, stack = Happy.daemon ~timeout:(Duration.of_sec 1) in
-  let dns = Mdns.create stack in
-  let res = Mdns.gethostbyname dns osau_re in
-  pr "%a\n%!" Fmt.(Dump.result ~ok:Ipaddr.V4.pp ~error:pp_msg) res;
+  let dns = Mdns.create ~cache_size:1 stack in
+  for _ = 0 to 10_0000 do
+    let res = Mdns.gethostbyname dns osau_re in
+    pr "%a\n%!" Fmt.(Dump.result ~ok:Ipaddr.V4.pp ~error:pp_msg) res;
+    let res = Mdns.gethostbyname dns google_com in
+    pr "%a\n%!" Fmt.(Dump.result ~ok:Ipaddr.V4.pp ~error:pp_msg) res
+  done;
   Happy.kill daemon

@@ -168,19 +168,7 @@ let handle_connection t connection =
       Option.iter transition waiter;
       Happy_eyeballs.Connected (host, id, addr)
 
-let handle_connections t he connections actions =
-  let rec go he actions =
-    match Option.map (handle_connection t) (Miou.care connections) with
-    | Some event ->
-        let he, actions' = Happy_eyeballs.event he (clock ()) event in
-        (* NOTE(dinosaure): prioritise event's actions. *)
-        go he (List.append actions' actions)
-    | None -> (he, actions)
-  in
-  go he actions
-
-let await_actions t he =
-  Miou.call_cc @@ fun () ->
+let await_actions t he () =
   let user's_actions =
     Miou_unix.Cond.until
       ~predicate:(fun () ->
@@ -197,51 +185,58 @@ let await_actions t he =
         let waiters, id = Happy_eyeballs.Waiter_map.register waiter t.waiters in
         t.waiters <- waiters;
         let he, actions' = Happy_eyeballs.connect_ip he (clock ()) ~id addrs in
-        (he, List.rev_append actions actions')
+        Log.debug (fun m -> m "+%d action(s)" (List.length actions'));
+        (he, actions @ actions')
   in
   List.fold_left fold (he, []) user's_actions
 
-let await_events t he ~conns =
-  Miou.call_cc @@ fun () ->
-  let rec go he =
-    match handle_connections t he conns [] with
-    | he, [] -> Miou.yield (); go he
-    | he, actions -> (he, actions)
-  in
-  go he
+let get_events t he ~conns =
+  match Option.map (handle_connection t) (Miou.care conns) with
+  | Some event ->
+      let he, actions = Happy_eyeballs.event he (clock ()) event in
+      (* NOTE(dinosaure): prioritise event's actions. *)
+      (he, actions)
+  | None -> (he, [])
+
+exception Timeout
+
+let with_timeout ~timeout ?give fn =
+  let timeout () = Miou_unix.sleep timeout; raise Timeout in
+  Miou.await_first [ Miou.call_cc timeout; Miou.call_cc ?give fn ]
 
 let suspend t he ~conns =
-  let timeout he =
-    Miou.call_cc @@ fun () ->
-    Miou_unix.sleep he_timer_interval;
-    (he, [])
-  in
-  let prms = [ timeout he; await_actions t he; await_events t he ~conns ] in
-  match Miou.await_first prms with
-  | Error exn -> raise exn
-  | Ok (he, actions) -> (he, actions)
+  match get_events t he ~conns with
+  | he, (_ :: _ as actions) -> (he, actions)
+  | he, [] -> (
+      match with_timeout ~timeout:he_timer_interval (await_actions t he) with
+      | Error Timeout -> (he, [])
+      | Error exn -> raise exn
+      | Ok (he, actions) ->
+          Log.debug (fun m -> m "return %d action(s)" (List.length actions));
+          (he, actions))
 
-let launch_daemon ~timeout:connect_timeout t () =
+let rec launch_daemon ~timeout:connect_timeout t () =
   let conns = Miou.orphans () in
-  let rec go he () =
-    let he, cont, actions = Happy_eyeballs.timer he (clock ()) in
-    match (cont, actions) with
-    | `Suspend, [] ->
-        Log.debug (fun m -> m "the daemon is suspended to a new event");
-        let he, actions' = suspend t he ~conns in
-        List.iter (handle_one_action ~conns t) (List.append actions actions');
-        go he ()
-    | _, actions ->
-        let he, actions = handle_connections t he conns actions in
-        List.iter (handle_one_action ~conns t) actions;
-        go he ()
-  in
   let he = Happy_eyeballs.create ~connect_timeout (clock ()) in
   Log.debug (fun m -> m "the daemon is launched");
   let he, actions = suspend ~conns t he in
   Log.debug (fun m -> m "consume %d action(s)" (List.length actions));
   List.iter (handle_one_action ~conns t) actions;
-  go he ()
+  go t ~conns he ()
+
+and go t ~conns he () =
+  let he, cont, actions = Happy_eyeballs.timer he (clock ()) in
+  match (cont, actions) with
+  | `Suspend, [] ->
+      Log.debug (fun m -> m "the daemon is suspended to a new event");
+      let he, actions = suspend t he ~conns in
+      Log.debug (fun m -> m "consume %d action(s)" (List.length actions));
+      List.iter (handle_one_action ~conns t) actions;
+      go t ~conns he ()
+  | _, actions ->
+      let he, actions' = get_events t he ~conns in
+      List.iter (handle_one_action ~conns t) (actions @ actions');
+      go t ~conns he ()
 
 let connect_ip t nss =
   let waiter = Atomic.make In_progress in
@@ -253,18 +248,19 @@ let connect_ip t nss =
 let to_pairs lst =
   List.map (fun (`Plaintext (ipaddr, port)) -> (ipaddr, port)) lst
 
+let rec wait value =
+  match Atomic.get value with
+  | In_progress ->
+      Log.debug (fun m -> m "waiting for a file-descr");
+      Miou.yield ();
+      wait value
+  | Connected (addr, fd) -> (addr, fd)
+  | Failed msg -> failwith msg
+
 let connect_to_nameservers t nameservers =
   let nss = to_pairs nameservers in
   let waiter = connect_ip t nss in
-  let rec wait () =
-    match Atomic.get waiter with
-    | In_progress ->
-        Log.debug (fun m -> m "waiting for a file-descr");
-        wait (Miou.yield ())
-    | Connected (addr, fd) -> (addr, fd)
-    | Failed msg -> failwith msg
-  in
-  let addr, fd = Miou.await_exn (Miou.call_cc wait) in
+  let addr, fd = Miou.await_exn (Miou.call_cc (fun () -> wait waiter)) in
   (addr, Miou_unix.of_file_descr fd)
 
 type daemon = unit Miou.t
@@ -326,12 +322,6 @@ let rec read_loop ?(linger = Cstruct.empty) ~id proto fd =
       if len > 0 then process (Cstruct.of_bytes ~off:0 ~len buf)
       else failwith "End of file reading from resolver"
 
-exception Timeout
-
-let with_timeout ~timeout ?give fn =
-  let timeout () = Miou_unix.sleep timeout; raise Timeout in
-  Miou.await_first [ Miou.call_cc timeout; Miou.call_cc ?give fn ]
-
 external happy_translate_so_type : int -> Unix.socket_type
   = "happy_translate_so_type"
 
@@ -354,7 +344,7 @@ let send_recv (timeout, fd) ({ Cstruct.len; _ } as tx) =
         in
         match with_timeout ~timeout ~give:[ Miou_unix.owner fd ] fn with
         | Ok (packet, _) ->
-            Log.debug (fun m -> m "Got a DNS packet from the resolver");
+            Log.debug (fun m -> m "got a DNS packet from the resolver");
             Ok packet
         | Error Timeout ->
             Log.warn (fun m -> m "DNS request timeout");
