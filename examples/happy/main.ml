@@ -33,8 +33,6 @@ let epr fmt =
   Fun.protect ~finally @@ fun () -> Format.eprintf fmt
 
 let pp_msg ppf (`Msg msg) = Fmt.string ppf msg
-let osau_re = Domain_name.(host_exn (of_string_exn "osau.re"))
-let google_com = Domain_name.(host_exn (of_string_exn "google.com"))
 
 let getaddrinfo dns =
   { Happy.getaddrinfo= (fun record host -> Mdns.getaddrinfo dns record host) }
@@ -44,7 +42,7 @@ let () =
   let daemon, stack = Happy.stack () in
   let dns = Mdns.create stack in
   Happy.inject_resolver ~getaddrinfo:(getaddrinfo dns) stack;
-  for i = 0 to 10_000 do
+  for _ = 0 to 10_000 do
     match Happy.connect_endpoint stack "google.com" [ 443 ] with
     | Ok (_, fd) -> Miou_unix.close fd
     | Error (`Msg msg) -> failwith msg
