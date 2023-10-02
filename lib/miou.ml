@@ -1134,11 +1134,14 @@ let care t =
         ready := Some node;
         raise_notrace Found
   in
-  try Sequence.iter_node ~f t; None
-  with Found ->
-    let[@warning "-8"] (Some node) = !ready in
-    let data = Sequence.data node in
-    Sequence.remove node; Some data
+  if Sequence.length t > 0 then begin
+    try Sequence.iter_node ~f t; Some None
+    with Found ->
+      let[@warning "-8"] (Some node) = !ready in
+      let data = Sequence.data node in
+      Sequence.remove node; Some (Some data)
+  end
+  else None
 
 let call ?orphans ?(give = []) fn =
   let domains = domains () in

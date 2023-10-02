@@ -17,8 +17,8 @@ let listen sockaddr =
 
 let rec clean_up orphans =
   match Miou.care orphans with
-  | Some prm -> Miou.await_exn prm; clean_up orphans
-  | None -> ()
+  | Some (Some prm) -> Miou.await_exn prm; clean_up orphans
+  | None | Some None -> ()
 
 let server sockaddr =
   let rec server orphans fd =
