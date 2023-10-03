@@ -132,8 +132,6 @@ module Resource = struct
   let make ~finaliser value =
     let uid = Uid.gen () in
     Resource { uid; value; finaliser }
-
-  let equal (Resource { uid= a; _ }) (Resource { uid= b; _ }) = Uid.equal a b
 end
 
 (** Promise *)
@@ -208,15 +206,6 @@ module Promise = struct
   let is_resolved prm =
     match Atomic.get prm.state with Resolved _ -> true | _ -> false
 
-  let disown_resources ress prm =
-    let nodes = ref [] in
-    let f node =
-      let resource = Sequence.data node in
-      if List.exists (Resource.equal resource) ress then nodes := node :: !nodes
-    in
-    Sequence.iter_node ~f prm.resources;
-    List.iter Sequence.remove !nodes
-
   let make :
       type a.
          resources:resource list
@@ -228,7 +217,6 @@ module Promise = struct
     (* TODO(dinosaure): replace [Random.State.make_self_init] or delete it. *)
     let resources = Sequence.create (Random.State.make_self_init ()) in
     List.iter (fun res -> Sequence.push res resources) ress;
-    Option.iter (disown_resources ress) parent;
     let parent = Option.map (fun parent -> Pack parent) parent in
     {
       uid= Uid.gen ()
