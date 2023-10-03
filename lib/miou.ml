@@ -1243,12 +1243,16 @@ let run ?(quanta = quanta) ?(events = Fun.const dummy_events)
   let prm0 = Promise.make ~resources:[] ~runner:dom0.uid () in
   Domain.add_task dom0 (Arrived (prm0, fn));
   let pool, domains = Pool.make ~quanta ~g ?domains ~handler events in
-  while Promise.is_pending prm0 do
-    handler.handler (Domain.run pool dom0) ();
-    if await_only_domains dom0 && Domain.system_tasks_suspended dom0 = false
-    then Pool.wait pool
-  done;
-  let result = Promise.to_result prm0 in
+  let result =
+    try
+      while Promise.is_pending prm0 do
+        handler.handler (Domain.run pool dom0) ();
+        if await_only_domains dom0 && Domain.system_tasks_suspended dom0 = false
+        then Pool.wait pool
+      done;
+      Promise.to_result prm0
+    with exn -> Error exn
+  in
   Pool.kill pool;
   List.iter Stdlib.Domain.join domains;
   match result with Ok value -> value | Error exn -> raise exn
