@@ -273,6 +273,9 @@ let rec accept ?cloexec ({ fd; non_blocking; owner; _ } as file_descr) =
 let close { fd; owner; _ } =
   Miou.Ownership.check owner; Unix.close fd; Ownership.disown owner
 
+let shutdown { fd; owner; _ } v =
+  Miou.Ownership.check owner; Unix.shutdown fd v; Ownership.disown owner
+
 let consume_interrupt interrupt =
   ignore (Unix.read interrupt (Bytes.create 1) 0 1)
 

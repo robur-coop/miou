@@ -83,8 +83,12 @@ val accept : ?cloexec:bool -> file_descr -> file_descr * Unix.sockaddr
     file descritptors in non-blocking mode. *)
 
 val close : file_descr -> unit
-(** [close fd] closes and {!val:Miou.Ownership.disown} properly the given [fd]. Its
-    use ensures that there is no leakage of resources. *)
+(** [close fd] closes and {!val:Miou.Ownership.disown} properly the given [fd].
+    Its use ensures that there is no leakage of resources. *)
+
+val shutdown : file_descr -> Unix.shutdown_command -> unit
+(** [shutdown fd cmd] shutdowns and {!val:Miou.Ownership.disown} properly the
+    given [fd]. Its use ensures that there is no leakage of resources. *)
 
 val sleep : float -> unit
 (** [sleep v] suspends the current task and {i sleeps} [v] seconds. *)
