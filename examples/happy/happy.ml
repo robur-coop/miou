@@ -270,10 +270,9 @@ let get_events t he ~prms =
 
 exception Timeout
 
-let with_timeout ~timeout ?give fn =
-  Log.debug (fun m -> m "wait with a timeout (%fs)" timeout);
+let with_timeout ~timeout ?(give = []) fn =
   let timeout () = Miou_unix.sleep timeout; raise Timeout in
-  Miou.await_first [ Miou.call_cc timeout; Miou.call_cc ?give fn ]
+  Miou.await_first [ Miou.call_cc timeout; Miou.call_cc ~give fn ]
 
 let suspend t he ~prms =
   match get_events t he ~prms with
@@ -311,10 +310,12 @@ and go t ~prms he () =
       Log.debug (fun m -> m "consume %d action(s)" (List.length actions));
       List.iter (handle_one_action ~prms t) actions;
       Log.debug (fun m -> m "action(s) launched");
+      Miou.yield ();
       go t ~prms he ()
   | _, actions ->
       let he, actions' = get_events t he ~prms in
       List.iter (handle_one_action ~prms t) (actions @ actions');
+      Miou.yield ();
       go t ~prms he ()
 
 let connect_ip t ips =
@@ -423,6 +424,7 @@ let send_recv (timeout, fd) ({ Cstruct.len; _ } as tx) =
           let packet = read_loop ~id `Tcp fd in
           (packet, Miou_unix.transfer fd)
         in
+        Miou_unix.disown fd;
         match with_timeout ~timeout ~give:[ Miou_unix.owner fd ] fn with
         | Ok (packet, _) ->
             Log.debug (fun m -> m "got a DNS packet from the resolver");
