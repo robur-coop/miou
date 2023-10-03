@@ -468,10 +468,12 @@ val orphans : unit -> 'a orphans
 (** [orphans ()] makes a new orphan collectors which can used by {!val:call}
     and {!val:call_cc}. *)
 
-val care : 'a orphans -> 'a t option
-(** [care orphans] returns a {i ready-to-await} promise or [None]. The user
+val care : 'a orphans -> 'a t option option
+(** [care orphans] returns a {i ready-to-await} promise or [Some None]. The user
     must {i consume} the result of the promise with {!val:await}. Otherwise,
-    Miou will raises the uncatchable [Still_has_children] exception. *)
+    Miou will raises the uncatchable [Still_has_children] exception. If [care]
+    returns [None], no children left behind, you can forget the {!type:orphans}
+    value safely. *)
 
 (** {2 Launch a promise.} *)
 

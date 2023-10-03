@@ -261,7 +261,7 @@ let await_actions t he () =
   List.fold_left fold (he, []) user's_actions
 
 let get_events t he ~prms =
-  match Option.map (handle t) (Miou.care prms) |> Option.join with
+  match Option.map (handle t) (Option.join (Miou.care prms)) |> Option.join with
   | Some event ->
       let he, actions = Happy_eyeballs.event he (clock ()) event in
       (* NOTE(dinosaure): prioritise event's actions. *)
