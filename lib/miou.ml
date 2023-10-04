@@ -317,6 +317,7 @@ and pool = {
   ; condition_all_idle: Condition.t
   ; domains: domain list
   ; mutable stop: bool
+  ; mutable fail: bool
   ; mutable working_counter: int
   ; mutable domains_counter: int
 }
@@ -1028,11 +1029,23 @@ module Pool = struct
     | Exit ->
         pool.domains_counter <- pool.domains_counter - 1;
         Condition.signal pool.condition_all_idle;
+        Logs.debug (fun m -> m "[%a] terminates" Domain_uid.pp domain.uid);
         Mutex.unlock pool.mutex
     | exn ->
+        (* NOTE(dinosaure): this exception appears only by [Domain.run pool domain ()].
+           At this stage, [pool.mutex] is unlocked! We must re-lock it. *)
+        Mutex.lock pool.mutex;
+        pool.stop <- true;
+        pool.fail <- true;
+        pool.domains_counter <- pool.domains_counter - 1;
+        Condition.broadcast pool.condition_pending_work;
+        Condition.signal pool.condition_all_idle;
         Logs.err (fun m ->
-            m "[%a] Got an unexpected error: %S" Domain_uid.pp domain.uid
-              (Printexc.to_string exn))
+            m "[%a] got an unexpected error: %S" Domain_uid.pp domain.uid
+              (Printexc.to_string exn));
+        Logs.err (fun m -> m "stop the pool of domains");
+        Mutex.unlock pool.mutex;
+        reraise exn
 
   (* This function is useful for [dom0], the domain that launched the others.
      The latter can be waiting for a result from the other domains to "move
@@ -1076,6 +1089,7 @@ module Pool = struct
       ; condition_pending_work= Condition.create ()
       ; condition_all_idle= Condition.create ()
       ; stop= false
+      ; fail= false
       ; working_counter= 0
       ; domains_counter= List.length domains
       ; domains
@@ -1233,12 +1247,16 @@ let run ?(quanta = quanta) ?(events = Fun.const dummy_events)
   let pool, domains = Pool.make ~quanta ~g ?domains ~handler events in
   let result =
     try
-      while Promise.is_pending prm0 do
+      while Promise.is_pending prm0 && not pool.fail do
         handler.handler (Domain.run pool dom0) ();
         if await_only_domains dom0 && Domain.system_tasks_suspended dom0 = false
         then Pool.wait pool
       done;
-      Promise.to_result prm0
+      if not pool.fail then Promise.to_result prm0
+      else Error (Failure "A domain failed")
+        (* XXX(dinosaure): if [pool.fail = true], a domain re-raised the exception it
+           got during the process. Event if we return [Failure "A domain failed"], we
+           should get the initial exception via [Domain.join]. *)
     with exn -> Error exn
   in
   Pool.kill pool;
