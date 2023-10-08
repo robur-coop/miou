@@ -268,6 +268,7 @@ type _ Effect.t += Yield : unit Effect.t
 type _ Effect.t += Cancel : 'a t -> unit Effect.t
 type _ Effect.t += Domains : Domain_uid.t list Effect.t
 type _ Effect.t += Random : Random.State.t Effect.t
+type _ Effect.t += Self : (Promise.Uid.t * Domain_uid.t * int) Effect.t
 
 type _ Effect.t +=
   | Await : 'a t -> ('a, exn) result Effect.t
@@ -688,6 +689,11 @@ module Domain = struct
           let uids = List.map (fun { uid; _ } -> uid) pool.domains in
           k (State.Send uids)
       | Random -> k (State.Send domain.g)
+      | Self ->
+          let prm =
+            (current.uid, current.runner, Sequence.length current.resources)
+          in
+          k (State.Send prm)
       | Spawn (Concurrent, resources, fn) ->
           let runner = domain.uid in
           let prm = Promise.make ~resources ~runner ~parent:current () in
@@ -1119,6 +1125,7 @@ end
 
 let domains () = Effect.perform Domains
 let random () = Effect.perform Random
+let self () = Effect.perform Self
 
 type 'a orphans = 'a t Sequence.t
 

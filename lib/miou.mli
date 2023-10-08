@@ -411,6 +411,10 @@ module Promise : sig
   val uid : 'a t -> Uid.t
 end
 
+val self : unit -> Promise.Uid.t * Domain.Uid.t * int
+(** [self ()] returns the unique ID of the current promise, the domain which
+    runs the current promise and how many resources has the current promise. *)
+
 (** {2:orphans Daemon and orphan tasks.}
 
     The prerogative of absolutely awaiting all of its direct children limits the
