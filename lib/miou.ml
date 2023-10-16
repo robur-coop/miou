@@ -2,7 +2,7 @@ let failwith fmt = Format.kasprintf failwith fmt
 let str fmt = Format.kasprintf Fun.id fmt
 
 external apply : ('a -> 'b) -> 'a -> 'b = "%apply"
-external reraise : exn -> unit = "%reraise"
+external reraise : exn -> 'a = "%reraise"
 
 module Queue = Queue
 module State = State
@@ -348,12 +348,12 @@ module Domain = struct
     let compare a b = to_int a - to_int b
   end
 
+  let compare (tick0, a) (tick1, b) =
+    let order = Task.compare a b in
+    if order = 0 then Int.compare tick0 tick1 else order
+
   let make ?(quanta = 1) ~g events =
     let uid = Uid.gen () in
-    let compare (tick0, a) (tick1, b) =
-      let order = Task.compare a b in
-      if order = 0 then Int.compare tick0 tick1 else order
-    in
     {
       g= Random.State.copy g
     ; uid
@@ -436,6 +436,15 @@ module Domain = struct
     Logs.debug (fun m -> m "interrupts domain [%a]" Domain_uid.pp domain.uid);
     domain.events.interrupt ()
 
+  let clean_system_tasks domain prm =
+    Hashtbl.filter_map_inplace
+      (fun _ (System_call_suspended (_, _, prm', _) as suspended) ->
+        if Promise.equal prm prm' then begin
+          None
+        end
+        else Some suspended)
+      domain.system_tasks
+
   (* This function is properly the cancellation of a task (whether it works in
      the current domain or not). If it belongs to another domain, we [interrupt]
      said domain and add a cancellation task to our [pool]. Otherwise, we just
@@ -455,10 +464,7 @@ module Domain = struct
             domain.uid Promise.pp prm Domain_uid.pp domain'.uid);
       interrupt ~domain:domain')
     else begin
-      Hashtbl.filter_map_inplace
-        (fun _ (System_call_suspended (_, _, prm', _) as v) ->
-          if Promise.equal prm prm' then None else Some v)
-        domain.system_tasks;
+      clean_system_tasks domain prm;
       add_task domain (Cancelled prm)
     end
 
@@ -891,12 +897,6 @@ module Domain = struct
         handle pool domain prm state
     | exception Not_found -> ()
 
-  let clean_system_tasks domain prm =
-    Hashtbl.filter_map_inplace
-      (fun _ (System_call_suspended (_, _, prm', _) as suspended) ->
-        if Promise.equal prm prm' then None else Some suspended)
-      domain.system_tasks
-
   let once pool domain task =
     if not (task_is_cancelled task) then
       match task with
@@ -940,17 +940,16 @@ module Domain = struct
     let open Effect.Deep in
     let retc = Fun.id in
     let exnc = reraise in
-    let effc : type c. c Effect.t -> ((c, 'a) continuation -> 'b) option =
+    let effc : type c. c Effect.t -> ((c, 'a) continuation -> 'a) option =
       function
       | Syscall_exists uid ->
-          Some (fun k -> continue k (Hashtbl.mem domain.system_tasks uid))
+          let yes = Hashtbl.mem domain.system_tasks uid in
+          Some (fun k -> continue k yes)
       | _ -> None
     in
     let handler = { retc; exnc; effc } in
-    let fn () =
-      List.iter (transfer_system_task pool domain) (domain.events.select ())
-    in
-    match_with fn () handler
+    let syscalls = match_with domain.events.select () handler in
+    List.iter (transfer_system_task pool domain) syscalls
 
   let system_tasks_suspended domain = Hashtbl.length domain.system_tasks > 0
 
@@ -1268,4 +1267,4 @@ let run ?(quanta = quanta) ?(events = Fun.const dummy_events)
   in
   Pool.kill pool;
   List.iter Stdlib.Domain.join domains;
-  match result with Ok value -> value | Error exn -> raise exn
+  match result with Ok value -> value | Error exn -> reraise exn
