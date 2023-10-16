@@ -39,13 +39,15 @@ let bind_and_listen ?(backlog = 64) { fd; owner; _ } sockaddr =
   Unix.listen fd backlog
 
 type unix_scheduler = {
-    rd: (Unix.file_descr, unit Miou.syscall) Hashtbl.t
-  ; wr: (Unix.file_descr, unit Miou.syscall) Hashtbl.t
+    rd: (Unix.file_descr, unit Miou.syscall list) Hashtbl.t
+  ; wr: (Unix.file_descr, unit Miou.syscall list) Hashtbl.t
   ; sleepers: (Miou.uid, float * unit Miou.syscall) Hashtbl.t
 }
 
 let clean_syscalls dom =
-  let fold _ prm = if Miou.is_pending prm then Some prm else None in
+  let fold _ prms =
+    match List.filter Miou.is_pending prms with [] -> None | prms -> Some prms
+  in
   Hashtbl.filter_map_inplace fold dom.rd;
   Hashtbl.filter_map_inplace fold dom.wr;
   let fold _ (until, prm) =
@@ -66,45 +68,50 @@ let dom =
 
 (* Sleepers *)
 
-let sleepers () =
-  let sleepers = ref [] in
+let sleepers_to_syscalls sleepers =
+  let syscalls = ref [] in
   let collect _ (until, syscall) =
     if until <= 0. then begin
-      sleepers := syscall :: !sleepers;
+      syscalls := syscall :: !syscalls;
       None
     end
     else Some (until, syscall)
   in
-  let dom = dom () in
-  Hashtbl.filter_map_inplace collect dom.sleepers;
-  List.map (fun syscall -> Miou.task syscall (Fun.const ())) !sleepers
+  Hashtbl.filter_map_inplace collect sleepers;
+  List.map (fun syscall -> Miou.task syscall (Fun.const ())) !syscalls
 
-let update_sleepers ~quanta () =
-  let dom = dom () in
+let update_sleepers ~quanta sleepers =
   Hashtbl.filter_map_inplace
     (fun _ (until, syscall) ->
       let until' = Float.max 0. (until -. quanta) in
       Some (until', syscall))
-    dom.sleepers
+    sleepers
 
-let smallest_sleeper () =
+let smallest_sleeper sleepers =
   let fold _ (until, syscall) = function
     | Some (until', _) when until' > until -> Some (until, syscall)
     | Some _ as sleeper -> sleeper
     | None -> Some (until, syscall)
   in
-  let dom = dom () in
-  Hashtbl.fold fold dom.sleepers None
+  Hashtbl.fold fold sleepers None
 
 let blocking_read fd =
   let dom = dom () in
   let prm = Miou.make (Fun.const ()) in
-  Hashtbl.add dom.rd fd prm; Miou.suspend prm
+  (try
+     let prms = Hashtbl.find dom.rd fd in
+     Hashtbl.replace dom.rd fd (prm :: prms)
+   with Not_found -> Hashtbl.add dom.rd fd [ prm ]);
+  Miou.suspend prm
 
 let blocking_write fd =
   let dom = dom () in
   let prm = Miou.make (Fun.const ()) in
-  Hashtbl.add dom.wr fd prm; Miou.suspend prm
+  (try
+     let prms = Hashtbl.find dom.wr fd in
+     Hashtbl.replace dom.wr fd (prm :: prms)
+   with Not_found -> Hashtbl.add dom.wr fd [ prm ]);
+  Miou.suspend prm
 
 let with_lock ~lock fn =
   Mutex.lock lock;
@@ -288,45 +295,48 @@ let quanta =
       with _ -> of_nano 1_000_000L)
   | None -> of_nano 1_000_000L
 
+let transmit_fds syscalls tbl fds =
+  let fold acc fd =
+    match Hashtbl.find_opt tbl fd with
+    | None -> acc
+    | Some [] -> Hashtbl.remove tbl fd; acc
+    | Some prms ->
+        let f prm = Miou.task prm (Fun.const ()) in
+        Hashtbl.remove tbl fd;
+        List.(rev_append (rev_map f prms) acc)
+  in
+  List.fold_left fold syscalls fds
+
 let select _domain interrupt () =
   let dom = dom () in
   clean_syscalls dom;
   let rds = Hashtbl.fold (fun fd _ acc -> fd :: acc) dom.rd [] in
   let wrs = Hashtbl.fold (fun fd _ acc -> fd :: acc) dom.wr [] in
   let ts =
-    Option.map (fun (until, _) -> until) (smallest_sleeper ()) |> function
+    match Option.map fst (smallest_sleeper dom.sleepers) with
     | Some ts -> min ts quanta
     | None -> quanta
   in
   let t0 = Unix.gettimeofday () in
+  Miou.Logs.debug (fun m ->
+      m "@[<1>(rds: %d, wrs: %d, sleepers: %d)@]" (Hashtbl.length dom.rd)
+        (Hashtbl.length dom.wr)
+        (Hashtbl.length dom.sleepers));
   match Unix.select (interrupt :: rds) wrs [] ts with
   | exception Unix.(Unix_error (EINTR, _, _)) -> []
   | [], [], _ ->
       let t1 = Unix.gettimeofday () in
       let quanta = t1 -. t0 in
-      update_sleepers ~quanta (); sleepers ()
+      update_sleepers ~quanta dom.sleepers;
+      sleepers_to_syscalls dom.sleepers
   | rds, wrs, [] ->
       if List.exists (( = ) interrupt) rds then consume_interrupt interrupt;
       let t1 = Unix.gettimeofday () in
       let quanta = t1 -. t0 in
-      update_sleepers ~quanta ();
-      let syscalls = sleepers () in
-      let syscalls =
-        List.fold_left
-          (fun acc fd ->
-            if fd <> interrupt then
-              let prm = Hashtbl.find dom.rd fd in
-              Miou.task prm (fun () -> Hashtbl.remove dom.rd fd) :: acc
-            else acc)
-          syscalls rds
-      in
-      let syscalls =
-        List.fold_left
-          (fun acc fd ->
-            let prm = Hashtbl.find dom.wr fd in
-            Miou.task prm (fun () -> Hashtbl.remove dom.wr fd) :: acc)
-          syscalls wrs
-      in
+      update_sleepers ~quanta dom.sleepers;
+      let syscalls = sleepers_to_syscalls dom.sleepers in
+      let syscalls = transmit_fds syscalls dom.rd rds in
+      let syscalls = transmit_fds syscalls dom.wr wrs in
       syscalls
   | _ -> []
 
