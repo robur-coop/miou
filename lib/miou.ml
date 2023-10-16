@@ -6,6 +6,7 @@ external reraise : exn -> 'a = "%reraise"
 
 module Queue = Queue
 module State = State
+module Logs = Logs
 
 (** Uid modules *)
 
