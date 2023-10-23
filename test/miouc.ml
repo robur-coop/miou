@@ -41,14 +41,8 @@ let smallest_sleeper () =
   in
   Hashtbl.fold fold (dom ()).sleepers None
 
-let clean_syscalls () =
-  Hashtbl.filter_map_inplace
-    (fun _ (until, syscall) ->
-      if Miou.is_pending syscall then Some (until, syscall) else None)
-    (dom ()).sleepers
-
-let select _domain () =
-  clean_syscalls ();
+let select _domain cancelled_syscalls =
+  List.iter (Hashtbl.remove (dom ()).sleepers) cancelled_syscalls;
   match Atomic.get (dom ()).interrupt with
   | true ->
       Atomic.set (dom ()).interrupt false;

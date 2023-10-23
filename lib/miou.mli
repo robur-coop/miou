@@ -618,7 +618,7 @@ val task : 'a syscall -> (unit -> unit) -> continue
     Miou to unlock via the given [fn] the user's defined suspension point
     represented by the given [syscall]. *)
 
-type events = { select: unit -> continue list; interrupt: unit -> unit }
+type events = { select: uid list -> continue list; interrupt: unit -> unit }
 
 val is_pending : 'a syscall -> bool
 (** [is_pending syscall] checks the status of the suspension point. A suspension
@@ -859,3 +859,5 @@ module Logs : sig
   val err : ('a, unit) msgf -> unit
   val warn : ('a, unit) msgf -> unit
 end
+
+module Heapq = Heapq

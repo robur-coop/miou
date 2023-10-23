@@ -15,6 +15,6 @@ let () =
   | Infinite_loop -> Some "Infinite_loop"
   | _ -> None
 
-let infinite_loop () = raise Infinite_loop
+let infinite_loop _ = raise Infinite_loop
 let dummy _ = { select= infinite_loop; interrupt= ignore }
 let () = Miou.(run ~events:dummy @@ fun () -> sleep 1.; ())

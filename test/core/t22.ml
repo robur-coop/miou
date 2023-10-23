@@ -38,7 +38,7 @@ end = struct
   let take t = Miou.suspend t
 end
 
-let select () =
+let select _ =
   let tbl = dom () in
   let fold uid (Box (value, prm)) acc =
     match Atomic.get value with
