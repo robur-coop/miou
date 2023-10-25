@@ -3,7 +3,7 @@
 
 let global = ref None
 
-let select () =
+let select _ =
   match !global with
   | Some v -> [ Miou.task v (fun () -> global := None) ]
   | None -> []

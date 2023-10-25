@@ -12,7 +12,7 @@ let sleep until =
   Hashtbl.add sleepers (Miou.uid syscall) (syscall, until);
   Miou.suspend syscall
 
-let select () =
+let select _ =
   let sleepers = sleepers () in
   let min =
     Hashtbl.fold

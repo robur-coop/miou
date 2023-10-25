@@ -7,6 +7,7 @@ external reraise : exn -> 'a = "%reraise"
 module Queue = Queue
 module State = State
 module Logs = Logs
+module Heapq = Heapq
 
 (** Uid modules *)
 
@@ -308,6 +309,7 @@ and domain = {
   ; events: events
   ; quanta: int
   ; tick: int Atomic.t
+  ; cancelled_syscalls: Syscall_uid.t Queue.t
 }
 
 and elt = Task : 'a t * (unit -> 'a) -> elt | Cancel : 'a t -> elt
@@ -325,7 +327,7 @@ and pool = {
 }
 
 and continue = Continue : Syscall_uid.t * (unit -> unit) -> continue
-and events = { select: unit -> continue list; interrupt: unit -> unit }
+and events = { select: uid list -> continue list; interrupt: unit -> unit }
 and handler = { handler: 'u 'v. ('u -> 'v) -> 'u -> 'v } [@@unboxed]
 and uid = Syscall_uid.t
 
@@ -363,6 +365,7 @@ module Domain = struct
     ; events= events uid
     ; quanta
     ; tick= Atomic.make 0
+    ; cancelled_syscalls= Queue.create ()
     }
 
   let self () = Effect.perform Domain_uid
@@ -439,8 +442,9 @@ module Domain = struct
 
   let clean_system_tasks domain prm =
     Hashtbl.filter_map_inplace
-      (fun _ (System_call_suspended (_, _, prm', _) as suspended) ->
+      (fun uid (System_call_suspended (_, _, prm', _) as suspended) ->
         if Promise.equal prm prm' then begin
+          Queue.enqueue domain.cancelled_syscalls uid;
           None
         end
         else Some suspended)
@@ -949,7 +953,8 @@ module Domain = struct
       | _ -> None
     in
     let handler = { retc; exnc; effc } in
-    let syscalls = match_with domain.events.select () handler in
+    let syscalls = Queue.(to_list (transfer domain.cancelled_syscalls)) in
+    let syscalls = match_with domain.events.select syscalls handler in
     List.iter (transfer_system_task pool domain) syscalls
 
   let system_tasks_suspended domain = Hashtbl.length domain.system_tasks > 0

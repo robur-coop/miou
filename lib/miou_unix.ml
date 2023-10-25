@@ -41,26 +41,37 @@ let bind_and_listen ?(backlog = 64) { fd; owner; _ } sockaddr =
 type unix_scheduler = {
     rd: (Unix.file_descr, unit Miou.syscall list) Hashtbl.t
   ; wr: (Unix.file_descr, unit Miou.syscall list) Hashtbl.t
-  ; sleepers: (Miou.uid, float * unit Miou.syscall) Hashtbl.t
+  ; sleepers: (float * unit Miou.syscall) Miou.Heapq.t
+  ; revert: (Miou.uid, Unix.file_descr) Hashtbl.t
 }
 
-let clean_syscalls dom =
-  let fold _ prms =
-    match List.filter Miou.is_pending prms with [] -> None | prms -> Some prms
+let clean_syscalls dom uids =
+  let clean uid' fd tbl =
+    match Hashtbl.find tbl fd with
+    | syscalls ->
+        let syscalls =
+          List.filter (fun syscall -> uid' <> Miou.uid syscall) syscalls
+        in
+        Hashtbl.replace tbl fd syscalls
+    | exception Not_found -> ()
   in
-  Hashtbl.filter_map_inplace fold dom.rd;
-  Hashtbl.filter_map_inplace fold dom.wr;
-  let fold _ (until, prm) =
-    if Miou.is_pending prm then Some (until, prm) else None
+  let clean uid =
+    match Hashtbl.find dom.revert uid with
+    | fd -> clean uid fd dom.rd; clean uid fd dom.wr
+    | exception Not_found -> ()
   in
-  Hashtbl.filter_map_inplace fold dom.sleepers
+  List.iter clean uids;
+  List.iter (Hashtbl.remove dom.revert) uids
 
 let dom =
   let make () =
+    let dummy = (0.0, Miou.make (Fun.const ())) in
+    let compare (a, _) (b, _) = Float.compare a b in
     {
       rd= Hashtbl.create 0x100
     ; wr= Hashtbl.create 0x100
-    ; sleepers= Hashtbl.create 0x100
+    ; sleepers= Heapq.create ~compare ~dummy 0x100
+    ; revert= Hashtbl.create 0x100
     }
   in
   let dom = Stdlib.Domain.DLS.new_key make in
@@ -68,36 +79,29 @@ let dom =
 
 (* Sleepers *)
 
-let sleepers_to_syscalls sleepers =
-  let syscalls = ref [] in
-  let collect _ (until, syscall) =
-    if until <= 0. then begin
-      syscalls := syscall :: !syscalls;
-      None
-    end
-    else Some (until, syscall)
-  in
-  Hashtbl.filter_map_inplace collect sleepers;
-  List.map (fun syscall -> Miou.task syscall (Fun.const ())) !syscalls
+let rec sleepers_to_syscalls ~now syscalls sleepers =
+  match Miou.Heapq.minimum sleepers with
+  | exception Miou.Heapq.Empty ->
+      List.map (fun syscall -> Miou.task syscall (Fun.const ())) syscalls
+  | time, syscall ->
+      if time <= now then begin
+        Miou.Heapq.remove sleepers;
+        sleepers_to_syscalls ~now (syscall :: syscalls) sleepers
+      end
+      else List.map (fun syscall -> Miou.task syscall (Fun.const ())) syscalls
 
-let update_sleepers ~quanta sleepers =
-  Hashtbl.filter_map_inplace
-    (fun _ (until, syscall) ->
-      let until' = Float.max 0. (until -. quanta) in
-      Some (until', syscall))
-    sleepers
-
-let smallest_sleeper sleepers =
-  let fold _ (until, syscall) = function
-    | Some (until', _) when until' > until -> Some (until, syscall)
-    | Some _ as sleeper -> sleeper
-    | None -> Some (until, syscall)
-  in
-  Hashtbl.fold fold sleepers None
+let smallest_sleeper ~now sleepers =
+  match Miou.Heapq.minimum sleepers with
+  | exception Miou.Heapq.Empty -> None
+  | time, _ ->
+      let delta = time -. now in
+      if delta <= 0. then None else Some delta
 
 let blocking_read fd =
   let dom = dom () in
   let prm = Miou.make (Fun.const ()) in
+  let uid = Miou.uid prm in
+  Hashtbl.add dom.revert uid fd;
   (try
      let prms = Hashtbl.find dom.rd fd in
      Hashtbl.replace dom.rd fd (prm :: prms)
@@ -107,6 +111,8 @@ let blocking_read fd =
 let blocking_write fd =
   let dom = dom () in
   let prm = Miou.make (Fun.const ()) in
+  let uid = Miou.uid prm in
+  Hashtbl.add dom.revert uid fd;
   (try
      let prms = Hashtbl.find dom.wr fd in
      Hashtbl.replace dom.wr fd (prm :: prms)
@@ -307,34 +313,30 @@ let transmit_fds syscalls tbl fds =
   in
   List.fold_left fold syscalls fds
 
-let select _domain interrupt () =
+let select _domain interrupt cancelled_syscalls =
   let dom = dom () in
-  clean_syscalls dom;
+  clean_syscalls dom cancelled_syscalls;
   let rds = Hashtbl.fold (fun fd _ acc -> fd :: acc) dom.rd [] in
   let wrs = Hashtbl.fold (fun fd _ acc -> fd :: acc) dom.wr [] in
+  let now = Unix.gettimeofday () in
   let ts =
-    match Option.map fst (smallest_sleeper dom.sleepers) with
+    match smallest_sleeper ~now dom.sleepers with
     | Some ts -> min ts quanta
     | None -> quanta
   in
-  let t0 = Unix.gettimeofday () in
   Miou.Logs.debug (fun m ->
       m "@[<1>(rds: %d, wrs: %d, sleepers: %d)@]" (Hashtbl.length dom.rd)
         (Hashtbl.length dom.wr)
-        (Hashtbl.length dom.sleepers));
+        (Heapq.length dom.sleepers));
   match Unix.select (interrupt :: rds) wrs [] ts with
   | exception Unix.(Unix_error (EINTR, _, _)) -> []
   | [], [], _ ->
-      let t1 = Unix.gettimeofday () in
-      let quanta = t1 -. t0 in
-      update_sleepers ~quanta dom.sleepers;
-      sleepers_to_syscalls dom.sleepers
+      let now = Unix.gettimeofday () in
+      sleepers_to_syscalls ~now [] dom.sleepers
   | rds, wrs, [] ->
       if List.exists (( = ) interrupt) rds then consume_interrupt interrupt;
-      let t1 = Unix.gettimeofday () in
-      let quanta = t1 -. t0 in
-      update_sleepers ~quanta dom.sleepers;
-      let syscalls = sleepers_to_syscalls dom.sleepers in
+      let now = Unix.gettimeofday () in
+      let syscalls = sleepers_to_syscalls ~now [] dom.sleepers in
       let syscalls = transmit_fds syscalls dom.rd rds in
       let syscalls = transmit_fds syscalls dom.wr wrs in
       syscalls
@@ -348,7 +350,7 @@ let events domain =
       ()
     done
   in
-  let select () = select domain ic () in
+  let select = select domain ic in
   let t = { Miou.interrupt; select } in
   let close _ = Unix.close ic; Unix.close oc in
   Gc.finalise close t; t
@@ -358,5 +360,6 @@ let run ?g ?domains fn = Miou.run ~events ?g ?domains fn
 let sleep until =
   let dom = dom () in
   let prm = Miou.make (Fun.const ()) in
-  Hashtbl.add dom.sleepers (Miou.uid prm) (until, prm);
+  let now = Unix.gettimeofday () in
+  Miou.Heapq.add dom.sleepers (now +. until, prm);
   Miou.suspend prm
