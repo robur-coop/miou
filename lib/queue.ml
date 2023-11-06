@@ -95,7 +95,9 @@ let rec snapshot t : 'a snapshot =
   | Some node ->
       let _ = Atomic.compare_and_set t.tail tail node in
       snapshot t
-  | None -> if Atomic.get t.head != head then snapshot t else (head, tail)
+  | None ->
+      if Atomic.get (Sys.opaque_identity t.head) != head then snapshot t
+      else (head, tail)
 
 let length t =
   let head, tail = snapshot t in
