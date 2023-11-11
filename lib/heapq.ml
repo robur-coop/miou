@@ -25,6 +25,8 @@ type 'a t = {
 (* invariant 0 <= size <= length data *)
 (* invariant data[size..] only contains dummy *)
 
+let stats h = Array.map (fun v -> Obj.(reachable_words (repr v))) h.data
+
 let create ?(compare = Stdlib.compare) ~dummy n =
   if n < 0 || n > Sys.max_array_length then invalid_arg "create";
   let n = max 16 n in

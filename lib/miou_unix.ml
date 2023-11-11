@@ -284,13 +284,17 @@ let rec accept ?cloexec ({ fd; non_blocking; owner; _ } as file_descr) =
     blocking_read fd; go ()
 
 let close { fd; owner; _ } =
-  Miou.Ownership.check owner; Unix.close fd; Ownership.disown owner
+  Miou.Ownership.check owner;
+  Unix.close fd;
+  Ownership.disown owner;
+  Miou.Logs.debug (fun m -> m "close the file-descr [%d]" (Obj.magic fd))
 
 let shutdown { fd; owner; _ } v =
   Miou.Ownership.check owner; Unix.shutdown fd v; Ownership.disown owner
 
 let consume_interrupt interrupt =
-  ignore (Unix.read interrupt (Bytes.create 1) 0 1)
+  let buf = Bytes.create 0x1000 in
+  ignore (Unix.read interrupt buf 0 (Bytes.length buf))
 
 let of_nano ns = Int64.to_float ns /. 1_000_000_000.
 
@@ -313,7 +317,7 @@ let transmit_fds syscalls tbl fds =
   in
   List.fold_left fold syscalls fds
 
-let select _domain interrupt cancelled_syscalls =
+let select _domain interrupt ~poll cancelled_syscalls =
   let dom = dom () in
   clean_syscalls dom cancelled_syscalls;
   let rds = Hashtbl.fold (fun fd _ acc -> fd :: acc) dom.rd [] in
@@ -322,18 +326,26 @@ let select _domain interrupt cancelled_syscalls =
   let ts =
     match smallest_sleeper ~now dom.sleepers with
     | Some ts -> min ts quanta
-    | None -> quanta
+    | None -> if poll then -1. else 0.
   in
   Miou.Logs.debug (fun m ->
-      m "@[<1>(rds: %d, wrs: %d, sleepers: %d)@]" (Hashtbl.length dom.rd)
-        (Hashtbl.length dom.wr)
-        (Heapq.length dom.sleepers));
+      m "select@[<hov>(%a,@ %a, %4.4f)@]"
+        Fmt.(Dump.list (using Obj.magic int))
+        rds
+        Fmt.(Dump.list (using Obj.magic int))
+        wrs ts);
   match Unix.select (interrupt :: rds) wrs [] ts with
   | exception Unix.(Unix_error (EINTR, _, _)) -> []
   | [], [], _ ->
       let now = Unix.gettimeofday () in
       sleepers_to_syscalls ~now [] dom.sleepers
   | rds, wrs, [] ->
+      Logs.debug (fun m ->
+          m "trigger %a %a"
+            Fmt.(Dump.list (using Obj.magic int))
+            rds
+            Fmt.(Dump.list (using Obj.magic int))
+            wrs);
       if List.exists (( = ) interrupt) rds then consume_interrupt interrupt;
       let now = Unix.gettimeofday () in
       let syscalls = sleepers_to_syscalls ~now [] dom.sleepers in

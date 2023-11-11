@@ -415,6 +415,8 @@ val self : unit -> Promise.Uid.t * Domain.Uid.t * int
 (** [self ()] returns the unique ID of the current promise, the domain which
     runs the current promise and how many resources has the current promise. *)
 
+val stats : unit -> int
+
 (** {2:orphans Daemon and orphan tasks.}
 
     The prerogative of absolutely awaiting all of its direct children limits the
@@ -618,7 +620,8 @@ val task : 'a syscall -> (unit -> unit) -> continue
     Miou to unlock via the given [fn] the user's defined suspension point
     represented by the given [syscall]. *)
 
-type events = { select: uid list -> continue list; interrupt: unit -> unit }
+type select = poll:bool -> uid list -> continue list
+type events = { select: select; interrupt: unit -> unit }
 
 val is_pending : 'a syscall -> bool
 (** [is_pending syscall] checks the status of the suspension point. A suspension

@@ -16,7 +16,7 @@ external node_of_t : 'a t -> 'a node = "%identity"
 exception Empty
 
 let create g =
-  let rec t = { g; prev= t; next= t } in
+  let rec t = { g= Random.State.copy g; prev= t; next= t } in
   t
 
 let remove node =

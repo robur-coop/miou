@@ -30,7 +30,7 @@ let minimums sleepers =
     sleepers;
   !cs
 
-let select interrupt _ =
+let select interrupt ~poll:_ _ =
   let sleepers = sleepers () in
   Hashtbl.filter_map_inplace
     (fun _ (syscall, until) ->

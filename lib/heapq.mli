@@ -36,6 +36,8 @@ exception Empty
 type 'a t
 (** Type of priority queues. *)
 
+val stats : 'a t -> int array
+
 val create : ?compare:('a -> 'a -> int) -> dummy:'a -> int -> 'a t
 (** [create ?compare ~dummy c] creates a new heap, with initial capacity of [c].
     The value [dummy] is used to fill unused cells of the internal array.

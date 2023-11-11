@@ -123,6 +123,8 @@ val fail : exn:exn -> 'a t -> 'a t
 val pure : ('a, exn) result -> 'a t
 (** [pure value] returns [Finished value]. *)
 
+val suspended_with : ('c, 'a) continuation -> 'c Effect.t -> 'a t
+
 val run : quanta:int -> perform:perform -> 'a t -> 'a t
 (** [run ~quanta ~perform state] applies {!val:once} [quanta] times. If
     [perform] responds with {!constructor:Intr} (and therefore does nothing),
