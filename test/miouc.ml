@@ -41,7 +41,7 @@ let smallest_sleeper () =
   in
   Hashtbl.fold fold (dom ()).sleepers None
 
-let select _domain cancelled_syscalls =
+let select _domain ~poll cancelled_syscalls =
   List.iter (Hashtbl.remove (dom ()).sleepers) cancelled_syscalls;
   match Atomic.get (dom ()).interrupt with
   | true ->
@@ -51,7 +51,7 @@ let select _domain cancelled_syscalls =
       let quanta =
         match smallest_sleeper () with
         | Some (until, _) -> Int.min 1 until
-        | None -> 1
+        | None -> if poll then 0 else 1
       in
       let _set =
         if quanta > 0 then

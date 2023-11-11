@@ -10,4 +10,4 @@ let prgm () =
 
 let () =
   let () = prgm () in
-  assert (Atomic.get Miouc.tick = 1)
+  assert (Atomic.get Miouc.tick = 0)
