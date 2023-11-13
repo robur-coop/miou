@@ -115,19 +115,11 @@ let blocking_read fd =
   let uid = Miou.uid syscall in
   let unix = get () in
   Hashtbl.add unix.revert uid fd;
-  Logs.debug (fun m ->
-      m "[read][rds:%ds, wrs:%ds] (+%d)" (Hashtbl.length unix.rd)
-        (Hashtbl.length unix.wr) (Obj.magic fd));
   (try
      let syscalls = Hashtbl.find unix.rd fd in
      Hashtbl.replace unix.rd fd (syscall :: syscalls)
    with Not_found -> Hashtbl.add unix.rd fd [ syscall ]);
-  set unix;
-  let unix = get () in
-  Logs.debug (fun m ->
-      m "[read][rds:%ds, wrs:%ds]" (Hashtbl.length unix.rd)
-        (Hashtbl.length unix.wr));
-  Miou.suspend syscall
+  set unix; Miou.suspend syscall
 
 let blocking_write fd =
   let syscall = Miou.make (Fun.const ()) in
@@ -268,7 +260,7 @@ let rec connect ({ fd; non_blocking; owner; _ } as file_descr) sockaddr =
   Miou.Ownership.check owner;
   if not non_blocking then
     invalid_arg
-      "Miouu.connect: we expect a file descriptor in the non-blocking mode";
+      "Miou_unix.connect: we expect a file descriptor in the non-blocking mode";
   match Unix.connect fd sockaddr with
   | () -> ()
   | exception Unix.(Unix_error (EINTR, _, _)) -> connect file_descr sockaddr
@@ -309,8 +301,7 @@ let rec accept ?cloexec ({ fd; non_blocking; owner; _ } as file_descr) =
 let close { fd; owner; _ } =
   Miou.Ownership.check owner;
   Unix.close fd;
-  Miou.Ownership.disown owner;
-  Logs.debug (fun m -> m "close the file-descr [%d]" (Obj.magic fd))
+  Miou.Ownership.disown owner
 
 let shutdown { fd; owner; _ } v =
   Miou.Ownership.check owner;

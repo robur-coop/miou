@@ -691,8 +691,6 @@ module Domain = struct
           add_into_pool ~domain:runner pool (Create (prm, fn));
           k (State.Send prm)
       | Yield ->
-          Logs.debug (fun m ->
-              m "[%a] reschedule tasks" Domain_uid.pp domain.uid);
           (* TODO(dinosaure): we probably need to specify more strictly the
              behavior of [yield]. Indeed, depending on the [quanta], the result
              is not the same. It is also probably related to our note about
@@ -745,6 +743,9 @@ module Domain = struct
                     { terminated= []; to_cancel= [ Pack prm ]; and_return= () })))
           else k (State.Fail Not_a_child)
       | Ownership action -> ownership current k action
+      | Await _ -> k State.Intr
+      | Choose _ -> k State.Intr
+      | Suspend _ -> k State.Intr
       | effect -> k (State.None effect)
     in
     { State.perform }
@@ -1106,8 +1107,6 @@ module Domain = struct
     let handler = { retc; exnc; effc } in
     let poll = Heapq.length domain.tasks = 0 in
     let syscalls = Queue.(to_list (transfer domain.cancelled_syscalls)) in
-    Logs.debug (fun m ->
-        m "[%a] get system events (poll: %b)" Domain_uid.pp domain.uid poll);
     let syscalls = match_with (domain.events.select ~poll) syscalls handler in
     List.iter (transfer_system_task pool domain) syscalls
 
@@ -1188,17 +1187,6 @@ module Pool = struct
       end;
       transfer_all_tasks pool domain
 
-  let pp_stats ppf (pool, domain) =
-    Format.fprintf ppf
-      "[pool:%dw, domain:%dw, tasks: %dw, system_tasks: %dw, values: %dw, \
-       system_events: %dw]"
-      Obj.(reachable_words (repr pool))
-      Obj.(reachable_words (repr domain))
-      Obj.(reachable_words (repr domain.tasks))
-      Obj.(reachable_words (repr domain.system_tasks))
-      Obj.(reachable_words (repr domain.values))
-      Obj.(reachable_words (repr domain.system_events))
-
   (* The "worker" has a very simple operation: it waits for a signal from the
      other domains and sees if it has something to do. If so, it transfers
      ([transfer_all_tasks]) the tasks locally and runs [Domain.run]. Finally, it
@@ -1218,7 +1206,6 @@ module Pool = struct
         pool.working_counter <- pool.working_counter + 1;
         Mutex.unlock pool.mutex;
         Domain.run pool domain ();
-        Logs.debug (fun m -> m "%a" pp_stats (pool, domain));
         Mutex.lock pool.mutex;
         pool.working_counter <- pool.working_counter - 1;
         if (not pool.stop) && Int.equal pool.working_counter 0 then

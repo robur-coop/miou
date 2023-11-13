@@ -146,6 +146,7 @@ let handle_one_action t ~prms = function
   | Happy_eyeballs.Resolve_a host ->
       let _ =
         Miou.call_cc ~orphans:prms @@ fun () ->
+        Logs.debug (fun m -> m "getaddrinof4(%a)" Domain_name.pp host);
         match t.getaddrinfo.getaddrinfo Dns.Rr_map.A host with
         | Ok (_ttl, res) -> `Resolution_v4 (host, Ok res)
         | Error _ as err -> `Resolution_v4 (host, err)
@@ -154,6 +155,7 @@ let handle_one_action t ~prms = function
   | Happy_eyeballs.Resolve_aaaa host ->
       let _ =
         Miou.call_cc ~orphans:prms @@ fun () ->
+        Logs.debug (fun m -> m "getaddrinof6(%a)" Domain_name.pp host);
         match t.getaddrinfo.getaddrinfo Dns.Rr_map.Aaaa host with
         | Ok (_ttl, res) -> `Resolution_v6 (host, Ok res)
         | Error _ as err -> `Resolution_v6 (host, err)
