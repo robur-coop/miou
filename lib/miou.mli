@@ -309,6 +309,8 @@ module Ownership : sig
   *)
 
   type t
+
+  and uid
   (** The type of ownerships. *)
 
   val own : finally:('a -> unit) -> 'a -> t
@@ -379,6 +381,9 @@ module Ownership : sig
   (** [check t] verifies that the given resource [t] is owned by the current
       task. If a task tries to use a resource that does not belong to it,
       {!val:check} will raise an {i uncatchable} exception [Not_owner]. *)
+
+  val uid : t -> uid
+  val pp : Format.formatter -> uid -> unit
 end
 
 type 'a t
@@ -861,6 +866,15 @@ module Logs : sig
   val debug : ('a, unit) msgf -> unit
   val err : ('a, unit) msgf -> unit
   val warn : ('a, unit) msgf -> unit
+
+  module Make (_ : sig
+    val src : string
+  end) : sig
+    val msg : level -> ('a, unit) msgf -> unit
+    val debug : ('a, unit) msgf -> unit
+    val err : ('a, unit) msgf -> unit
+    val warn : ('a, unit) msgf -> unit
+  end
 end
 
 module Heapq = Heapq

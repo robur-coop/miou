@@ -375,7 +375,6 @@ and events = { select: select; interrupt: unit -> unit }
 and handler = { handler: 'u 'v. ('u -> 'v) -> 'u -> 'v } [@@unboxed]
 and uid = Syscall_uid.t
 
-type _ Effect.t += Syscall : (unit -> 'a) -> 'a syscall Effect.t
 type _ Effect.t += Suspend : 'a syscall -> 'a Effect.t
 type _ Effect.t += Syscall_exists : Syscall_uid.t -> bool Effect.t
 
@@ -505,14 +504,37 @@ module Domain = struct
           (System_call_suspended (uid, fn, prm, k))
 
   let clean_system_tasks domain prm =
+    let set = Hashtbl.create 0x10 in
     Hashtbl.filter_map_inplace
       (fun uid (System_call_suspended (_, _, prm', _) as suspended) ->
         if Promise.equal prm prm' then begin
+          Logs.debug (fun m ->
+              m "[%a] clean the syscall [%a]" Domain_uid.pp domain.uid
+                Syscall_uid.pp uid);
+          Hashtbl.add set uid ();
           Queue.enqueue domain.cancelled_syscalls uid;
           None
         end
         else Some suspended)
-      domain.system_tasks
+      domain.system_tasks;
+    let to_delete = ref [] in
+    let f node =
+      let (Continue (uid', _)) = Sequence.data node in
+      if Hashtbl.mem set uid' then begin
+        Logs.debug (fun m ->
+            m "[%a] clean the syscall [%a]" Domain_uid.pp domain.uid
+              Syscall_uid.pp uid');
+        to_delete := node :: !to_delete
+      end
+    in
+    Sequence.iter_node ~f domain.system_events;
+    List.iter Sequence.remove !to_delete
+
+  let clean_system_task_if_suspended domain = function
+    | State.Suspended (_, Suspend syscall) ->
+        let (Syscall (uid, _)) = syscall in
+        Queue.enqueue domain.cancelled_syscalls uid
+    | _ -> ()
 
   (* This function is properly the cancellation of a task (whether it works in
      the current domain or not). If it belongs to another domain, we [interrupt]
@@ -668,9 +690,6 @@ module Domain = struct
           Sequence.add_l (Promise.pack prm) current.active_children;
           add_into_pool ~domain:runner pool (Create (prm, fn));
           k (State.Send prm)
-      | Syscall fn ->
-          let uid = Syscall_uid.gen () in
-          k (State.Send (Syscall (uid, fn)))
       | Yield ->
           Logs.debug (fun m ->
               m "[%a] reschedule tasks" Domain_uid.pp domain.uid);
@@ -847,6 +866,9 @@ module Domain = struct
         Logs.debug (fun m ->
             m "%a failed with %S" Promise.pp prm (Printexc.to_string exn));
         let f (Resource { finaliser; value; uid; _ }) =
+          Logs.debug (fun m ->
+              m "[%a] finalise the resource [%a]" Domain_uid.pp domain.uid
+                Resource_uid.pp uid);
           try finaliser value
           with exn ->
             Logs.err (fun m ->
@@ -1013,12 +1035,18 @@ module Domain = struct
       | Suspended (current, State.Suspended (k, Suspend syscall)) ->
           let (Syscall (uid, _)) = syscall in
           Logs.debug (fun m ->
-              m "[%a] new system suspension point for [%a]" Domain_uid.pp
-                domain.uid Syscall_uid.pp uid);
+              m "[%a] new system suspension point for [%a] into %a"
+                Domain_uid.pp domain.uid Syscall_uid.pp uid Promise.pp current);
           suspend_system_call domain syscall current k
       | Suspended (current, State.Suspended (k, Await prm)) ->
+          Logs.debug (fun m ->
+              m "[%a] await %a" Domain_uid.pp domain.uid Promise.pp prm);
           await pool domain current k prm
       | Suspended (current, State.Suspended (k, Choose (and_cancel, prms))) ->
+          Logs.debug (fun m ->
+              m "[%a] choose %a" Domain_uid.pp domain.uid
+                Fmt.(Dump.list Promise.pp)
+                prms);
           choose pool domain current k ~and_cancel prms
       | Suspended (prm, state) ->
           let perform = perform pool domain (Promise.pack prm) in
@@ -1027,20 +1055,24 @@ module Domain = struct
       | Cancelled prm -> (
           Logs.debug (fun m ->
               m "[%a] %a cancelled" Domain_uid.pp domain.uid Promise.pp prm);
-          clean_system_tasks domain prm;
           match clean_promise ~uid:prm.uid domain with
           | [ Suspended (prm', state) ] ->
               assert (Promise.Uid.equal prm'.uid prm.uid);
               Logs.debug (fun m ->
                   m "[%a] cancels an actual suspension of %a" Domain_uid.pp
                     domain.uid Promise.pp prm');
+              clean_system_task_if_suspended domain state;
+              clean_system_tasks domain prm';
               Promise.cancel prm';
               Sequence.iter ~f:(terminate pool domain) prm'.active_children;
               handle pool domain prm' (State.fail ~exn:Cancelled state)
-          | [ Arrived (prm, _) ] ->
+          | [ Arrived (prm', _) ] ->
+              assert (Promise.Uid.equal prm'.uid prm.uid);
+              clean_system_tasks domain prm';
               Promise.cancel prm;
               handle pool domain prm (State.pure (Error Cancelled))
           | [] ->
+              clean_system_tasks domain prm;
               Promise.cancel prm;
               handle pool domain prm (State.pure (Error Cancelled))
           | _ -> assert false)
@@ -1280,6 +1312,7 @@ end
 
 module Ownership = struct
   type t = resource
+  and uid = Resource_uid.t
 
   let own ~finally:finaliser value =
     let res = Resource.make ~finaliser value in
@@ -1288,6 +1321,8 @@ module Ownership = struct
   let disown res = Effect.perform (Ownership (Disown res))
   let transfer res = Effect.perform (Ownership (Transfer res))
   let check res = Effect.perform (Ownership (Check res))
+  let uid (Resource { uid; _ }) = uid
+  let pp = Resource_uid.pp
 end
 
 let domains () = Effect.perform Domains
@@ -1339,7 +1374,10 @@ let call_cc ?orphans ?(give = []) fn =
   Option.iter (Sequence.push prm) orphans;
   prm
 
-let make fn = Effect.perform (Syscall fn)
+let make fn =
+  let uid = Syscall_uid.gen () in
+  Syscall (uid, fn)
+
 let suspend syscall = Effect.perform (Suspend syscall)
 let await prm = Effect.perform (Await prm)
 let yield () = Effect.perform Yield

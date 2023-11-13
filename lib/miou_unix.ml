@@ -1,8 +1,10 @@
-open Miou
+module Logs = Miou.Logs.Make (struct
+  let src = "unix"
+end)
 
 type file_descr = {
     fd: Unix.file_descr
-  ; owner: Ownership.t
+  ; owner: Miou.Ownership.t
   ; non_blocking: bool
 }
 
@@ -10,7 +12,7 @@ let of_file_descr ?(non_blocking = true) ?owner fd =
   let owner =
     match owner with
     | Some owner -> owner
-    | None -> Ownership.own ~finally:Unix.close fd
+    | None -> Miou.Ownership.own ~finally:Unix.close fd
   in
   if non_blocking then Unix.set_nonblock fd else Unix.clear_nonblock fd;
   { fd; owner; non_blocking }
@@ -22,13 +24,16 @@ let disown { owner; _ } = Miou.Ownership.disown owner
 let tcpv4 () =
   let fd = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
   Unix.set_nonblock fd;
-  let owner = Ownership.own ~finally:Unix.close fd in
+  let owner = Miou.Ownership.own ~finally:Unix.close fd in
+  Logs.debug (fun m ->
+      m "the file-descriptor %d is linked to the resource [%a]" (Obj.magic fd)
+        Miou.Ownership.pp (Miou.Ownership.uid owner));
   { fd; owner; non_blocking= true }
 
 let tcpv6 () =
   let fd = Unix.socket Unix.PF_INET6 Unix.SOCK_STREAM 0 in
   Unix.set_nonblock fd;
-  let owner = Ownership.own ~finally:Unix.close fd in
+  let owner = Miou.Ownership.own ~finally:Unix.close fd in
   { fd; owner; non_blocking= true }
 
 let bind_and_listen ?(backlog = 64) { fd; owner; _ } sockaddr =
@@ -45,37 +50,45 @@ type unix_scheduler = {
   ; revert: (Miou.uid, Unix.file_descr) Hashtbl.t
 }
 
-let clean_syscalls dom uids =
-  let clean uid' fd tbl =
+let clean_syscalls dom (uids : Miou.uid list) =
+  let clean uid' (fd : Unix.file_descr) tbl =
     match Hashtbl.find tbl fd with
-    | syscalls ->
-        let syscalls =
+    | syscalls -> begin
+        Logs.debug (fun m -> m "clean syscalls linked to %d" (Obj.magic fd));
+        match
           List.filter (fun syscall -> uid' <> Miou.uid syscall) syscalls
-        in
-        Hashtbl.replace tbl fd syscalls
+        with
+        | [] -> Hashtbl.remove tbl fd
+        | syscalls -> Hashtbl.replace tbl fd syscalls
+      end
     | exception Not_found -> ()
   in
-  let clean uid =
+  let clean (uid : Miou.uid) =
     match Hashtbl.find dom.revert uid with
-    | fd -> clean uid fd dom.rd; clean uid fd dom.wr
+    | fd ->
+        Logs.debug (fun m -> m "clean [%d] syscall" (uid :> int));
+        clean uid fd dom.rd;
+        clean uid fd dom.wr
     | exception Not_found -> ()
   in
   List.iter clean uids;
   List.iter (Hashtbl.remove dom.revert) uids
 
-let dom =
+let get, set =
   let make () =
     let dummy = (0.0, Miou.make (Fun.const ())) in
     let compare (a, _) (b, _) = Float.compare a b in
     {
       rd= Hashtbl.create 0x100
     ; wr= Hashtbl.create 0x100
-    ; sleepers= Heapq.create ~compare ~dummy 0x100
+    ; sleepers= Miou.Heapq.create ~compare ~dummy 0x100
     ; revert= Hashtbl.create 0x100
     }
   in
   let dom = Stdlib.Domain.DLS.new_key make in
-  fun () -> Stdlib.Domain.DLS.get dom
+  let get () = Stdlib.Domain.DLS.get dom in
+  let set value = Stdlib.Domain.DLS.set dom value in
+  (get, set)
 
 (* Sleepers *)
 
@@ -98,26 +111,34 @@ let smallest_sleeper ~now sleepers =
       if delta <= 0. then None else Some delta
 
 let blocking_read fd =
-  let dom = dom () in
-  let prm = Miou.make (Fun.const ()) in
-  let uid = Miou.uid prm in
-  Hashtbl.add dom.revert uid fd;
+  let syscall = Miou.make (Fun.const ()) in
+  let uid = Miou.uid syscall in
+  let unix = get () in
+  Hashtbl.add unix.revert uid fd;
+  Logs.debug (fun m ->
+      m "[read][rds:%ds, wrs:%ds] (+%d)" (Hashtbl.length unix.rd)
+        (Hashtbl.length unix.wr) (Obj.magic fd));
   (try
-     let prms = Hashtbl.find dom.rd fd in
-     Hashtbl.replace dom.rd fd (prm :: prms)
-   with Not_found -> Hashtbl.add dom.rd fd [ prm ]);
-  Miou.suspend prm
+     let syscalls = Hashtbl.find unix.rd fd in
+     Hashtbl.replace unix.rd fd (syscall :: syscalls)
+   with Not_found -> Hashtbl.add unix.rd fd [ syscall ]);
+  set unix;
+  let unix = get () in
+  Logs.debug (fun m ->
+      m "[read][rds:%ds, wrs:%ds]" (Hashtbl.length unix.rd)
+        (Hashtbl.length unix.wr));
+  Miou.suspend syscall
 
 let blocking_write fd =
-  let dom = dom () in
-  let prm = Miou.make (Fun.const ()) in
-  let uid = Miou.uid prm in
-  Hashtbl.add dom.revert uid fd;
+  let syscall = Miou.make (Fun.const ()) in
+  let uid = Miou.uid syscall in
+  let unix = get () in
+  Hashtbl.add unix.revert uid fd;
   (try
-     let prms = Hashtbl.find dom.wr fd in
-     Hashtbl.replace dom.wr fd (prm :: prms)
-   with Not_found -> Hashtbl.add dom.wr fd [ prm ]);
-  Miou.suspend prm
+     let syscalls = Hashtbl.find unix.wr fd in
+     Hashtbl.replace unix.wr fd (syscall :: syscalls)
+   with Not_found -> Hashtbl.add unix.wr fd [ syscall ]);
+  set unix; Miou.suspend syscall
 
 let with_lock ~lock fn =
   Mutex.lock lock;
@@ -183,12 +204,12 @@ module Cond = struct
   let until ~predicate ~fn t =
     Mutex.lock t.mutex_predicate;
     while predicate () do
-      with_lock ~lock:t.mutex_counter (fun () -> t.counter <- t.counter + 1);
       Mutex.unlock t.mutex_predicate;
+      with_lock ~lock:t.mutex_counter (fun () -> t.counter <- t.counter + 1);
       blocking_read t.ic;
       consume_signal t.ic;
-      Mutex.lock t.mutex_predicate;
-      with_lock ~lock:t.mutex_counter (fun () -> t.counter <- t.counter - 1)
+      with_lock ~lock:t.mutex_counter (fun () -> t.counter <- t.counter - 1);
+      Mutex.lock t.mutex_predicate
     done;
     let finally () = Mutex.unlock t.mutex_predicate in
     Fun.protect ~finally fn
@@ -257,7 +278,9 @@ let rec connect ({ fd; non_blocking; owner; _ } as file_descr) sockaddr =
       | None -> ()
       | Some err -> raise (Unix.Unix_error (err, "connect", "")))
 
-let transfer ({ owner; _ } as file_descr) = Ownership.transfer owner; file_descr
+let transfer ({ owner; _ } as file_descr) =
+  Miou.Ownership.transfer owner;
+  file_descr
 
 let rec accept ?cloexec ({ fd; non_blocking; owner; _ } as file_descr) =
   Miou.Ownership.check owner;
@@ -268,7 +291,7 @@ let rec accept ?cloexec ({ fd; non_blocking; owner; _ } as file_descr) =
         blocking_read fd; accept ?cloexec file_descr
     | fd, sockaddr ->
         Unix.set_nonblock fd;
-        let owner = Ownership.own ~finally:Unix.close fd in
+        let owner = Miou.Ownership.own ~finally:Unix.close fd in
         let file_descr = { fd; owner; non_blocking= true } in
         (file_descr, sockaddr))
   else
@@ -277,7 +300,7 @@ let rec accept ?cloexec ({ fd; non_blocking; owner; _ } as file_descr) =
       | exception Unix.(Unix_error (EINTR, _, _)) -> go ()
       | fd, sockaddr ->
           Unix.set_nonblock fd;
-          let owner = Ownership.own ~finally:Unix.close fd in
+          let owner = Miou.Ownership.own ~finally:Unix.close fd in
           let file_descr = { fd; owner; non_blocking= true } in
           (file_descr, sockaddr)
     in
@@ -286,11 +309,13 @@ let rec accept ?cloexec ({ fd; non_blocking; owner; _ } as file_descr) =
 let close { fd; owner; _ } =
   Miou.Ownership.check owner;
   Unix.close fd;
-  Ownership.disown owner;
-  Miou.Logs.debug (fun m -> m "close the file-descr [%d]" (Obj.magic fd))
+  Miou.Ownership.disown owner;
+  Logs.debug (fun m -> m "close the file-descr [%d]" (Obj.magic fd))
 
 let shutdown { fd; owner; _ } v =
-  Miou.Ownership.check owner; Unix.shutdown fd v; Ownership.disown owner
+  Miou.Ownership.check owner;
+  Unix.shutdown fd v;
+  Miou.Ownership.disown owner
 
 let consume_interrupt interrupt =
   let buf = Bytes.create 0x1000 in
@@ -307,52 +332,41 @@ let quanta =
 
 let transmit_fds syscalls tbl fds =
   let fold acc fd =
-    match Hashtbl.find_opt tbl fd with
-    | None -> acc
-    | Some [] -> Hashtbl.remove tbl fd; acc
-    | Some prms ->
-        let f prm = Miou.task prm (Fun.const ()) in
+    match Hashtbl.find tbl fd with
+    | [] -> Hashtbl.remove tbl fd; acc
+    | syscalls ->
+        let f syscall = Miou.task syscall (Fun.const ()) in
         Hashtbl.remove tbl fd;
-        List.(rev_append (rev_map f prms) acc)
+        List.(rev_append (rev_map f syscalls) acc)
+    | exception Not_found -> acc
   in
   List.fold_left fold syscalls fds
 
 let select _domain interrupt ~poll cancelled_syscalls =
-  let dom = dom () in
-  clean_syscalls dom cancelled_syscalls;
-  let rds = Hashtbl.fold (fun fd _ acc -> fd :: acc) dom.rd [] in
-  let wrs = Hashtbl.fold (fun fd _ acc -> fd :: acc) dom.wr [] in
+  let unix = get () in
+  clean_syscalls unix cancelled_syscalls;
+  let rds = Hashtbl.fold (fun fd _syscalls acc -> fd :: acc) unix.rd [] in
+  let wrs = Hashtbl.fold (fun fd _syscalls acc -> fd :: acc) unix.wr [] in
   let now = Unix.gettimeofday () in
   let ts =
-    match smallest_sleeper ~now dom.sleepers with
+    match smallest_sleeper ~now unix.sleepers with
     | Some ts -> min ts quanta
     | None -> if poll then -1. else 0.
   in
-  Miou.Logs.debug (fun m ->
-      m "select@[<hov>(%a,@ %a, %4.4f)@]"
-        Fmt.(Dump.list (using Obj.magic int))
-        rds
-        Fmt.(Dump.list (using Obj.magic int))
-        wrs ts);
   match Unix.select (interrupt :: rds) wrs [] ts with
   | exception Unix.(Unix_error (EINTR, _, _)) -> []
   | [], [], _ ->
       let now = Unix.gettimeofday () in
-      sleepers_to_syscalls ~now [] dom.sleepers
+      let syscalls = sleepers_to_syscalls ~now [] unix.sleepers in
+      set unix; syscalls
   | rds, wrs, [] ->
-      Logs.debug (fun m ->
-          m "trigger %a %a"
-            Fmt.(Dump.list (using Obj.magic int))
-            rds
-            Fmt.(Dump.list (using Obj.magic int))
-            wrs);
       if List.exists (( = ) interrupt) rds then consume_interrupt interrupt;
       let now = Unix.gettimeofday () in
-      let syscalls = sleepers_to_syscalls ~now [] dom.sleepers in
-      let syscalls = transmit_fds syscalls dom.rd rds in
-      let syscalls = transmit_fds syscalls dom.wr wrs in
-      syscalls
-  | _ -> []
+      let syscalls = sleepers_to_syscalls ~now [] unix.sleepers in
+      let syscalls = transmit_fds syscalls unix.rd rds in
+      let syscalls = transmit_fds syscalls unix.wr wrs in
+      set unix; syscalls
+  | _ -> set unix; []
 
 let events domain =
   let ic, oc = Unix.pipe ~cloexec:true () in
@@ -370,8 +384,9 @@ let events domain =
 let run ?g ?domains fn = Miou.run ~events ?g ?domains fn
 
 let sleep until =
-  let dom = dom () in
-  let prm = Miou.make (Fun.const ()) in
+  let syscall = Miou.make (Fun.const ()) in
+  let unix = get () in
   let now = Unix.gettimeofday () in
-  Miou.Heapq.add dom.sleepers (now +. until, prm);
-  Miou.suspend prm
+  Miou.Heapq.add unix.sleepers (now +. until, syscall);
+  set unix;
+  Miou.suspend syscall
