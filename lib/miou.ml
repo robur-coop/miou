@@ -147,7 +147,9 @@ type 'a state =
 type 'a linked_to =
   | Sequence : {
         prm: 'b t
-      ; k: (('a, exn) result, 'b) State.continuation
+      ; prms: 'a t list
+      ; triggered: bool Atomic.t
+      ; k: (('a, exn) result list, 'b) State.continuation
     }
       -> 'a linked_to
   | Choice : {
@@ -293,7 +295,7 @@ type _ Effect.t += Self : (Promise.Uid.t * Domain_uid.t * int) Effect.t
 type _ Effect.t += Stats : int Effect.t
 
 type _ Effect.t +=
-  | Await : 'a t -> ('a, exn) result Effect.t
+  | Await : 'a t list -> ('a, exn) result list Effect.t
   | Choose : bool * 'a t list -> ('a, exn) result Effect.t
 
 type 'a ownership =
@@ -394,9 +396,7 @@ module Domain = struct
     let compare a b = to_int a - to_int b
   end
 
-  let compare (tick0, a) (tick1, b) =
-    let order = Task.compare a b in
-    if order = 0 then Int.compare tick0 tick1 else order
+  let compare (_tick0, a) (_tick1, b) = Task.compare a b
 
   let make ?(quanta = 1) ~g events =
     let uid = Uid.gen () in
@@ -772,9 +772,9 @@ module Domain = struct
      whole program. *)
   let invariant current state =
     match state with
-    | State.Suspended (k, Await prm) ->
-        if Promise.is_a_children ~parent:current prm = false then
-          State.discontinue_with k Not_a_child
+    | State.Suspended (k, Await prms) ->
+        if List.for_all (Promise.is_a_children ~parent:current) prms = false
+        then State.discontinue_with k Not_a_child
         else state
     | State.Suspended (k, Choose (_, prms)) ->
         if List.for_all (Promise.is_a_children ~parent:current) prms = false
@@ -819,23 +819,29 @@ module Domain = struct
             m "[%a] waiter of %a did not appear yet" Domain_uid.pp domain.uid
               Promise.pp current);
         Sequence.add_l (Value (current, and_return)) domain.values
-    | Some (Sequence { prm; k }), _ ->
+    | Some (Sequence { prm; prms; triggered; k }), _ ->
+        let all_terminated =
+          List.for_all (Fun.negate Promise.is_pending) prms
+        in
         Logs.debug (fun m ->
-            m "[%a] %a => %a" Domain_uid.pp domain.uid Promise.pp current
-              Promise.pp prm);
-        Promise.consume current;
-        let terminated = [ current.uid ] in
-        if Domain_uid.equal prm.runner domain.uid then
-          add_into_domain domain
-            (Suspended
-               ( prm
-               , State.suspended_with k
-                   (Spin { terminated; to_cancel= []; and_return }) ))
-        else if prm.runner = 0 then
-          add_into_dom0 pool prm ~terminated ~and_return k
-        else
-          add_into_pool ~domain:prm.runner pool
-            (Signal { prm; terminated; and_return; to_cancel= []; k })
+            m "[%a] %a => %a (all terminated: %b)" Domain_uid.pp domain.uid
+              Promise.pp current Promise.pp prm all_terminated);
+        if all_terminated && Atomic.compare_and_set triggered false true then begin
+          List.iter Promise.consume prms;
+          let terminated = List.map (fun ({ uid; _ } : _ t) -> uid) prms in
+          let and_return = List.map Promise.to_result prms in
+          if Domain_uid.equal prm.runner domain.uid then
+            add_into_domain domain
+              (Suspended
+                 ( prm
+                 , State.suspended_with k
+                     (Spin { terminated; to_cancel= []; and_return }) ))
+          else if prm.runner = 0 then
+            add_into_dom0 pool prm ~terminated ~and_return k
+          else
+            add_into_pool ~domain:prm.runner pool
+              (Signal { prm; terminated; and_return; to_cancel= []; k })
+        end
     | Some (Choice { prm; k; others; triggered; and_cancel }), _ ->
         let an_other_is_resolved = List.exists Promise.is_resolved others in
         let current_failed = not (Promise.is_resolved current) in
@@ -941,10 +947,10 @@ module Domain = struct
          pool
       -> domain
       -> a t
-      -> ((b, exn) result, a) State.continuation
-      -> b t
+      -> ((b, exn) result list, a) State.continuation
+      -> b t list
       -> unit =
-   fun pool domain current k prm ->
+   fun pool domain current k prms ->
     (* NOTE(dinosaure): [current] is a promise associated to a task which run
        into the given [domain]. [prm] is a promise given by an [Miou.await]
        (performed by the [current]'s task) and the latter's task _can_ run into
@@ -965,24 +971,26 @@ module Domain = struct
        to save the continuation. Scheduling the continuation will be local, so
        there will be no transmission from a domain to [dom0]. *)
     assert (Domain_uid.equal domain.uid current.runner);
-    if Promise.is_a_children ~parent:current prm = false then
+    if List.for_all (Promise.is_a_children ~parent:current) prms = false then
       let state = State.discontinue_with k Not_a_child in
       add_into_domain domain (Suspended (current, state))
-    else if Promise.is_consumed prm then begin
-      Logs.debug (fun m ->
-          m "[%a] %a is consumed, directly return its result" Domain_uid.pp
-            domain.uid Promise.pp prm);
-      let state = State.continue_with k (Promise.to_result prm) in
+    else if List.for_all Promise.is_consumed prms then begin
+      let results = List.map Promise.to_result prms in
+      let state = State.continue_with k results in
       add_into_domain domain (Suspended (current, state))
     end
     else begin
-      Logs.debug (fun m ->
-          m "[%a] add a new waiter (%a) for %a" Domain_uid.pp domain.uid
-            Promise.pp current Promise.pp prm);
-      let linked_to = Sequence { prm= current; k } in
-      let set = Atomic.compare_and_set prm.k None (Option.some linked_to) in
-      assert set;
-      interrupt pool ~domain:prm.runner
+      let triggered = Atomic.make false in
+      let f prm =
+        Logs.debug (fun m ->
+            m "[%a] add a new waiter (%a) for %a" Domain_uid.pp domain.uid
+              Promise.pp current Promise.pp prm);
+        let linked_to = Sequence { prm= current; prms; triggered; k } in
+        let set = Atomic.compare_and_set prm.k None (Option.some linked_to) in
+        assert set;
+        interrupt pool ~domain:prm.runner
+      in
+      List.iter f prms
     end
 
   let iter_with_exclusion ~f prms =
@@ -1032,17 +1040,20 @@ module Domain = struct
              [hash_of_blob] has no "quanta"/effect. Running this function
              "multiple" times in a loop is more expensive than running it once
              and already getting the [Finished] state. *)
-          handle pool domain prm (State.make fn ())
+          let state = State.make fn () in
+          handle pool domain prm state
       | Suspended (current, State.Suspended (k, Suspend syscall)) ->
           let (Syscall (uid, _)) = syscall in
           Logs.debug (fun m ->
               m "[%a] new system suspension point for [%a] into %a"
                 Domain_uid.pp domain.uid Syscall_uid.pp uid Promise.pp current);
           suspend_system_call domain syscall current k
-      | Suspended (current, State.Suspended (k, Await prm)) ->
+      | Suspended (current, State.Suspended (k, Await prms)) ->
           Logs.debug (fun m ->
-              m "[%a] await %a" Domain_uid.pp domain.uid Promise.pp prm);
-          await pool domain current k prm
+              m "[%a] await %a" Domain_uid.pp domain.uid
+                Fmt.(Dump.list Promise.pp)
+                prms);
+          await pool domain current k prms
       | Suspended (current, State.Suspended (k, Choose (and_cancel, prms))) ->
           Logs.debug (fun m ->
               m "[%a] choose %a" Domain_uid.pp domain.uid
@@ -1366,14 +1377,10 @@ let make fn =
   Syscall (uid, fn)
 
 let suspend syscall = Effect.perform (Suspend syscall)
-let await prm = Effect.perform (Await prm)
+let await prm = Effect.perform (Await [ prm ]) |> List.hd
 let yield () = Effect.perform Yield
 let cancel prm = Effect.perform (Cancel prm)
-
-let await_all prms =
-  let ress = List.rev_map await prms in
-  List.rev ress
-
+let await_all prms = Effect.perform (Await prms)
 let uid (Syscall (uid, _) : _ syscall) = uid
 
 let parallel fn tasks =
