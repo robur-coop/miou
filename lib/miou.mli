@@ -878,3 +878,4 @@ module Logs : sig
 end
 
 module Heapq = Heapq
+module Fmt = Fmt

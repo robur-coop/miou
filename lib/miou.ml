@@ -1,6 +1,3 @@
-let failwith fmt = Format.kasprintf failwith fmt
-let str fmt = Format.kasprintf Fun.id fmt
-
 external apply : ('a -> 'b) -> 'a -> 'b = "%apply"
 external reraise : exn -> 'a = "%reraise"
 
@@ -8,6 +5,7 @@ module Queue = Queue
 module State = State
 module Logs = Logs
 module Heapq = Heapq
+module Fmt = Fmt
 
 (** Uid modules *)
 
@@ -182,8 +180,6 @@ module Promise = struct
     Format.fprintf ppf "[%a:%a](%d)" Domain_uid.pp runner Uid.pp uid
       (Sequence.length resources)
 
-  let pp_pack ppf (Pack prm) = pp ppf prm
-
   let rec transition ?(backoff = Backoff.default) prm value =
     match (Atomic.get prm.state, value) with
     | (Pending as state), Ok v ->
@@ -282,21 +278,41 @@ end
 (** Effects *)
 
 [@@@warning "-30"]
+[@@@warning "-37"]
 
-type ty = Concurrent | Parallel of Domain_uid.t
+type kind = Concurrent | Parallel of Domain_uid.t
 type _ Effect.t += Domain_uid : Domain_uid.t Effect.t
 type _ Effect.t += Domain_count : int Effect.t
-type _ Effect.t += Spawn : ty * resource list * (unit -> 'a) -> 'a t Effect.t
+type _ Effect.t += Spawn : kind * resource list * (unit -> 'a) -> 'a t Effect.t
 type _ Effect.t += Yield : unit Effect.t
 type _ Effect.t += Cancel : 'a t -> unit Effect.t
 type _ Effect.t += Domains : Domain_uid.t list Effect.t
 type _ Effect.t += Random : Random.State.t Effect.t
 type _ Effect.t += Self : (Promise.Uid.t * Domain_uid.t * int) Effect.t
 type _ Effect.t += Stats : int Effect.t
+type _ Effect.t += Await : 'a t list -> ('a, exn) result list Effect.t
+type _ Effect.t += Choose : bool * 'a t list -> ('a, exn) result Effect.t
 
-type _ Effect.t +=
-  | Await : 'a t list -> ('a, exn) result list Effect.t
-  | Choose : bool * 'a t list -> ('a, exn) result Effect.t
+let pp_kind ppf = function
+  | Concurrent -> Fmt.string ppf "Concurrent"
+  | Parallel uid -> Fmt.pf ppf "@[<1>(Parallel@ %a)@]" Domain_uid.pp uid
+
+let pp_effect : type a. a Effect.t Fmt.t =
+ fun ppf -> function
+  | Domain_uid -> Fmt.string ppf "Domain_uid"
+  | Domain_count -> Fmt.string ppf "Domain_count"
+  | Spawn (k, _ress, _fn) -> Fmt.pf ppf "@[<1>(Spawn@ %a)@]" pp_kind k
+  | Yield -> Fmt.string ppf "Yield"
+  | Cancel prm -> Fmt.pf ppf "@[<1>(Cancel@ %a)@]" Promise.pp prm
+  | Domains -> Fmt.string ppf "Domains"
+  | Random -> Fmt.string ppf "Random"
+  | Self -> Fmt.string ppf "Self"
+  | Stats -> Fmt.string ppf "Stats"
+  | Await prms ->
+      Fmt.pf ppf "@[<1>](Await@ @[<hov>%a@])@]" Fmt.(Dump.list Promise.pp) prms
+  | Choose (_, prms) ->
+      Fmt.pf ppf "@[<1>](Choose@ @[<hov>%a@])@]" Fmt.(Dump.list Promise.pp) prms
+  | _ -> Fmt.string ppf "#effect"
 
 type 'a ownership =
   | Check : resource -> unit ownership
@@ -498,7 +514,7 @@ module Domain = struct
   let suspend_system_call domain (Syscall (uid, fn) : _ syscall) prm k =
     match Hashtbl.find domain.system_tasks uid with
     | System_call_suspended _ ->
-        failwith "%a has already been suspended" Promise.pp prm
+        Fmt.failwith "%a has already been suspended" Promise.pp prm
     | exception Not_found ->
         Hashtbl.replace domain.system_tasks uid
           (System_call_suspended (uid, fn, prm, k))
@@ -509,8 +525,8 @@ module Domain = struct
       (fun uid (System_call_suspended (_, _, prm', _) as suspended) ->
         if Promise.equal prm prm' then begin
           Logs.debug (fun m ->
-              m "[%a] clean the syscall [%a]" Domain_uid.pp domain.uid
-                Syscall_uid.pp uid);
+              m "[%a] clean the syscall [%a] (system-tasks)" Domain_uid.pp
+                domain.uid Syscall_uid.pp uid);
           Hashtbl.add set uid ();
           Queue.enqueue domain.cancelled_syscalls uid;
           None
@@ -522,8 +538,8 @@ module Domain = struct
       let (Continue (uid', _)) = Sequence.data node in
       if Hashtbl.mem set uid' then begin
         Logs.debug (fun m ->
-            m "[%a] clean the syscall [%a]" Domain_uid.pp domain.uid
-              Syscall_uid.pp uid');
+            m "[%a] clean the syscall [%a] (system-events)" Domain_uid.pp
+              domain.uid Syscall_uid.pp uid');
         to_delete := node :: !to_delete
       end
     in
@@ -577,13 +593,13 @@ module Domain = struct
 
   let error_already_owned prm (Resource { uid; _ }) =
     Invalid_argument
-      (str "Miou.own: the resource [%a] was already owned by %a" Domain_uid.pp
-         uid Promise.pp prm)
+      (Fmt.str "Miou.own: the resource [%a] was already owned by %a"
+         Domain_uid.pp uid Promise.pp prm)
 
   let error_impossible_to_transfer prm =
     Invalid_argument
-      (str "Miou.Ownership.transfer: impossible to transfer from %a" Promise.pp
-         prm)
+      (Fmt.str "Miou.Ownership.transfer: impossible to transfer from %a"
+         Promise.pp prm)
 
   let own_it prm (Resource { uid; _ }) =
     let own_it = ref false in
@@ -656,7 +672,11 @@ module Domain = struct
 
   let perform pool domain (Pack current) =
     let perform : type a b. (a, b) State.k =
-     fun k -> function
+     fun k eff ->
+      Logs.debug (fun m ->
+          m "[%a] %a perform %a" Domain_uid.pp domain.uid Promise.pp current
+            pp_effect eff);
+      match eff with
       | Domain_uid -> k (State.Send domain.uid)
       | Domain_count -> k (State.Send (List.length pool.domains))
       | Domains ->
@@ -676,6 +696,9 @@ module Domain = struct
           let prm =
             Promise.make ~g:domain.g ~resources ~runner ~parent:current ()
           in
+          Logs.debug (fun m ->
+              m "[%a] create a new concurrent task %a" Domain_uid.pp domain.uid
+                Promise.pp prm);
           Sequence.add_l (Promise.pack prm) current.active_children;
           add_into_domain domain (Arrived (prm, fn));
           k (State.Send prm)
@@ -687,6 +710,9 @@ module Domain = struct
           Logs.debug (fun m ->
               m "[%a] spawn a new task %a into [%a]" Domain_uid.pp domain.uid
                 Promise.pp prm Domain_uid.pp runner);
+          Logs.debug (fun m ->
+              m "[%a] create a new parallel task %a" Domain_uid.pp domain.uid
+                Promise.pp prm);
           Sequence.add_l (Promise.pack prm) current.active_children;
           add_into_pool ~domain:runner pool (Create (prm, fn));
           k (State.Send prm)
@@ -698,10 +724,6 @@ module Domain = struct
              via [State.run]. *)
           k State.Yield
       | Spin { terminated; to_cancel= []; and_return } ->
-          Logs.debug (fun m ->
-              m "[%a] clean children: %a" Domain_uid.pp domain.uid
-                Fmt.(Dump.list Promise.Uid.pp)
-                terminated);
           clean_children ~children:terminated current;
           k (State.Send and_return)
       | Spin { terminated; to_cancel; and_return } ->
@@ -902,12 +924,6 @@ module Domain = struct
            already been added. In the event that the cancellation appears but
            the promise has already been canceled, we do absolutely nothing (see
            the [once] function which consumes tasks). *)
-        let active_children = Sequence.to_list prm.active_children in
-        Logs.debug (fun m ->
-            m "[%a] delay the termination of %a (%S), waiting %a" Domain_uid.pp
-              domain.uid Promise.pp prm (Printexc.to_string exn)
-              Fmt.(Dump.list Promise.pp_pack)
-              active_children);
         Sequence.iter ~f:(terminate pool domain) prm.active_children;
         add_into_domain domain (Suspended (prm, State.pure (Error exn)))
     | State.Finished (Ok value) ->
@@ -925,10 +941,15 @@ module Domain = struct
         let state = invariant prm state in
         add_into_domain domain (Suspended (prm, state))
 
-  let transfer_system_task pool domain
+  let transfer_system_task _pool domain
       (Continue (uid, fn0) as continue : continue) =
-    match Hashtbl.find domain.system_tasks uid with
-    | System_call_suspended (_, fn1, prm, k) ->
+    match Hashtbl.find_opt domain.system_tasks uid with
+    | None ->
+        Logs.debug (fun m ->
+            m "[%a] [%a] not found, keep it for the next iteration"
+              Domain_uid.pp domain.uid Syscall_uid.pp uid);
+        Sequence.add_l continue domain.system_events
+    | Some (System_call_suspended (_, fn1, prm, k)) -> (
         Hashtbl.remove domain.system_tasks uid;
         Logs.debug (fun m ->
             m "[%a] consumes the system task [%a]" Domain_uid.pp domain.uid
@@ -940,7 +961,6 @@ module Domain = struct
           with exn -> State.discontinue_with k exn
         in
         handle pool domain prm state
-    | exception Not_found -> Sequence.add_l continue domain.system_events
 
   let await :
       type a b.
@@ -971,6 +991,11 @@ module Domain = struct
        to save the continuation. Scheduling the continuation will be local, so
        there will be no transmission from a domain to [dom0]. *)
     assert (Domain_uid.equal domain.uid current.runner);
+    Logs.debug (fun m ->
+        m "[%a] promises %a are finished: %b" Domain_uid.pp domain.uid
+          Fmt.(Dump.list Promise.pp)
+          prms
+          (List.for_all (Fun.negate Promise.is_pending) prms));
     if List.for_all (Promise.is_a_children ~parent:current) prms = false then
       let state = State.discontinue_with k Not_a_child in
       add_into_domain domain (Suspended (current, state))
@@ -1119,6 +1144,8 @@ module Domain = struct
     let poll = Heapq.length domain.tasks = 0 in
     let syscalls = Queue.(to_list (transfer domain.cancelled_syscalls)) in
     let syscalls = match_with (domain.events.select ~poll) syscalls handler in
+    Logs.debug (fun m ->
+        m "[%a] got %d syscalls" Domain_uid.pp domain.uid (List.length syscalls));
     List.iter (transfer_system_task pool domain) syscalls
 
   let system_tasks_suspended domain = Hashtbl.length domain.system_tasks > 0
@@ -1159,6 +1186,16 @@ module Pool = struct
     && Sequence.is_empty domain.system_events
     && Domain.system_tasks_suspended domain = false
     && Domain.one_task_for ~domain pool = false
+
+  let pp_stats ppf (pool, domain) =
+    Fmt.pf ppf
+      "[pool:%dw, domain:%dw, domain.tasks:%dw, domain.system_events: %dw, \
+       domain.values: %dw]"
+      Obj.(reachable_words (repr pool))
+      Obj.(reachable_words (repr domain))
+      Obj.(reachable_words (repr domain.tasks))
+      Obj.(reachable_words (repr domain.system_events))
+      Obj.(reachable_words (repr domain.values))
 
   let rec transfer_all_tasks (pool : pool) (domain : domain) =
     let exception Task of elt Sequence.node in
@@ -1217,6 +1254,7 @@ module Pool = struct
         pool.working_counter <- pool.working_counter + 1;
         Mutex.unlock pool.mutex;
         Domain.run pool domain ();
+        Logs.debug (fun m -> m "%a" pp_stats (pool, domain));
         Mutex.lock pool.mutex;
         pool.working_counter <- pool.working_counter - 1;
         if (not pool.stop) && Int.equal pool.working_counter 0 then

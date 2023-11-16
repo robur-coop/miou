@@ -1,11 +1,10 @@
 (library
  (name miou)
  (public_name miou)
- (modules miou logs heapq sequence queue state)
- (libraries fmt))
+ (modules miou fmt logs heapq sequence queue state))
 
 (library
  (name miou_unix)
  (public_name miou.unix)
  (modules miou_unix)
- (libraries fmt miou unix))
+ (libraries miou unix))
