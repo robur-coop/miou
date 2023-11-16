@@ -1127,7 +1127,9 @@ module Domain = struct
       | _ -> None
     in
     let handler = { retc; exnc; effc } in
-    let poll = Heapq.length domain.tasks = 0 in
+    let poll =
+      Heapq.length domain.tasks = 0 && Sequence.length domain.system_events = 0
+    in
     let syscalls = Queue.(to_list (transfer domain.cancelled_syscalls)) in
     let syscalls = match_with (domain.events.select ~poll) syscalls handler in
     Logs.debug (fun m ->
