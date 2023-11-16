@@ -1029,71 +1029,71 @@ module Domain = struct
       iter_with_exclusion ~f prms
 
   let once pool domain task =
-    if not (task_is_cancelled task) then
-      match task with
-      | Tick -> Domain.cpu_relax ()
-      | Arrived (prm, fn) ->
-          Logs.debug (fun m ->
-              m "[%a] %a arrived" Domain_uid.pp domain.uid Promise.pp prm);
-          (* Note to myself. It seems that if we try to execute several "quanta"
-             as soon as a task arrives, we have a performance regression with
-             our example on the merkle-trees. It's quite difficult to know why,
-             but let's keep this in mind if one day we want to be more truthful
-             about our scheduler implementation.
+    match task with
+    | Tick -> Domain.cpu_relax ()
+    | Arrived (prm, _) when Promise.is_cancelled prm ->
+        handle pool domain prm (State.pure (Error Cancelled))
+    | Suspended (prm, state) when Promise.is_cancelled prm ->
+        handle pool domain prm state
+    | Arrived (prm, fn) ->
+        Logs.debug (fun m ->
+            m "[%a] %a arrived" Domain_uid.pp domain.uid Promise.pp prm);
+        (* Note to myself. It seems that if we try to execute several "quanta"
+           as soon as a task arrives, we have a performance regression with
+           our example on the merkle-trees. It's quite difficult to know why,
+           but let's keep this in mind if one day we want to be more truthful
+           about our scheduler implementation.
 
-             Indeed, stricto-sensus, we should still consume our "quantas" even
-             if the task has just arrived. I think in Merkle's case that
-             [hash_of_blob] has no "quanta"/effect. Running this function
-             "multiple" times in a loop is more expensive than running it once
-             and already getting the [Finished] state. *)
-          let state = State.make fn () in
-          handle pool domain prm state
-      | Suspended (current, State.Suspended (k, Suspend syscall)) ->
-          let (Syscall (uid, _)) = syscall in
-          Logs.debug (fun m ->
-              m "[%a] new system suspension point for [%a] into %a"
-                Domain_uid.pp domain.uid Syscall_uid.pp uid Promise.pp current);
-          suspend_system_call domain syscall current k
-      | Suspended (current, State.Suspended (k, Await prms)) ->
-          Logs.debug (fun m ->
-              m "[%a] await %a" Domain_uid.pp domain.uid
-                Fmt.(Dump.list Promise.pp)
-                prms);
-          await pool domain current k prms
-      | Suspended (current, State.Suspended (k, Choose (and_cancel, prms))) ->
-          Logs.debug (fun m ->
-              m "[%a] choose %a" Domain_uid.pp domain.uid
-                Fmt.(Dump.list Promise.pp)
-                prms);
-          choose pool domain current k ~and_cancel prms
-      | Suspended (prm, state) ->
-          let perform = perform pool domain (Promise.pack prm) in
-          let state = State.run ~quanta:domain.quanta ~perform state in
-          handle pool domain prm state
-      | Cancelled prm -> (
-          Logs.debug (fun m ->
-              m "[%a] %a cancelled" Domain_uid.pp domain.uid Promise.pp prm);
-          match clean_promise ~uid:prm.uid domain with
-          | [ Suspended (prm', state) ] ->
-              assert (Promise.Uid.equal prm'.uid prm.uid);
-              Logs.debug (fun m ->
-                  m "[%a] cancels an actual suspension of %a" Domain_uid.pp
-                    domain.uid Promise.pp prm');
-              clean_system_task_if_suspended domain state;
-              clean_system_tasks domain prm';
-              Promise.cancel prm';
-              Sequence.iter ~f:(terminate pool domain) prm'.active_children;
-              handle pool domain prm' (State.fail ~exn:Cancelled state)
-          | [ Arrived (prm', _) ] ->
-              assert (Promise.Uid.equal prm'.uid prm.uid);
-              clean_system_tasks domain prm';
-              Promise.cancel prm;
-              handle pool domain prm (State.pure (Error Cancelled))
-          | [] ->
-              clean_system_tasks domain prm;
-              Promise.cancel prm;
-              handle pool domain prm (State.pure (Error Cancelled))
-          | _ -> assert false)
+           Indeed, stricto-sensus, we should still consume our "quantas" even
+           if the task has just arrived. I think in Merkle's case that
+           [hash_of_blob] has no "quanta"/effect. Running this function
+           "multiple" times in a loop is more expensive than running it once
+           and already getting the [Finished] state. *)
+        let state = State.make fn () in
+        handle pool domain prm state
+    | Suspended (current, State.Suspended (k, Suspend syscall)) ->
+        let (Syscall (uid, _)) = syscall in
+        Logs.debug (fun m ->
+            m "[%a] new system suspension point for [%a] into %a" Domain_uid.pp
+              domain.uid Syscall_uid.pp uid Promise.pp current);
+        suspend_system_call domain syscall current k
+    | Suspended (current, State.Suspended (k, Await prms)) ->
+        Logs.debug (fun m ->
+            m "[%a] await %a" Domain_uid.pp domain.uid
+              Fmt.(Dump.list Promise.pp)
+              prms);
+        await pool domain current k prms
+    | Suspended (current, State.Suspended (k, Choose (and_cancel, prms))) ->
+        choose pool domain current k ~and_cancel prms
+    | Suspended (prm, state) ->
+        let perform = perform pool domain (Promise.pack prm) in
+        let state = State.run ~quanta:domain.quanta ~perform state in
+        handle pool domain prm state
+    | Cancelled prm -> (
+        Logs.debug (fun m ->
+            m "[%a] %a cancelled" Domain_uid.pp domain.uid Promise.pp prm);
+        match clean_promise ~uid:prm.uid domain with
+        | [ Suspended (prm', state) ] ->
+            assert (Promise.Uid.equal prm'.uid prm.uid);
+            Logs.debug (fun m ->
+                m "[%a] cancels an actual suspension of %a (%d children)"
+                  Domain_uid.pp domain.uid Promise.pp prm'
+                  (Sequence.length prm'.active_children));
+            clean_system_task_if_suspended domain state;
+            clean_system_tasks domain prm';
+            Promise.cancel prm';
+            (* Sequence.iter ~f:(terminate pool domain) prm'.active_children; *)
+            handle pool domain prm' (State.fail ~exn:Cancelled state)
+        | [ Arrived (prm', _) ] ->
+            assert (Promise.Uid.equal prm'.uid prm.uid);
+            clean_system_tasks domain prm';
+            Promise.cancel prm;
+            handle pool domain prm (State.pure (Error Cancelled))
+        | [] ->
+            clean_system_tasks domain prm;
+            Promise.cancel prm;
+            handle pool domain prm (State.pure (Error Cancelled))
+        | _ -> assert false)
 
   let transmit_values domain =
     let to_delete = ref [] in
