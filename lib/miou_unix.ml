@@ -2,6 +2,9 @@ module Logs = Miou.Logs.Make (struct
   let src = "unix"
 end)
 
+let[@inline never] pp_file_descr ppf (fd : Unix.file_descr) =
+  Miou.Fmt.int ppf (Obj.magic fd)
+
 type file_descr = {
     fd: Unix.file_descr
   ; owner: Miou.Ownership.t
@@ -54,7 +57,7 @@ let clean_syscalls dom (uids : Miou.uid list) =
   let clean uid' (fd : Unix.file_descr) tbl =
     match Hashtbl.find tbl fd with
     | syscalls -> begin
-        Logs.debug (fun m -> m "clean syscalls linked to %d" (Obj.magic fd));
+        Logs.debug (fun m -> m "clean syscalls linked to %a" pp_file_descr fd);
         match
           List.filter (fun syscall -> uid' <> Miou.uid syscall) syscalls
         with
@@ -132,7 +135,10 @@ let blocking_read fd =
      let syscalls = Hashtbl.find unix.rd fd in
      Hashtbl.replace unix.rd fd (syscall :: syscalls)
    with Not_found -> Hashtbl.add unix.rd fd [ syscall ]);
-  set unix; Miou.suspend syscall
+  Logs.debug (fun m ->
+      m "new read() point [%d] on %a" (uid :> int) pp_file_descr fd);
+  set unix;
+  Miou.suspend syscall
 
 let blocking_write fd =
   let syscall = Miou.make (Fun.const ()) in
@@ -143,7 +149,10 @@ let blocking_write fd =
      let syscalls = Hashtbl.find unix.wr fd in
      Hashtbl.replace unix.wr fd (syscall :: syscalls)
    with Not_found -> Hashtbl.add unix.wr fd [ syscall ]);
-  set unix; Miou.suspend syscall
+  Logs.debug (fun m ->
+      m "new write() point [%d] on %a" (uid :> int) pp_file_descr fd);
+  set unix;
+  Miou.suspend syscall
 
 let with_lock ~lock fn =
   Mutex.lock lock;
@@ -346,8 +355,12 @@ let transmit_fds syscalls tbl fds =
   in
   List.fold_left fold syscalls fds
 
-let select _domain interrupt ~poll cancelled_syscalls =
+let select _domain interrupt ~poll (cancelled_syscalls : Miou.uid list) =
   let unix = get () in
+  Logs.debug (fun m ->
+      m "cancelled syscalls: %a"
+        Miou.Fmt.(Dump.list int)
+        (cancelled_syscalls :> int list));
   clean_syscalls unix cancelled_syscalls;
   let rds = Hashtbl.fold (fun fd _syscalls acc -> fd :: acc) unix.rd [] in
   let wrs = Hashtbl.fold (fun fd _syscalls acc -> fd :: acc) unix.wr [] in
@@ -357,6 +370,12 @@ let select _domain interrupt ~poll cancelled_syscalls =
     | Some ts -> min ts quanta
     | None -> if poll then -1. else 0.
   in
+  Logs.debug (fun m ->
+      m "@[<7>select(%a,@ %a, %f)@]"
+        Miou.Fmt.(Dump.list pp_file_descr)
+        rds
+        Miou.Fmt.(Dump.list pp_file_descr)
+        wrs ts);
   match Unix.select (interrupt :: rds) wrs [] ts with
   | exception Unix.(Unix_error (EINTR, _, _)) -> []
   | [], [], _ ->
@@ -393,4 +412,6 @@ let sleep until =
   let now = Unix.gettimeofday () in
   Miou.Heapq.add unix.sleepers (now +. until, syscall, ref false);
   set unix;
+  Logs.debug (fun m ->
+      m "new sleeper (%f) on [%d]" until (Miou.uid syscall :> int));
   Miou.suspend syscall
