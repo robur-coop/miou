@@ -1117,14 +1117,19 @@ module Domain = struct
           | _ -> assert false)
 
   let transmit_values domain =
+    let to_delete = ref [] in
     let transmit node =
       let (Value (prm, value)) = Sequence.data node in
       if Option.is_some (Atomic.get prm.k) then begin
+        Logs.debug (fun m ->
+            m "[%a] prepares %a to be consumed" Domain_uid.pp domain.uid
+              Promise.pp prm);
         add_into_domain domain (Suspended (prm, State.pure value));
-        Sequence.remove node
+        to_delete := node :: !to_delete
       end
     in
-    Sequence.iter_node ~f:transmit domain.values
+    Sequence.iter_node ~f:transmit domain.values;
+    List.iter Sequence.remove !to_delete
 
   let transmit_system_events pool domain =
     let syscalls = Sequence.to_list domain.system_events in
