@@ -136,11 +136,7 @@ end
 
 (** Promise *)
 
-type 'a state =
-  | Pending
-  | Resolved of 'a
-  | Failed of exn
-  | Consumed of ('a, exn) result
+type 'a state = Pending | Resolved of 'a | Failed of exn
 
 type 'a linked_to =
   | Sequence : {
@@ -190,35 +186,18 @@ module Promise = struct
         if not set then transition ~backoff:(Backoff.once backoff) prm value
     | _ -> ()
 
-  let rec consume ?(backoff = Backoff.default) prm =
-    match Atomic.get prm.state with
-    | Resolved v as state ->
-        let set = Atomic.compare_and_set prm.state state (Consumed (Ok v)) in
-        if not set then consume ~backoff:(Backoff.once backoff) prm
-    | Failed e as state ->
-        let set = Atomic.compare_and_set prm.state state (Consumed (Error e)) in
-        if not set then consume ~backoff:(Backoff.once backoff) prm
-    | Pending -> failwith "Promise.consume: Invalid transition"
-    | _ -> ()
-
   let rec cancel ?(backoff = Backoff.default) prm =
     match Atomic.get prm.state with
     | (Pending | Resolved _ | Failed _) as seen ->
-        let cancelled = Consumed (Error Cancelled) in
+        let cancelled = Failed Cancelled in
         let set = Atomic.compare_and_set prm.state seen cancelled in
         if not set then cancel ~backoff:(Backoff.once backoff) prm
-    | Consumed _ -> ()
 
   let[@inline never] is_cancelled prm =
-    match Atomic.get prm.state with
-    | Consumed (Error Cancelled) | Failed Cancelled -> true
-    | _ -> false
+    match Atomic.get prm.state with Failed Cancelled -> true | _ -> false
 
   let[@inline never] is_pending prm =
     match Atomic.get prm.state with Pending -> true | _ -> false
-
-  let[@inline never] is_consumed prm =
-    match Atomic.get prm.state with Consumed _ -> true | _ -> false
 
   let[@inline never] is_resolved prm =
     match Atomic.get prm.state with Resolved _ -> true | _ -> false
@@ -252,7 +231,6 @@ module Promise = struct
     | Pending -> failwith "Promise.to_result"
     | Resolved value -> Ok value
     | Failed exn -> Error exn
-    | Consumed value -> value
 
   let is_a_children ~parent prm =
     match prm.parent with
@@ -746,15 +724,6 @@ module Domain = struct
             k (State.Send ())
           end
           else k (State.Fail Not_a_child)
-      | Cancel prm when Promise.is_consumed prm ->
-          Logs.debug (fun m ->
-              m "[%a] %a cancels %a (consumed)" Domain_uid.pp domain.uid
-                Promise.pp current Promise.pp prm);
-          if Promise.is_a_children ~parent:current prm then begin
-            clean_children ~children:[ prm.uid ] current;
-            k (State.Send ())
-          end
-          else k (State.Fail Not_a_child)
       | Cancel prm ->
           Logs.debug (fun m ->
               m "[%a] %a cancels %a" Domain_uid.pp domain.uid Promise.pp current
@@ -851,7 +820,6 @@ module Domain = struct
             m "[%a] %a => %a (all terminated: %b)" Domain_uid.pp domain.uid
               Promise.pp current Promise.pp prm all_terminated);
         if all_terminated && Atomic.compare_and_set triggered false true then begin
-          List.iter Promise.consume prms;
           let terminated = List.map (fun ({ uid; _ } : _ t) -> uid) prms in
           let and_return = List.map Promise.to_result prms in
           if Domain_uid.equal prm.runner domain.uid then
@@ -874,7 +842,6 @@ module Domain = struct
           Logs.debug (fun m ->
               m "[%a] %a is chosen as the resolved promise" Domain_uid.pp
                 domain.uid Promise.pp current);
-          Promise.consume current;
           let others = List.map Promise.pack others in
           if and_cancel then List.iter (terminate pool domain) others;
           let to_cancel = if and_cancel then others else [] in
@@ -962,7 +929,12 @@ module Domain = struct
             State.continue_with k (fn1 ())
           with exn -> State.discontinue_with k exn
         in
-        handle pool domain prm state
+        match state with
+        | State.Finished value ->
+            (* TODO(dinosaure): explain! *)
+            Promise.transition prm value;
+            add_into_domain domain (Suspended (prm, state))
+        | _ -> add_into_domain domain (Suspended (prm, state)))
 
   let await :
       type a b.
@@ -1001,11 +973,6 @@ module Domain = struct
     if List.for_all (Promise.is_a_children ~parent:current) prms = false then
       let state = State.discontinue_with k Not_a_child in
       add_into_domain domain (Suspended (current, state))
-    else if List.for_all Promise.is_consumed prms then begin
-      let results = List.map Promise.to_result prms in
-      let state = State.continue_with k results in
-      add_into_domain domain (Suspended (current, state))
-    end
     else begin
       let triggered = Atomic.make false in
       let f prm =
@@ -1014,10 +981,19 @@ module Domain = struct
               Promise.pp current Promise.pp prm);
         let linked_to = Sequence { prm= current; prms; triggered; k } in
         let set = Atomic.compare_and_set prm.k None (Option.some linked_to) in
-        assert set;
-        interrupt pool ~domain:prm.runner
+        if set then interrupt pool ~domain:prm.runner;
+        set
       in
-      List.iter f prms
+      let updated = List.map (Fun.negate f) prms in
+      let all_were_some = List.for_all Fun.id updated in
+      if all_were_some then begin
+        assert (List.for_all (Fun.negate Promise.is_pending) prms);
+        let results = List.map Promise.to_result prms in
+        let state = State.continue_with k results in
+        let children = List.map (fun ({ uid; _ } : _ t) -> uid) prms in
+        clean_children ~children current;
+        add_into_domain domain (Suspended (current, state))
+      end
     end
 
   let iter_with_exclusion ~f prms =
@@ -1033,11 +1009,14 @@ module Domain = struct
     if List.for_all (Promise.is_a_children ~parent:current) prms = false then
       let state = State.discontinue_with k Not_a_child in
       add_into_domain domain (Suspended (current, state))
-    else if List.for_all Promise.is_consumed prms then
+    else if List.for_all (Fun.negate Promise.is_pending) prms then begin
       let len = List.length prms in
       let prm = List.nth prms (Random.State.int domain.g len) in
       let state = State.continue_with k (Promise.to_result prm) in
+      let children = List.map (fun ({ uid; _ } : _ t) -> uid) prms in
+      clean_children ~children current;
       add_into_domain domain (Suspended (current, state))
+    end
     else
       let triggered = Atomic.make false in
       let f others prm =
