@@ -485,12 +485,6 @@ module Domain = struct
       (Signal_to_dom0 { prm; terminated; to_cancel; and_return; k });
     pool.dom0.events.interrupt ()
 
-  let task_is_cancelled = function
-    | Arrived (prm, _) -> Promise.is_cancelled prm
-    | Suspended (prm, _) -> Promise.is_cancelled prm
-    | Cancelled prm -> Promise.is_cancelled prm
-    | Tick -> false
-
   let suspend_system_call domain (Syscall (uid, fn) : _ syscall) prm k =
     match Hashtbl.find domain.system_tasks uid with
     | System_call_suspended _ ->
