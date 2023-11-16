@@ -837,13 +837,13 @@ module Domain = struct
     Logs.debug (fun m ->
         m "[%a] %a finished, check if it trigger something." Domain_uid.pp
           domain.uid Promise.pp current);
-    match (Atomic.get current.k, Atomic.get current.state) with
-    | None, _ ->
+    match Atomic.get current.k with
+    | None ->
         Logs.debug (fun m ->
             m "[%a] waiter of %a did not appear yet" Domain_uid.pp domain.uid
               Promise.pp current);
         Sequence.add_l (Value (current, and_return)) domain.values
-    | Some (Sequence { prm; prms; triggered; k }), _ ->
+    | Some (Sequence { prm; prms; triggered; k }) ->
         let all_terminated =
           List.for_all (Fun.negate Promise.is_pending) prms
         in
@@ -866,7 +866,7 @@ module Domain = struct
             add_into_pool ~domain:prm.runner pool
               (Signal { prm; terminated; and_return; to_cancel= []; k })
         end
-    | Some (Choice { prm; k; others; triggered; and_cancel }), _ ->
+    | Some (Choice { prm; k; others; triggered; and_cancel }) ->
         let an_other_is_resolved = List.exists Promise.is_resolved others in
         let current_failed = not (Promise.is_resolved current) in
         let ignore = an_other_is_resolved && current_failed in
