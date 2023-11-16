@@ -412,7 +412,9 @@ module Domain = struct
     let compare a b = to_int a - to_int b
   end
 
-  let compare (_tick0, a) (_tick1, b) = Task.compare a b
+  let compare (tick0, a) (tick1, b) =
+    let value = Task.compare a b in
+    if value = 0 then Int.compare tick0 tick1 else value
 
   let make ?(quanta = 1) ~g events =
     let uid = Uid.gen () in
