@@ -46,7 +46,7 @@ let bind_and_listen ?(backlog = 64) { fd; owner; _ } sockaddr =
 type unix_scheduler = {
     rd: (Unix.file_descr, unit Miou.syscall list) Hashtbl.t
   ; wr: (Unix.file_descr, unit Miou.syscall list) Hashtbl.t
-  ; sleepers: (float * unit Miou.syscall) Miou.Heapq.t
+  ; sleepers: (float * unit Miou.syscall * bool ref) Miou.Heapq.t
   ; revert: (Miou.uid, Unix.file_descr) Hashtbl.t
 }
 
@@ -71,13 +71,17 @@ let clean_syscalls dom (uids : Miou.uid list) =
         clean uid fd dom.wr
     | exception Not_found -> ()
   in
+  let clean_sleepers (_, syscall, cancelled) =
+    if List.exists (( = ) (Miou.uid syscall)) uids then cancelled := true
+  in
   List.iter clean uids;
-  List.iter (Hashtbl.remove dom.revert) uids
+  List.iter (Hashtbl.remove dom.revert) uids;
+  Miou.Heapq.iter clean_sleepers dom.sleepers
 
 let get, set =
   let make () =
-    let dummy = (0.0, Miou.make (Fun.const ())) in
-    let compare (a, _) (b, _) = Float.compare a b in
+    let dummy = (0.0, Miou.make (Fun.const ()), ref false) in
+    let compare (a, _, _) (b, _, _) = Float.compare a b in
     {
       rd= Hashtbl.create 0x100
     ; wr= Hashtbl.create 0x100
@@ -96,19 +100,28 @@ let rec sleepers_to_syscalls ~now syscalls sleepers =
   match Miou.Heapq.minimum sleepers with
   | exception Miou.Heapq.Empty ->
       List.map (fun syscall -> Miou.task syscall (Fun.const ())) syscalls
-  | time, syscall ->
-      if time <= now then begin
+  | time, syscall, cancelled ->
+      if !cancelled then begin
+        Miou.Heapq.remove sleepers;
+        sleepers_to_syscalls ~now syscalls sleepers
+      end
+      else if time <= now then begin
         Miou.Heapq.remove sleepers;
         sleepers_to_syscalls ~now (syscall :: syscalls) sleepers
       end
       else List.map (fun syscall -> Miou.task syscall (Fun.const ())) syscalls
 
-let smallest_sleeper ~now sleepers =
+let rec smallest_sleeper ~now sleepers =
   match Miou.Heapq.minimum sleepers with
   | exception Miou.Heapq.Empty -> None
-  | time, _ ->
-      let delta = time -. now in
-      if delta <= 0. then None else Some delta
+  | time, _, cancelled ->
+      if !cancelled then begin
+        Miou.Heapq.remove sleepers;
+        smallest_sleeper ~now sleepers
+      end
+      else
+        let delta = time -. now in
+        if delta <= 0. then None else Some delta
 
 let blocking_read fd =
   let syscall = Miou.make (Fun.const ()) in
@@ -378,6 +391,6 @@ let sleep until =
   let syscall = Miou.make (Fun.const ()) in
   let unix = get () in
   let now = Unix.gettimeofday () in
-  Miou.Heapq.add unix.sleepers (now +. until, syscall);
+  Miou.Heapq.add unix.sleepers (now +. until, syscall, ref false);
   set unix;
   Miou.suspend syscall
