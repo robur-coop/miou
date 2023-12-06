@@ -809,7 +809,8 @@ module Domain = struct
         Logs.debug (fun m ->
             m "[%a] waiter of %a did not appear yet" Domain_uid.pp domain.uid
               Promise.pp current);
-        Sequence.add_l (Value (current, and_return)) domain.values
+        if Promise.is_cancelled current = false then
+          Sequence.add_l (Value (current, and_return)) domain.values
     | Some (Sequence { prm; prms; triggered; k }) ->
         let all_terminated =
           List.for_all (Fun.negate Promise.is_pending) prms
@@ -978,7 +979,10 @@ module Domain = struct
             m "[%a] add a new waiter (%a) for %a" Domain_uid.pp domain.uid
               Promise.pp current Promise.pp prm);
         let linked_to = Sequence { prm= current; prms; triggered; k } in
-        let set = Atomic.compare_and_set prm.k None (Option.some linked_to) in
+        let set =
+          Promise.is_cancelled prm = false
+          && Atomic.compare_and_set prm.k None (Option.some linked_to)
+        in
         if set then interrupt pool ~domain:prm.runner;
         set
       in
@@ -1029,7 +1033,7 @@ module Domain = struct
   let once pool domain task =
     match task with
     | Tick -> Domain.cpu_relax ()
-    | Arrived (prm, _) when Promise.is_cancelled prm ->
+    | Arrived (prm, _fn) when Promise.is_cancelled prm ->
         handle pool domain prm (State.pure (Error Cancelled))
     | Suspended (prm, state) when Promise.is_cancelled prm ->
         handle pool domain prm state
