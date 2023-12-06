@@ -539,7 +539,6 @@ module Domain = struct
       add_into_pool ~domain:prm.runner pool (Delete prm)
     else begin
       clean_system_tasks domain prm;
-      (* TODO(dinosaure): doublon with [Cancelled] in [once]? *)
       add_into_domain domain (Cancelled prm)
     end
 
@@ -931,8 +930,39 @@ module Domain = struct
         in
         match state with
         | State.Finished value ->
-            (* TODO(dinosaure): explain! *)
+            assert (Domain_uid.equal domain.uid prm.runner);
             Promise.transition prm value;
+            (* NOTE(dinosaure): the transition should be done by [handle] from
+               the computed [state]. So we should execute [handle] here.
+               However, [handle] can generate continuations via the [trigger]
+               function that should "not yet" be executed.
+
+               At this point in the process, we've probably already executed a
+               [handle] and therefore consumed a quanta. System event management
+               must be delayed to the next iteration. However, system events can
+               result in contradictory cases, such as a choice between 2 system
+               events, one of which involves a cancellation:
+
+               {[
+                 let run stop fd =
+                   let accept () = Miou.call_cc @@ fun () ->
+                     Miou_unix.accept fd in
+                   let stop = Miou.call_cc @@ fun () ->
+                     Miou_unix.Cond.wait stop;
+                     raise Timeout in
+                   Miou.await_first [ accept; stop ]
+               ]}
+
+               These choices are determined by the state of the promises. So, we
+               still need to change the state of the promises in relation to
+               what these system events imply: if a system event implies the
+               resolution of a promise, we need to make the transition
+               **before** the next iteration.
+
+               So, at the next iteration, the state of the promises will be up
+               to date with what has been implied by the system events. At the
+               next iteration, we'll be able to [handle] these tasks
+               correctly. *)
             add_into_domain domain (Suspended (prm, state))
         | _ -> add_into_domain domain (Suspended (prm, state)))
 
