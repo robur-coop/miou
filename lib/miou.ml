@@ -1516,7 +1516,8 @@ let run ?(quanta = quanta) ?(events = Fun.const dummy_events)
     try
       while Promise.is_pending prm0 && not pool.fail do
         transfer_continuations_into_dom0 pool dom0;
-        handler.handler (Domain.run pool dom0) ()
+        handler.handler (Domain.run pool dom0) ();
+        Logs.debug (fun m -> m "%a" Pool.pp_stats (pool, dom0))
       done;
       if not pool.fail then Promise.to_result prm0
       else Error (Failure "A domain failed")
