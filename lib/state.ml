@@ -5,12 +5,12 @@ type 'a t =
   | Suspended : ('a, 'b) continuation * 'a Effect.t -> 'b t
   | Unhandled : ('a, 'b) continuation * 'a -> 'b t
 
+let retc value = Finished (Ok value)
+let exnc exn = Finished (Error exn)
 let effc eff k = Suspended (k, eff)
 
 let handler_continue =
   let open Effect.Shallow in
-  let retc value = Finished (Ok value) in
-  let exnc exn = Finished (Error exn) in
   let effc :
       type c. c Effect.t -> ((c, 'a) Effect.Shallow.continuation -> 'b) option =
    fun effect -> Some (effc effect)
@@ -22,13 +22,12 @@ let continue_with : ('c, 'a) continuation -> 'c -> 'a t =
 
 let handler_discontinue exn =
   let open Effect.Shallow in
+  let const _ = Finished (Error exn) in
   let effc :
       type c. c Effect.t -> ((c, 'a) Effect.Shallow.continuation -> 'b) option =
-    function
-    | _ -> Some (Fun.const (Finished (Error exn)))
-  in
-  let retc = Fun.const (Finished (Error exn)) in
-  let exnc = Fun.const (Finished (Error exn)) in
+   fun _ -> Some const
+  and retc = const
+  and exnc = const in
   { retc; exnc; effc }
 
 let discontinue_with : ('c, 'a) continuation -> exn -> 'a t =
