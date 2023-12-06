@@ -877,6 +877,7 @@ module Domain = struct
         (* XXX(dinosaure): [trigger] can re-add [Suspended (prm, Finished _)]
            into our domain. We must clear resources to avoid a
            double-[Unix.close] (for instance). *)
+        assert (Domain_uid.equal domain.uid prm.runner);
         Promise.transition prm (Error exn);
         trigger pool domain prm (Error exn)
     | State.Finished (Error exn) ->
@@ -898,6 +899,7 @@ module Domain = struct
         Logs.debug (fun m -> m "%a resolved" Promise.pp prm);
         if Promise.children_terminated prm = false then raise Still_has_children;
         if resource_leak prm then raise Resource_leak;
+        assert (Domain_uid.equal domain.uid prm.runner);
         Promise.transition prm (Ok value);
         trigger pool domain prm (Ok value)
     | State.Suspended _ as state ->
@@ -1083,16 +1085,18 @@ module Domain = struct
                   (Sequence.length prm'.active_children));
             clean_system_task_if_suspended domain state;
             clean_system_tasks domain prm';
+            assert (Domain_uid.equal domain.uid prm'.runner);
             Promise.cancel prm';
-            (* Sequence.iter ~f:(terminate pool domain) prm'.active_children; *)
             handle pool domain prm' (State.fail ~exn:Cancelled state)
         | [ Arrived (prm', _) ] ->
             assert (Promise.Uid.equal prm'.uid prm.uid);
             clean_system_tasks domain prm';
-            Promise.cancel prm;
+            assert (Domain_uid.equal domain.uid prm'.runner);
+            Promise.cancel prm';
             handle pool domain prm (State.pure (Error Cancelled))
         | [] ->
             clean_system_tasks domain prm;
+            assert (Domain_uid.equal domain.uid prm.runner);
             Promise.cancel prm;
             handle pool domain prm (State.pure (Error Cancelled))
         | _ -> assert false)
