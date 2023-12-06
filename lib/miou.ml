@@ -584,23 +584,24 @@ module Domain = struct
     !own_it
 
   let ownership :
-      type a b c. c t -> (a State.step -> b State.t) -> a ownership -> b State.t
-      =
-   fun prm k -> function
+      type a b. _ t -> (a State.Op.t -> b State.t) -> a ownership -> b State.t =
+   fun prm k eff ->
+    let open State in
+    match eff with
     | Check (Resource { uid; _ } as res) ->
         Logs.debug (fun m ->
             m "check if %a owns [%a] (%b)" Promise.pp prm Resource_uid.pp uid
               (own_it prm res));
-        if own_it prm res = false then k (State.Fail Not_owner)
-        else k (State.Send ())
+        if own_it prm res = false then k (Op.fail Not_owner)
+        else k (Op.return ())
     | Own (Resource { uid; _ } as res) ->
         Logs.debug (fun m ->
             m "%a owns [%a]" Promise.pp prm Resource_uid.pp uid);
         if own_it prm res = false then begin
           Sequence.push res prm.resources;
-          k (State.Send res)
+          k (Op.return res)
         end
-        else k (State.Fail (error_already_owned prm res))
+        else k (Op.fail (error_already_owned prm res))
     | Disown (Resource { uid; _ } as res) ->
         Logs.debug (fun m ->
             m "%a disown [%a] (own it? %b)" Promise.pp prm Resource_uid.pp uid
@@ -613,13 +614,14 @@ module Domain = struct
           in
           Sequence.iter_node ~f prm.resources;
           let[@warning "-8"] (Option.Some node) = !to_delete in
-          Sequence.remove node; k (State.Send ())
+          Sequence.remove node;
+          k (Op.return ())
         end
-        else k (State.Fail Not_owner)
+        else k (Op.fail Not_owner)
     | Transfer (Resource { uid; _ } as res) ->
         if own_it prm res then begin
           match prm.parent with
-          | None -> k (State.Fail (error_impossible_to_transfer prm))
+          | None -> k (Op.fail (error_impossible_to_transfer prm))
           | Some (Pack prm') ->
               let to_transmit = ref Option.none in
               let f node =
@@ -630,9 +632,9 @@ module Domain = struct
               let[@warning "-8"] (Option.Some node) = !to_transmit in
               Sequence.push (Sequence.data node) prm'.resources;
               Sequence.remove node;
-              k (State.Send ())
+              k (Op.return ())
         end
-        else k (State.Fail Not_owner)
+        else k (Op.fail Not_owner)
 
   let clean_children ~children current =
     let to_delete = ref [] in
@@ -645,26 +647,28 @@ module Domain = struct
     List.iter Sequence.remove !to_delete
 
   let perform pool domain (Pack current) =
-    let perform : type a b. (a, b) State.k =
+    let perform :
+        type a b. (a State.Op.t -> b State.t) -> a Effect.t -> b State.t =
      fun k eff ->
+      let open State in
       Logs.debug (fun m ->
           m "[%a] %a perform %a" Domain_uid.pp domain.uid Promise.pp current
             pp_effect eff);
       match eff with
-      | Domain_uid -> k (State.Send domain.uid)
-      | Domain_count -> k (State.Send (List.length pool.domains))
+      | Domain_uid -> k (Op.return domain.uid)
+      | Domain_count -> k (Op.return (List.length pool.domains))
       | Domains ->
           let uids = List.map (fun { uid; _ } -> uid) pool.domains in
-          k (State.Send uids)
-      | Random -> k (State.Send domain.g)
+          k (Op.return uids)
+      | Random -> k (Op.return domain.g)
       | Self ->
           let uid = current.uid
           and runner = current.runner
           and resources = Sequence.length current.resources in
-          k (State.Send (uid, runner, resources))
+          k (Op.return (uid, runner, resources))
       | Stats ->
           let w = Obj.(reachable_words (repr current)) in
-          k (State.Send w)
+          k (Op.return w)
       | Spawn (Concurrent, resources, fn) ->
           let runner = domain.uid in
           let prm =
@@ -675,7 +679,7 @@ module Domain = struct
                 Promise.pp prm);
           Sequence.add_l (Promise.pack prm) current.active_children;
           add_into_domain domain (Arrived (prm, fn));
-          k (State.Send prm)
+          k (Op.return prm)
       | Spawn (Parallel runner, resources, fn) ->
           assert (Domain_uid.equal runner domain.uid = false);
           let prm =
@@ -689,17 +693,17 @@ module Domain = struct
                 Promise.pp prm);
           Sequence.add_l (Promise.pack prm) current.active_children;
           add_into_pool ~domain:runner pool (Create (prm, fn));
-          k (State.Send prm)
+          k (Op.return prm)
       | Yield ->
           (* TODO(dinosaure): we probably need to specify more strictly the
              behavior of [yield]. Indeed, depending on the [quanta], the result
              is not the same. It is also probably related to our note about
              [Arrived] (see [handle]) where we should start to consume effects
              via [State.run]. *)
-          k State.Yield
+          k Op.yield
       | Spin { terminated; to_cancel= []; and_return } ->
           clean_children ~children:terminated current;
-          k (State.Send and_return)
+          k (Op.return and_return)
       | Spin { terminated; to_cancel; and_return } ->
           let terminated, to_cancel =
             List.fold_left
@@ -708,16 +712,16 @@ module Domain = struct
                 else (terminated, Pack prm :: prms))
               (terminated, []) to_cancel
           in
-          k (State.Cont (Spin { terminated; to_cancel; and_return }))
+          k (Op.continue (Spin { terminated; to_cancel; and_return }))
       | Cancel prm when Promise.is_cancelled prm ->
           Logs.debug (fun m ->
               m "[%a] %a cancels %a (cancelled)" Domain_uid.pp domain.uid
                 Promise.pp current Promise.pp prm);
           if Promise.is_a_children ~parent:current prm then begin
             clean_children ~children:[ prm.uid ] current;
-            k (State.Send ())
+            k (Op.return ())
           end
-          else k (State.Fail Not_a_child)
+          else k (Op.fail Not_a_child)
       | Cancel prm ->
           Logs.debug (fun m ->
               m "[%a] %a cancels %a" Domain_uid.pp domain.uid Promise.pp current
@@ -725,15 +729,15 @@ module Domain = struct
           if Promise.is_a_children ~parent:current prm then (
             terminate pool domain (Pack prm);
             k
-              (State.Cont
+              (Op.continue
                  (Spin
                     { terminated= []; to_cancel= [ Pack prm ]; and_return= () })))
-          else k (State.Fail Not_a_child)
+          else k (Op.fail Not_a_child)
       | Ownership action -> ownership current k action
-      | Await _ -> k State.Intr
-      | Choose _ -> k State.Intr
-      | Suspend _ -> k State.Intr
-      | effect -> k (State.None effect)
+      | Await _ -> k Op.interrupt
+      | Choose _ -> k Op.interrupt
+      | Suspend _ -> k Op.interrupt
+      | effect -> k (Op.perform effect)
     in
     { State.perform }
 
