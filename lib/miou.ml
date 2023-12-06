@@ -911,8 +911,7 @@ module Domain = struct
         let state = invariant prm state in
         add_into_domain domain (Suspended (prm, state))
 
-  let transfer_system_task _pool domain
-      (Continue (uid, fn0) as continue : continue) =
+  let transfer_system_task domain (Continue (uid, fn0) as continue : continue) =
     match Hashtbl.find_opt domain.system_tasks uid with
     | None ->
         Logs.debug (fun m ->
@@ -1116,12 +1115,12 @@ module Domain = struct
     Sequence.iter_node ~f:transmit domain.values;
     List.iter Sequence.remove !to_delete
 
-  let transmit_system_events pool domain =
+  let transmit_system_events domain =
     let syscalls = Sequence.to_list domain.system_events in
     Sequence.drop domain.system_events;
-    List.iter (transfer_system_task pool domain) syscalls
+    List.iter (transfer_system_task domain) syscalls
 
-  let unblock_awaits_with_system_tasks pool domain =
+  let unblock_awaits_with_system_tasks domain =
     let open Effect.Deep in
     let retc = Fun.id in
     let exnc = reraise in
@@ -1140,7 +1139,7 @@ module Domain = struct
     let syscalls = match_with (domain.events.select ~poll) syscalls handler in
     Logs.debug (fun m ->
         m "[%a] got %d syscalls" Domain_uid.pp domain.uid (List.length syscalls));
-    List.iter (transfer_system_task pool domain) syscalls
+    List.iter (transfer_system_task domain) syscalls
 
   let system_tasks_suspended domain = Hashtbl.length domain.system_tasks > 0
 
@@ -1161,16 +1160,16 @@ module Domain = struct
     with Yes -> true
 
   let run pool domain () =
-    transmit_system_events pool domain;
+    transmit_system_events domain;
     transmit_values domain;
     match Heapq.pop_minimum domain.tasks with
     | exception Heapq.Empty ->
         if system_tasks_suspended domain then
-          unblock_awaits_with_system_tasks pool domain
+          unblock_awaits_with_system_tasks domain
     | _tick, elt ->
         once pool domain elt;
         if system_tasks_suspended domain then
-          unblock_awaits_with_system_tasks pool domain
+          unblock_awaits_with_system_tasks domain
 end
 
 module Pool = struct
