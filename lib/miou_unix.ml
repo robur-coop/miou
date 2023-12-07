@@ -362,8 +362,8 @@ let select _domain interrupt ~poll (cancelled_syscalls : Miou.uid list) =
         Miou.Fmt.(Dump.list int)
         (cancelled_syscalls :> int list));
   clean_syscalls unix cancelled_syscalls;
-  let rds = Hashtbl.fold (fun fd _syscalls acc -> fd :: acc) unix.rd [] in
-  let wrs = Hashtbl.fold (fun fd _syscalls acc -> fd :: acc) unix.wr [] in
+  let rds = List.of_seq (Hashtbl.to_seq_keys unix.rd) in
+  let wrs = List.of_seq (Hashtbl.to_seq_keys unix.wr) in
   let now = Unix.gettimeofday () in
   let ts =
     match smallest_sleeper ~now unix.sleepers with
