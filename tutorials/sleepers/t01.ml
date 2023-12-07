@@ -8,7 +8,7 @@ let sleep until =
   Hashtbl.add sleepers (Miou.uid syscall) (syscall, until);
   Miou.suspend syscall
 
-let select _ =
+let select ~poll:_ _ =
   let min =
     Hashtbl.fold
       (fun uid (syscall, until) -> function

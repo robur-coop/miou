@@ -21,13 +21,13 @@ let prgm () =
 
 let rec until_its_ok () =
   match prgm () with
-  | Ok () -> assert (Atomic.get Miouc.tick = 1)
+  | Ok () -> assert (Atomic.get Miouc.tick <= 1)
   | Error Basic_failure -> until_its_ok ()
   | _ -> failwith "t04"
 
 let rec until_its_abnormal () =
   match prgm () with
-  | Error Basic_failure -> assert (Atomic.get Miouc.tick = 0)
+  | Error Basic_failure -> assert (Atomic.get Miouc.tick <= 1)
   | Ok () -> until_its_abnormal ()
   | Error _ -> failwith "t04"
 

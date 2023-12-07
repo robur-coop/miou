@@ -78,39 +78,31 @@ type 'a t = private
   | Suspended : ('a, 'b) continuation * 'a Effect.t -> 'b t
   | Unhandled : ('a, 'b) continuation * 'a -> 'b t
 
+module Op : sig
+  type 'a t
+
+  val interrupt : _ t
+  val continue : 'a Effect.t -> 'a t
+  val return : 'a -> 'a t
+  val fail : exn -> _ t
+  val perform : 'a Effect.t -> 'a t
+  val yield : unit t
+end
+
+type perform = { perform: 'a 'b. ('a Op.t -> 'b t) -> 'a Effect.t -> 'b t }
+[@@unboxed]
+(** Type of the effect handler.
+
+    [perform] is a function which should handle incoming effects and give an
+    {i operation} {!type:Op.t} via the given conitnuation [k]. *)
+
 val make : ('a -> 'b) -> 'a -> 'b t
 (** [make fn value] makes a new {i function state} by executing the function
     with the given argument. *)
 
-(** Type of a step.
-
-    A {i step} is how we want to continue (or not) a function state (see
-    {!type:t}). The user {i continue} the execution of the given function
-    state (see {!constructor:Send}), {i discontinue} it with an exception (see
-    {!constructor:Fail}), do nothing (see {!constructor:Intr}) or replace the
-    current effect by an another one (see {!constructor:Cont} as long as it
-    expects the same type as the previous effect).
-
-    {!constructor:Yield} actually {i continue} the execution of the given
-    function state but then stops, even if there is still a number of {i quanta}
-    available when {!val:run} is used. It behaves in the same way as
-    {!constructor:Send} if you use {!val:once}. *)
-type 'a step =
-  | Send of 'a
-  | Fail of exn
-  | Intr
-  | Cont : 'a Effect.t -> 'a step
-  | None : 'a Effect.t -> 'a step
-  | Yield : unit step
-
-type ('a, 'b) k = ('a step -> 'b t) -> 'a Effect.t -> 'b t
-
-type perform = { perform: 'a 'b. ('a, 'b) k } [@@unboxed]
-(** Type of the effect handler.
-
-    [perform] is a function which should handle incoming effects and give a
-    {!type:step} to the given [k] according to the effect received. It's the
-    {i effect handler}. *)
+val suspended_with : ('c, 'a) continuation -> 'c Effect.t -> 'a t
+(** [suspended_with k eff] allows you to create a state from the given
+    suspension [k] and the effect [eff] which produced the given suspension. *)
 
 val once : perform:perform -> 'a t -> 'a t
 (** [once ~perform state] applies [perform] once on the given state if the
@@ -125,13 +117,13 @@ val pure : ('a, exn) result -> 'a t
 
 val run : quanta:int -> perform:perform -> 'a t -> 'a t
 (** [run ~quanta ~perform state] applies {!val:once} [quanta] times. If
-    [perform] responds with {!constructor:Intr} (and therefore does nothing),
+    [perform] responds with {!val:interrupt} (and therefore does nothing),
     even though there may be a few {i quanta} left, the function returns the
     last state obtained.
 
-    The same applies to {!constructor:Yield}, except that the continuation has
-    burnt itself out. In other words, {!constructor:Yield} is equivalent to
-    [Send (); Intr] but costs only one {i quanta}. *)
+    The same applies to {!val:yield}, except that the continuation has
+    burnt itself out. In other words, {!val:yield} is equivalent to
+    [send (); interrupt] but costs only one {i quanta}. *)
 
 (**/**)
 

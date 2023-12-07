@@ -1,0 +1,3 @@
+(executable
+ (name server)
+ (libraries fmt fmt.tty logs logs.threaded logs.fmt miou.unix))

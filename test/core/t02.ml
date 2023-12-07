@@ -4,8 +4,8 @@
 
 let prgm () =
   Miou.run @@ fun () ->
-  let a = Miou.call_cc (Fun.const 1) in
-  let b = Miou.call_cc (Fun.const 2) in
+  let a = Miou.call (Fun.const 1) in
+  let b = Miou.call (Fun.const 2) in
   Miou.await_first [ a; b ]
 
 let rec until_its value =

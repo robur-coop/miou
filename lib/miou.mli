@@ -309,6 +309,8 @@ module Ownership : sig
   *)
 
   type t
+
+  and uid
   (** The type of ownerships. *)
 
   val own : finally:('a -> unit) -> 'a -> t
@@ -379,6 +381,9 @@ module Ownership : sig
   (** [check t] verifies that the given resource [t] is owned by the current
       task. If a task tries to use a resource that does not belong to it,
       {!val:check} will raise an {i uncatchable} exception [Not_owner]. *)
+
+  val uid : t -> uid
+  val pp : Format.formatter -> uid -> unit
 end
 
 type 'a t
@@ -414,6 +419,8 @@ end
 val self : unit -> Promise.Uid.t * Domain.Uid.t * int
 (** [self ()] returns the unique ID of the current promise, the domain which
     runs the current promise and how many resources has the current promise. *)
+
+val stats : unit -> int
 
 (** {2:orphans Daemon and orphan tasks.}
 
@@ -618,7 +625,8 @@ val task : 'a syscall -> (unit -> unit) -> continue
     Miou to unlock via the given [fn] the user's defined suspension point
     represented by the given [syscall]. *)
 
-type events = { select: uid list -> continue list; interrupt: unit -> unit }
+type select = poll:bool -> uid list -> continue list
+type events = { select: select; interrupt: unit -> unit }
 
 val is_pending : 'a syscall -> bool
 (** [is_pending syscall] checks the status of the suspension point. A suspension
@@ -858,6 +866,16 @@ module Logs : sig
   val debug : ('a, unit) msgf -> unit
   val err : ('a, unit) msgf -> unit
   val warn : ('a, unit) msgf -> unit
+
+  module Make (_ : sig
+    val src : string
+  end) : sig
+    val msg : level -> ('a, unit) msgf -> unit
+    val debug : ('a, unit) msgf -> unit
+    val err : ('a, unit) msgf -> unit
+    val warn : ('a, unit) msgf -> unit
+  end
 end
 
 module Heapq = Heapq
+module Fmt = Fmt

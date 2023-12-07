@@ -6,4 +6,4 @@ let prgm () =
 
 let () =
   let () = prgm () in
-  assert (Atomic.get Miouc.tick = 8)
+  assert (Atomic.get Miouc.tick = 6)

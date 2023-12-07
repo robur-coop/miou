@@ -81,7 +81,9 @@ let try_connect addr () =
     Miou_unix.connect socket addr;
     `Connection (Miou_unix.transfer socket)
   with Unix.Unix_error (err, _, _) ->
-    Fmt.failwith "error connecting to nameserver %a: %s" pp_sockaddr addr
+    Log.err (fun m ->
+        m "error connecting to %a: %s" pp_sockaddr addr (Unix.error_message err));
+    Fmt.failwith "error connecting to %a: %s" pp_sockaddr addr
       (Unix.error_message err)
 
 let disown fd = Miou_unix.disown fd; Miou_unix.to_file_descr fd
@@ -144,6 +146,7 @@ let handle_one_action t ~prms = function
   | Happy_eyeballs.Resolve_a host ->
       let _ =
         Miou.call_cc ~orphans:prms @@ fun () ->
+        Logs.debug (fun m -> m "getaddrinof4(%a)" Domain_name.pp host);
         match t.getaddrinfo.getaddrinfo Dns.Rr_map.A host with
         | Ok (_ttl, res) -> `Resolution_v4 (host, Ok res)
         | Error _ as err -> `Resolution_v4 (host, err)
@@ -152,6 +155,7 @@ let handle_one_action t ~prms = function
   | Happy_eyeballs.Resolve_aaaa host ->
       let _ =
         Miou.call_cc ~orphans:prms @@ fun () ->
+        Logs.debug (fun m -> m "getaddrinof6(%a)" Domain_name.pp host);
         match t.getaddrinfo.getaddrinfo Dns.Rr_map.Aaaa host with
         | Ok (_ttl, res) -> `Resolution_v6 (host, Ok res)
         | Error _ as err -> `Resolution_v6 (host, err)
@@ -260,13 +264,13 @@ let await_actions t he () =
   in
   List.fold_left fold (he, []) user's_actions
 
-let get_events t he ~prms =
+let rec get_events t he ~prms actions =
   match Option.map (handle t) (Option.join (Miou.care prms)) |> Option.join with
   | Some event ->
-      let he, actions = Happy_eyeballs.event he (clock ()) event in
+      let he, actions' = Happy_eyeballs.event he (clock ()) event in
       (* NOTE(dinosaure): prioritise event's actions. *)
-      (he, actions)
-  | None -> (he, [])
+      get_events t he ~prms (actions @ actions')
+  | None -> (he, actions)
 
 exception Timeout
 
@@ -275,11 +279,13 @@ let with_timeout ~timeout ?(give = []) fn =
   Miou.await_first [ Miou.call_cc timeout; Miou.call_cc ~give fn ]
 
 let suspend t he ~prms =
-  match get_events t he ~prms with
+  match get_events t he ~prms [] with
   | he, (_ :: _ as actions) -> (he, actions)
   | he, [] -> (
       match with_timeout ~timeout:he_timer_interval (await_actions t he) with
-      | Error Timeout -> (he, [])
+      | Error Timeout ->
+          Log.debug (fun m -> m "timeout");
+          (he, [])
       | Error exn ->
           Log.err (fun m ->
               m "got an unexpected exception: %S" (Printexc.to_string exn));
@@ -313,8 +319,8 @@ and go t ~prms he () =
       Miou.yield ();
       go t ~prms he ()
   | _, actions ->
-      let he, actions' = get_events t he ~prms in
-      List.iter (handle_one_action ~prms t) (actions @ actions');
+      let he, actions = get_events t he ~prms actions in
+      List.iter (handle_one_action ~prms t) actions;
       Miou.yield ();
       go t ~prms he ()
 
@@ -362,7 +368,7 @@ type t = {
   ; stack: stack
 }
 
-type context = float * Miou_unix.file_descr
+type context = float * bool ref * Miou_unix.file_descr
 
 let nameservers { nameservers; proto; _ } = (proto, nameservers)
 let bind x f = f x
@@ -370,11 +376,14 @@ let lift = Fun.id
 let rng = Mirage_crypto_rng.generate ?g:None
 
 let connect t =
-  try
-    Log.debug (fun m -> m "connect to nameservers");
-    let _addr, fd = connect_to_nameservers t.stack t.nameservers in
-    Ok (`Tcp, (t.timeout, fd))
-  with Failure msg -> Error (`Msg msg)
+  match t.proto with
+  | `Tcp -> (
+      try
+        Log.debug (fun m -> m "connect to nameservers");
+        let _addr, fd = connect_to_nameservers t.stack t.nameservers in
+        Ok (`Tcp, (t.timeout, ref false, fd))
+      with Failure msg -> Error (`Msg msg))
+  | `Udp -> error_msgf "Invalid protocol"
 
 let rec read_loop ?(linger = Cstruct.empty) ~id proto fd =
   let process rx =
@@ -402,7 +411,9 @@ let rec read_loop ?(linger = Cstruct.empty) ~id proto fd =
       let len = Miou_unix.read fd ~off:0 ~len:(Bytes.length buf) buf in
       Log.debug (fun m -> m "got %d byte(s) from the resolver" len);
       if len > 0 then process (Cstruct.of_bytes ~off:0 ~len buf)
-      else failwith "End of file reading from resolver"
+      else
+        Fmt.failwith "End of file reading from resolver (linger: %d byte(s))"
+          (Cstruct.length linger)
 
 external happy_translate_so_type : int -> Unix.socket_type
   = "happy_translate_so_type"
@@ -412,7 +423,7 @@ let type_of_socket fd =
   let ty = Unix.getsockopt_int fd Unix.SO_TYPE in
   happy_translate_so_type ty
 
-let send_recv (timeout, fd) ({ Cstruct.len; _ } as tx) =
+let send_recv (timeout, closed, fd) ({ Cstruct.len; _ } as tx) =
   if len > 4 then begin
     match type_of_socket fd with
     | Unix.SOCK_STREAM -> (
@@ -420,6 +431,7 @@ let send_recv (timeout, fd) ({ Cstruct.len; _ } as tx) =
           Log.debug (fun m -> m "send a packet to resolver");
           Miou_unix.write fd ~off:0 ~len (Cstruct.to_string tx);
           let id = Cstruct.BE.get_uint16 tx 2 in
+          Miou.Ownership.check (Miou_unix.owner fd);
           Log.debug (fun m -> m "recv a packet from resolver");
           let packet = read_loop ~id `Tcp fd in
           (packet, Miou_unix.transfer fd)
@@ -434,15 +446,17 @@ let send_recv (timeout, fd) ({ Cstruct.len; _ } as tx) =
             error_msgf "DNS request timeout"
         | Error (Failure msg) ->
             Log.warn (fun m -> m "Got a failure: %s" msg);
+            closed := true;
             Error (`Msg msg)
         | Error exn ->
+            closed := true;
             error_msgf "Got an unexpected exception: %S"
               (Printexc.to_string exn))
     | _ -> error_msgf "Invalid type of file-descriptor"
   end
   else error_msgf "Invalid context (data length <= 4)"
 
-let close (_, fd) = Miou_unix.close fd
+let close (_, closed, fd) = if not !closed then Miou_unix.close fd
 let of_ns ns = Int64.to_float ns /. 1_000_000_000.
 
 let create ?nameservers ~timeout stack =

@@ -1,16 +1,21 @@
-let sleepers =
+let get, set =
   let make () = Hashtbl.create 0x100 in
   let key = Stdlib.Domain.DLS.new_key make in
-  fun () -> Stdlib.Domain.DLS.get key
+  let get () = Stdlib.Domain.DLS.get key in
+  let set = Stdlib.Domain.DLS.set key in
+  (get, set)
 
 let sleep until =
+  let sleepers = get () in
   let syscall = Miou.make (Fun.const ()) in
-  let sleepers = sleepers () in
   Hashtbl.add sleepers (Miou.uid syscall) (syscall, until);
+  set sleepers;
   Miou.suspend syscall
 
-let rec consume_interrupt ic =
-  if Unix.read ic (Bytes.create 1) 0 1 = 0 then consume_interrupt ic
+let consume_interrupt ic =
+  let buf = Bytes.create 0x1000 in
+  let _ = Unix.read ic buf 0 (Bytes.length buf) in
+  ()
 
 let update sleepers n =
   Hashtbl.filter_map_inplace
@@ -30,11 +35,12 @@ let minimums sleepers =
     sleepers;
   !cs
 
-let select interrupt _ =
-  let sleepers = sleepers () in
+let select interrupt ~poll cancelled =
+  let sleepers = get () in
   Hashtbl.filter_map_inplace
     (fun _ (syscall, until) ->
-      if Miou.is_pending syscall then Some (syscall, until) else None)
+      if List.exists (( = ) (Miou.uid syscall)) cancelled then None
+      else Some (syscall, until))
     sleepers;
   let min =
     Hashtbl.fold
@@ -48,18 +54,20 @@ let select interrupt _ =
   let ts =
     Option.map (fun (_, _, until) -> until) min |> function
     | Some ts -> Float.min ts 0.100
-    | None -> 0.
+    | None -> if poll then 0. else 0.100
   in
   let t0 = Unix.gettimeofday () in
   match Unix.select [ interrupt ] [] [] ts with
   | [], _, _ ->
       let t1 = Unix.gettimeofday () in
       update sleepers (t1 -. t0);
+      set sleepers;
       minimums sleepers
   | _ ->
       let t1 = Unix.gettimeofday () in
       update sleepers (t1 -. t0);
       consume_interrupt interrupt;
+      set sleepers;
       minimums sleepers
 
 let events _ =

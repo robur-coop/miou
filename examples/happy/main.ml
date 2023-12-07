@@ -37,6 +37,9 @@ let pp_msg ppf (`Msg msg) = Fmt.string ppf msg
 let getaddrinfo dns =
   { Happy.getaddrinfo= (fun record host -> Mdns.getaddrinfo dns record host) }
 
+let pp_sockaddr ppf (ipaddr, port) =
+  Format.fprintf ppf "%a:%d" Ipaddr.pp ipaddr port
+
 let () =
   Miou_unix.run @@ fun () ->
   let daemon, stack = Happy.stack () in
@@ -44,7 +47,11 @@ let () =
   Happy.inject_resolver ~getaddrinfo:(getaddrinfo dns) stack;
   for _ = 0 to 10_000 do
     match Happy.connect_endpoint stack "google.com" [ 443 ] with
-    | Ok (_, fd) -> Miou_unix.close fd
-    | Error (`Msg msg) -> failwith msg
+    | Ok (sockaddr, fd) ->
+        Format.printf "Connected to google.com via %a\n%!" pp_sockaddr sockaddr;
+        Miou_unix.close fd
+    | Error (`Msg msg) ->
+        Logs.err (fun m -> m "Got an error: %s" msg);
+        failwith msg
   done;
   Happy.kill daemon

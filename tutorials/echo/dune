@@ -4,4 +4,4 @@
 
 (executable
  (name main)
- (libraries miou.unix))
+ (libraries logs fmt logs.fmt fmt.tty logs.threaded miou.unix))

@@ -23,6 +23,7 @@
   $ ./t11.exe
   $ ./t12.exe
   $ ./t13.exe
+  $ ./t14.exe
   $ ./t15.exe
   $ ./t16.exe
   $ ./t17.exe
@@ -50,3 +51,5 @@
   $ ./t27.exe
   1
   $ ./t28.exe
+  $ ./t29.exe
+  $ ./t30.exe

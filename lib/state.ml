@@ -5,12 +5,12 @@ type 'a t =
   | Suspended : ('a, 'b) continuation * 'a Effect.t -> 'b t
   | Unhandled : ('a, 'b) continuation * 'a -> 'b t
 
+let retc value = Finished (Ok value)
+let exnc exn = Finished (Error exn)
 let effc eff k = Suspended (k, eff)
 
 let handler_continue =
   let open Effect.Shallow in
-  let retc value = Finished (Ok value) in
-  let exnc exn = Finished (Error exn) in
   let effc :
       type c. c Effect.t -> ((c, 'a) Effect.Shallow.continuation -> 'b) option =
    fun effect -> Some (effc effect)
@@ -22,13 +22,12 @@ let continue_with : ('c, 'a) continuation -> 'c -> 'a t =
 
 let handler_discontinue exn =
   let open Effect.Shallow in
+  let const _ = Finished (Error exn) in
   let effc :
       type c. c Effect.t -> ((c, 'a) Effect.Shallow.continuation -> 'b) option =
-    function
-    | _ -> Some (Fun.const (Finished (Error exn)))
-  in
-  let retc = Fun.const (Finished (Error exn)) in
-  let exnc = Fun.const (Finished (Error exn)) in
+   fun _ -> Some const
+  and retc = const
+  and exnc = const in
   { retc; exnc; effc }
 
 let discontinue_with : ('c, 'a) continuation -> exn -> 'a t =
@@ -46,29 +45,38 @@ let make k v =
   let k = Effect.Shallow.fiber k in
   continue_with k v
 
-type 'a step =
-  | Send of 'a
-  | Fail of exn
-  | Intr
-  | Cont : 'a Effect.t -> 'a step
-  | None : 'a Effect.t -> 'a step
-  | Yield : unit step
+module Op = struct
+  type 'a t =
+    | Return of 'a
+    | Fail of exn
+    | Interrupt
+    | Continue : 'a Effect.t -> 'a t
+    | Perform : 'a Effect.t -> 'a t
+    | Yield : unit t
 
-type ('a, 'b) k = ('a step -> 'b t) -> 'a Effect.t -> 'b t
-type perform = { perform: 'a 'b. ('a, 'b) k } [@@unboxed]
+  let interrupt = Interrupt
+  let continue eff = Continue eff
+  let return value = Return value
+  let fail exn = Fail exn
+  let perform eff = Perform eff
+  let yield = Yield
+end
+
+type perform = { perform: 'a 'b. ('a Op.t -> 'b t) -> 'a Effect.t -> 'b t }
+[@@unboxed]
 
 let once : type a. perform:perform -> a t -> a t =
  fun ~perform -> function
   | Finished _ as finished -> finished
   | Unhandled (fn, v) -> continue_with fn v
   | Suspended (fn, e) as state ->
-      let k : type c. (c, a) continuation -> c step -> a t =
+      let k : type c. (c, a) continuation -> c Op.t -> a t =
        fun fn -> function
-        | Send v -> continue_with fn v
+        | Return v -> continue_with fn v
         | Fail exn -> discontinue_with fn exn
-        | Intr -> state
-        | Cont e -> suspended_with fn e
-        | None eff ->
+        | Interrupt -> state
+        | Continue e -> suspended_with fn e
+        | Perform eff ->
             let v = Effect.perform eff in
             unhandled_with fn v
         | Yield -> continue_with fn ()
@@ -84,15 +92,15 @@ let is_finished = function Finished _ -> true | _ -> false
 let run : type a. quanta:int -> perform:perform -> a t -> a t =
  fun ~quanta ~perform state ->
   let exception Yield of a t in
-  let k : type c. (c, a) continuation -> c step -> a t =
+  let k : type c. (c, a) continuation -> c Op.t -> a t =
    fun fn -> function
-    | Send v -> continue_with fn v
+    | Return v -> continue_with fn v
     | Fail e -> discontinue_with fn e
-    | Cont e -> suspended_with fn e
-    | None e ->
+    | Continue e -> suspended_with fn e
+    | Perform e ->
         let v = Effect.perform e in
         unhandled_with fn v
-    | Intr -> raise_notrace Break
+    | Interrupt -> raise_notrace Break
     | Yield -> raise_notrace (Yield (continue_with fn ()))
   in
   let quanta = ref quanta and state = ref state in
