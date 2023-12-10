@@ -102,7 +102,9 @@ let get, set =
 let rec sleepers_to_syscalls ~now syscalls sleepers =
   match Miou.Heapq.minimum sleepers with
   | exception Miou.Heapq.Empty ->
-      List.map (fun syscall -> Miou.task syscall (Fun.const ())) syscalls
+      List.map
+        (fun syscall -> Miou.continue_with syscall (Fun.const ()))
+        syscalls
   | time, syscall, cancelled ->
       if !cancelled then begin
         Miou.Heapq.remove sleepers;
@@ -112,7 +114,10 @@ let rec sleepers_to_syscalls ~now syscalls sleepers =
         Miou.Heapq.remove sleepers;
         sleepers_to_syscalls ~now (syscall :: syscalls) sleepers
       end
-      else List.map (fun syscall -> Miou.task syscall (Fun.const ())) syscalls
+      else
+        List.map
+          (fun syscall -> Miou.continue_with syscall (Fun.const ()))
+          syscalls
 
 let rec smallest_sleeper ~now sleepers =
   match Miou.Heapq.minimum sleepers with
@@ -348,7 +353,7 @@ let transmit_fds syscalls tbl fds =
     match Hashtbl.find tbl fd with
     | [] -> Hashtbl.remove tbl fd; acc
     | syscalls ->
-        let f syscall = Miou.task syscall (Fun.const ()) in
+        let f syscall = Miou.continue_with syscall (Fun.const ()) in
         Hashtbl.remove tbl fd;
         List.(rev_append (rev_map f syscalls) acc)
     | exception Not_found -> acc

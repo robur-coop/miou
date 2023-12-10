@@ -35,7 +35,8 @@ let select ~poll:_ _ =
       Hashtbl.fold
         (fun uid (syscall, until) acc ->
           if until <= 0. then
-            Miou.task syscall (fun () -> Hashtbl.remove sleepers uid) :: acc
+            Miou.continue_with syscall (fun () -> Hashtbl.remove sleepers uid)
+            :: acc
           else acc)
         sleepers []
 

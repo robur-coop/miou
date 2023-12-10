@@ -620,7 +620,7 @@ type continue
     A continuation is a suspension point and a function which can "unblock" the
     suspension point. *)
 
-val task : 'a syscall -> (unit -> unit) -> continue
+val continue_with : 'a syscall -> (unit -> unit) -> continue
 (** [task syscall fn] creates a {!type:continue} value which can be used by
     Miou to unlock via the given [fn] the user's defined suspension point
     represented by the given [syscall]. *)

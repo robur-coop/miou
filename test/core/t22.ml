@@ -42,7 +42,7 @@ let select ~poll:_ _ =
   let tbl = dom () in
   let fold uid (Box (value, prm)) acc =
     match Atomic.get value with
-    | Some _ -> Miou.task prm (fun () -> Hashtbl.remove tbl uid) :: acc
+    | Some _ -> Miou.continue_with prm (fun () -> Hashtbl.remove tbl uid) :: acc
     | None -> acc
   in
   Hashtbl.fold fold tbl []

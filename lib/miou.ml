@@ -1493,7 +1493,8 @@ let both prm0 prm1 =
   let res0 = await prm0 and res1 = await prm1 in
   (res0, res1)
 
-let task (Syscall (uid, _) : _ syscall) fn : continue = Continue (uid, fn)
+let continue_with (Syscall (uid, _) : _ syscall) fn : continue =
+  Continue (uid, fn)
 
 let quanta =
   match Sys.getenv_opt "MIOU_QUANTA" with

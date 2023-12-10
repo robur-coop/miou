@@ -24,7 +24,7 @@ let sleepers () =
   in
   let dom = dom () in
   Hashtbl.filter_map_inplace collect dom.sleepers;
-  List.map (fun syscall -> Miou.task syscall (Fun.const ())) !sleepers
+  List.map (fun syscall -> Miou.continue_with syscall (Fun.const ())) !sleepers
 
 let update_sleepers ~quanta () =
   Hashtbl.filter_map_inplace
