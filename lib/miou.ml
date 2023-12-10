@@ -240,18 +240,18 @@ module Promise = struct
     | Some (Pack { uid; _ }) -> Uid.equal uid parent.uid
     | None -> false
 
+  (* This function checks whether all the children of the task associated with
+     the promise given as an argument are finished. The function also "cleans
+     up" any children that have been cancelled. *)
   let children_terminated prm =
-    if Sequence.is_empty prm.active_children = false then begin
-      let to_delete = ref [] in
-      let f node =
-        let (Pack prm) = Sequence.data node in
-        if is_cancelled prm then to_delete := node :: !to_delete
-      in
-      Sequence.iter_node ~f prm.active_children;
-      List.iter Sequence.remove !to_delete;
-      Sequence.is_empty prm.active_children
-    end
-    else true
+    let to_delete = ref [] in
+    let f node =
+      let (Pack prm) = Sequence.data node in
+      if is_cancelled prm then to_delete := node :: !to_delete
+    in
+    Sequence.iter_node ~f prm.active_children;
+    List.iter Sequence.remove !to_delete;
+    Sequence.is_empty prm.active_children
 
   let uid { uid; _ } = uid
 end
