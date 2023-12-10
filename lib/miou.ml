@@ -415,36 +415,6 @@ module Domain = struct
   let self () = Effect.perform Domain_uid
   let count () = Effect.perform Domain_count
 
-  (* It tries to aggregate all the events/[task] that involve the given promise
-     with the unique ID [uid]. This function is used for cancellation. It is
-     noted that we **do not** clean up events here. We only aggregate them and
-     filter only suspensions or arrivals.
-
-     We can long for the cancellation of a promise and have several [Cancelled]
-     in our heap. However, there should only be one suspension or (exclusive)
-     one [Arrived]. For more precision, see the only [assert false] in our code.
-
-     Regarding the fact that we don't really clean up, our function that handles
-     these events only handles tasks that have not been cancelled. This means
-     that a [Heapq.pop_minimum] will consume those junk tasks and, if the
-     cancellation went well, nothing should happen. *)
-  let clean_promise ~uid domain =
-    let tasks = ref [] in
-    let f (_, task) =
-      match task with
-      | Arrived (prm, _) ->
-          if Promise_uid.equal prm.uid uid then tasks := task :: !tasks
-      | Suspended (prm, _) ->
-          if Promise_uid.equal prm.uid uid then tasks := task :: !tasks
-      | Cancelled prm ->
-          if Promise_uid.equal prm.uid uid then tasks := task :: !tasks
-      | Tick -> ()
-    in
-    Heapq.iter f domain.tasks;
-    List.filter_map
-      (function (Arrived _ | Suspended _) as task -> Some task | _ -> None)
-      !tasks
-
   (* The interruption makes it possible to re-synchronize a domain even if the
      latter has fallen in the case of the management of system events
      [domain.events.select ()] - which is, currently, the only blocking
@@ -1064,6 +1034,30 @@ module Domain = struct
       in
       iter_with_exclusion ~f prms
 
+  let get_promise_into_domain ~uid domain =
+    let tasks = ref [] in
+    let f (_, task) =
+      match task with
+      | Arrived (prm, _) ->
+          if Promise_uid.equal prm.uid uid then tasks := task :: !tasks
+      | Suspended (prm, _) ->
+          if Promise_uid.equal prm.uid uid then tasks := task :: !tasks
+      (* Morally, this function should also aggregate cancellations. However,
+         the only time it's used is when there's a cancellation. In this case,
+         the aim is not to search for all occurrences of our promise in the
+         heap, but to find out whether our task has just arrived or has been
+         suspended. *)
+      | Cancelled _ | Tick -> ()
+    in
+    Heapq.iter f domain.tasks;
+    match !tasks with
+    | [ (Arrived _ as elt) ] | [ (Suspended _ as elt) ] -> Some elt
+    | [] -> None
+    | _ -> assert false
+  (* It is normally impossible to have a task that is both arrived and in a
+     suspended state. It's either one or the other. If we fall into this
+     situation, our assertions are wrong. *)
+
   let once pool domain task =
     match task with
     | Tick -> Domain.cpu_relax ()
@@ -1108,30 +1102,27 @@ module Domain = struct
     | Cancelled prm -> (
         Logs.debug (fun m ->
             m "[%a] %a cancelled" Domain_uid.pp domain.uid Promise.pp prm);
-        match clean_promise ~uid:prm.uid domain with
-        | [ Suspended (prm', state) ] ->
+        match get_promise_into_domain ~uid:prm.uid domain with
+        | Some (Suspended (prm', state)) ->
             assert (Promise.Uid.equal prm'.uid prm.uid);
-            Logs.debug (fun m ->
-                m "[%a] cancels an actual suspension of %a (%d children)"
-                  Domain_uid.pp domain.uid Promise.pp prm'
-                  (Sequence.length prm'.active_children));
+            assert (Domain_uid.equal domain.uid prm'.runner);
             clean_system_task_if_suspended domain state;
             clean_system_tasks domain prm';
-            assert (Domain_uid.equal domain.uid prm'.runner);
             Promise.cancel prm';
             handle pool domain prm' (State.fail ~exn:Cancelled state)
-        | [ Arrived (prm', _) ] ->
+        | Some (Arrived (prm', _)) ->
             assert (Promise.Uid.equal prm'.uid prm.uid);
-            clean_system_tasks domain prm';
             assert (Domain_uid.equal domain.uid prm'.runner);
+            clean_system_tasks domain prm';
             Promise.cancel prm';
             handle pool domain prm (State.pure (Error Cancelled))
-        | [] ->
-            clean_system_tasks domain prm;
+        | Some (Cancelled _ | Tick) ->
+            () (* Impossible case, but let's do nothing *)
+        | None ->
             assert (Domain_uid.equal domain.uid prm.runner);
+            clean_system_tasks domain prm;
             Promise.cancel prm;
-            handle pool domain prm (State.pure (Error Cancelled))
-        | _ -> assert false)
+            handle pool domain prm (State.pure (Error Cancelled)))
 
   let transmit_values domain =
     let to_delete = ref [] in
