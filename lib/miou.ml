@@ -415,11 +415,24 @@ module Domain = struct
   let self () = Effect.perform Domain_uid
   let count () = Effect.perform Domain_count
 
-  (* The interruption makes it possible to re-synchronize a domain even if the
-     latter has fallen in the case of the management of system events
-     [domain.events.select ()] - which is, currently, the only blocking
-     operation of our scheduler. It occurs especially when you cancel a task
-     that belongs to the said domain. *)
+  (* A domain can "fall" into a waiting state outside Miou via its "select"
+     function. As such, the user must propose a way of interrupting domains.
+     This is necessary if a task in a domain:
+     - has just been cancelled
+     - has just been waited for by someone
+
+     In the first case, a new iteration of the domain is required to update its
+     tasks (and effectively cancel said task).
+     In the second case, the task is connected to a continuation. The latter
+     may already have been completed (and the domain is in a waiting state). We
+     therefore also need a new iteration to execute the continuation.
+
+     Thus, interruption is essentially seen in 2 cases:
+     1) when a new task has been added to the domain (see
+        [add_into_pool]/[add_into_dom0])
+     2) when a new continuation has been added to a task running on the domain
+        (see [await]/[choose])
+  *)
   let interrupt pool ~domain:domain' =
     Logs.debug (fun m -> m "interrupts domain [%a]" Domain_uid.pp domain');
     let domain =
