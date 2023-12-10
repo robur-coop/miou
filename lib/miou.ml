@@ -45,8 +45,11 @@ module Syscall_uid = struct
   let pp = Format.pp_print_int
 
   let gen =
-    let value = Atomic.make (null + 1) in
-    fun () -> Atomic.fetch_and_add value 1
+    let key = Stdlib.Domain.DLS.new_key @@ fun () -> null + 1 in
+    fun () ->
+      let ret = Stdlib.Domain.DLS.get key in
+      Stdlib.Domain.DLS.set key (succ ret);
+      ret
 end
 
 module Resource_uid = struct
