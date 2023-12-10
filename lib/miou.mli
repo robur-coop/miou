@@ -367,11 +367,11 @@ module Ownership : sig
         # Miou.await_one
             [ Miou.call_cc (fun () ->
                 let socket = tcpv4 () in
-                Miouu.connect socket addr;
+                Miou_unix.connect socket addr;
                 Ownership.transfer socket;
                 socket)
             ; Miou.call @@ fun () ->
-              Miouu.sleep 10.; raise Timeout ]
+              Miou_unix.sleep 10.; raise Timeout ]
          |> function
          | Ok socket_connected -> ...
          | Error Timeout -> ...
@@ -492,7 +492,22 @@ val call_cc :
   ?orphans:'a orphans -> ?give:Ownership.t list -> (unit -> 'a) -> 'a t
 (** [call_cc fn] (for Call with Current Continuation) returns a promise
     {!type:t} representing the state of the task given as an argument. The task
-    will be carried out {b concurrently} with the other tasks. *)
+    will be carried out {b concurrently} with the other tasks in the current
+    domain.
+
+    {b NOTE}: About property and argument [give], property deeds are copied and
+    shared between the task initially in possession and the new task. In other
+    words, both must {!val:Ownership.disown} before termination. For the
+    example, this code doesn't work because the main task ({!val:run}) hasn't
+    {!val:Ownership.disown} the resource.
+
+    {[
+      # Miou.run @@ fun () ->
+        let r = Miou.Ownership.own ~finally:Fun.id () in
+        let p = Miou.call ~give:[ r ] @@ fun () -> Miou.Ownership.disown r in
+        Miou.await_exn p;;
+      Exception: Miou.Resource_leak.
+    ]} *)
 
 val call : ?orphans:'a orphans -> ?give:Ownership.t list -> (unit -> 'a) -> 'a t
 (** [call fn] returns a promise {!type:t} representing the state of the task
@@ -565,39 +580,87 @@ val parallel : ('a -> 'b) -> 'a list -> ('b, exn) result list
     allocated equally to the domains.
 
     {b NOTE}: This function will never assign a task to {i dom0} - only the
-    other domains can run tasks in parallel. *)
+    other domains can run tasks in parallel. To involve [dom0], it simply has to
+    be the one that launches the parallelization and performs the same task
+    concurrently.
+
+    {[
+      val server : unit -> unit
+
+      let () = Miou.run @@ fun () ->
+        let p = Miou.call_cc server in
+        Miou.parallel server (List.init (Miou.Domain.count ()) (Fun.const ())
+        |> List.iter (function Ok () -> () | Error exn -> raise exn);
+        Miou.await_exn p
+    ]} *)
 
 (** {2 System events.}
 
-    Miou does not interact with the system, only with the OCaml runtime. As a
-    result, it does not implement the usual input/output operations.
-    Nevertheless, it offers a fairly simple API for using functions that
-    interact with the system (and that can, above all, block).
+    Miou does not monitor system events. We arbitrarily leave this event
+    monitoring to the user (so that Miou only requires OCaml to run). The
+    advantage is that you can inject an event monitor from a specific system
+    (such as a unikernel) if you want. However, {!module:Miou_unix} is available
+    if you want to do input/output.
 
-    One of the rules of Miou is never to give it blocking functions to eat (in
-    fact, it has very strict - but very simple - nutritional contraints).
+    To facilitate the integration of an event monitor, Miou offers an API for
+    creating "suspension points" (see {!val:suspend}). In other words, points
+    where execution will be blocked for as long as you wish. These points can be
+    unblocked as soon as the monitor gives Miou a "continuation" to these points
+    with {!val:continue_with}.
 
-    On the other hand, the system can inform you when a function is non-blocking
-    (and can therefore be given to Miou). The idea is to inform Miou of the
-    existence of a {i suspension point}, which it will then be {i continued}. Of
-    course, it won't be able to, but as a last resort, Miou will come back to
-    you to ask for a possible suspension point to continue. It will do this via
-    an user's defined function, which you can specify using the {!val:run}
-    function (see [events] argument).
+    The user must specify a {!type:select} function (via the {!val:run} function
+    and the {!type:events} type), which must correspond to system event
+    monitoring (probably using [Unix.select]). From these events, the monitor
+    can decide which suspension point (thanks to its {!type:uid}) should be
+    released. Miou will then call this function for each {i quanta} consumed.
+    This gives Miou a high degree of availability to consume and process system
+    events.
 
-    This user's defined function return a {!type:continue} which requires our
-    {!type:syscall} (which made the suspension point) and a non-blocking
-    function ([unit -> unit]). With this value, Miou will be able to continue
-    from our suspension point.
+    {3 Domains, suspension and monitoring.}
 
-    For more information on this API, a tutorial is available on how to
-    implement {!page:sleepers}: tasks that block your process for a time. *)
+    Each domain has its own monitor so that the suspension and its continuation
+    given by the monitor is always local to the domain (the domain managing the
+    suspension is the only one allowed to execute the continuation). One
+    {!type:events} is allocated per domain - it is given on which domain the
+    [event] value is assigned. In this way, the values (such as a table of
+    active file-descriptors) required to monitor system events need {b not} be
+    {i thread-safe}.
+
+    {3 Sleep state.}
+
+    Sometimes, Miou only has suspension points. In other words, only system
+    events are required to execute tasks (typically waiting for a TCP/IP
+    connection). We say we're in a sleep state. In this case, Miou informs the
+    monitor [select] that it can wait indefinitely (with [poll:true]).
+
+    {3 Cancellation.}
+
+    It can happen that a task executed by one domain is cancelled by another
+    domain (if the first was created by {!val:call}). This cancellation of a
+    task can also mean the cancellation of existing suspension points into the
+    task. Miou must therefore be able to {i interrupt} a domain (especially if
+    the latter is in a sleep state).
+
+    Thus, the user must have a mechanism for stopping event monitoring, which
+    must be given to Miou via the [interrupt] field (see {!type:events}).
+
+    Finally, Miou informs the monitor of any points that have been cancelled, so
+    that the associated events can no longer be monitored (this could involve
+    cleaning up the table of active file-descritpors).
+
+    {3 Tutorial.}
+
+    To help you understand all these related elements, the distribution offers a
+    short tutorial on how to implement functions that can block a given time
+    (such as [Unix.sleep]): {!page:sleepers}. *)
 
 type 'a syscall
 (** The type of {i syscalls}.
 
-    A syscall is like an unique ID of a specific suspension point made by
-    {!val:suspend}. *)
+    A syscall is an unique ID and function executed as soon as the suspension
+    point is released. This suspension point is created using the {!val:suspend}
+    function. ['a] corresponds to the type returned by the function (when the
+    suspension point is released by the monitor). *)
 
 type uid = private int [@@immediate]
 (** The type of unique IDs of {!type:syscall}s. *)
@@ -609,33 +672,55 @@ val make : (unit -> 'a) -> 'a syscall
 val suspend : 'a syscall -> 'a
 (** [suspend syscall] creates an user's defined suspension point. Miou will
     keep it internally and only the user is able to {i continue} it via
-    {!type:events} and a {!type:continue}. *)
+    {!type:events} (and the [select] field) and a {!type:continue}. *)
 
 val uid : 'a syscall -> uid
-(** [uid syscall] returns the unique ID of the syscall. *)
+(** [uid syscall] returns the unique ID of the syscall.
+
+    {b NOTE}: Uniqueness is local to the domain! This means that 2 domains can
+    produce the same {!type:uid}:
+
+    {[
+      # Miou.run @@ fun () ->
+        let p () =
+          let s0 = Miou.make (Fun.const ()) in
+          let s1 = Miou.make (Fun.const ()) in
+          assert (Miou.uid s0 <> Miou.uid s1);
+          Miou.uid s0 in
+        Miou.parallel p (List.init 2 (Fun.const ()))
+        |> function
+        | [ Ok p0s; Ok p1s ] -> assert (p0s = p1s)
+        | _ -> assert false 
+      ;;
+      - : unit = ()
+    ]} *)
 
 type continue
 (** The type of continuations.
 
-    A continuation is a suspension point and a function which can "unblock" the
-    suspension point. *)
+    A continuation is a syscall that has been suspended (with {!val:suspend}) as
+    well as a {i pre} function. This is a value that must be given to Miou (via
+    [select]) in order to {i unblock} the previously created suspend point. *)
 
 val continue_with : 'a syscall -> (unit -> unit) -> continue
-(** [task syscall fn] creates a {!type:continue} value which can be used by
-    Miou to unlock via the given [fn] the user's defined suspension point
-    represented by the given [syscall]. *)
+(** [continue_with syscall fn] creates a {!type:continue} value which can be
+    used by Miou to unblock the suspension point associated with the given
+    syscall. The given function [fn] is pre-processed before Miou executes the
+    [syscall]'s function. Any exception raised by the pre-processing function or
+    the [syscall]'s function discontinues the suspension point with that
+    exception. *)
 
 type select = poll:bool -> uid list -> continue list
 type events = { select: select; interrupt: unit -> unit }
 
 val is_pending : 'a syscall -> bool
-(** [is_pending syscall] checks the status of the suspension point. A suspension
-    point can be indirectly cancelled (if the user {!val:cancel}s the task with
-    the suspension point). The user, in the [events.select] function (and
-    {b only} in this function) can check the status of a suspension point. If
-    {!val:is_pending} returns [true], then the suspension point still exists and
-    the user should give us a function to continue, otherwise the user can
-    'forget' the suspension point safely.
+(** [is_pending syscall] checks the status of the [syscall]'s suspension point.
+    A suspension point can be indirectly cancelled (if the user {!val:cancel}s
+    the task with the suspension point). The user, in the [events.select]
+    function (and {b only} in this function) can check the status of a
+    suspension point. If {!val:is_pending} returns [true], then the suspension
+    point still exists and the user should give us a function to continue,
+    otherwise the user can 'forget' the suspension point safely.
 
     {b NOTE}: this function can only be executed in the [events.select]
     function. If the user calls it elsewhere, an exception will be raised
@@ -651,9 +736,9 @@ val await : 'a t -> ('a, exn) result
     promise are cancelled. For instance, this code is valid:
 
     {[
-      # Miouu.run @@ fun () ->
+      # Miou_unix.run @@ fun () ->
         let p = Miou.call_cc @@ fun () ->
-          let child_of_p = Miou.call_cc @@ fun () -> Miouu.sleep 10. in
+          let child_of_p = Miou.call_cc @@ fun () -> Miou_unix.sleep 10. in
           failwith "p";
           Miou.await_exn child_of_p in
         Miou.await p ;;
@@ -664,7 +749,7 @@ val await : 'a t -> ('a, exn) result
     Note that you should {b always} wait for your children (it's illegal to
     forget your children), as in the example above (even if an exception
     occurs). If a task does not wait for its children, an {i uncatchable}
-    exception is thrown by Miou:
+    exception is raised by Miou:
 
     {[
       # Miou.run @@ fun () ->
@@ -684,23 +769,26 @@ val await_all : 'a t list -> ('a, exn) result list
 
 val await_first : 'a t list -> ('a, exn) result
 (** [await_first prms] waits for a task to finish (by exception or normally) and
-    cancels all the others. If several tasks finish "at the same time", one of
-    them is chosen randomly. This function can be useful for timeouts:
+    cancels all the others. If several tasks finish "at the same time", normally
+    completed tasks are preferred to failed ones. This function can be useful
+    for timeouts:
 
     {[
       # exception Timeout ;;
-      # Miouu.run @@ fun () ->
+      # Miou_unix.run @@ fun () ->
         let p0 = Miou.call_cc (Fun.const ()) in
-        let p1 = Miou.call_cc @@ fun () -> Miouu.sleep 2.; raise Timeout in
+        let p1 = Miou.call_cc @@ fun () -> Miou_unix.sleep 2.; raise Timeout in
         Miou.await_first [ p0; p1 ] ;;
       - : (unit, exn) result = Ok ()
-    ]} *)
+    ]}
+
+    @raise Invalid_argument if the promise list is empty. *)
 
 val await_one : 'a t list -> ('a, exn) result
 (** [await_one prms] waits for a task to finish (by exception or normally).
     Despite {!val:await_first}, {!val:await_one} does {b not} cancel all the
-    others. The user must {!val:await} them otherwise Miou will not consider
-    these promises as resolved and will raise [Still_has_children].
+    others. The user must {!val:await} them, otherwise Miou will assume they're
+    still active and will raise [Still_has_children].
 
     {[
       # Miou.run @@ fun () ->
@@ -708,7 +796,9 @@ val await_one : 'a t list -> ('a, exn) result
           [ Miou.call_cc (Fun.const 1)
           ; Miou.call_cc (Fun.const 2) ] ;;
       Exception: Miou.Still_has_children
-    ]} *)
+    ]}
+
+    @raise Invalid_argument if the promise list is empty. *)
 
 val both : 'a t -> 'b t -> ('a, exn) result * ('b, exn) result
 (** [both prm0 prm1] waits [prm0] {b and}) [prm1]. It's equivalent to:
@@ -763,8 +853,8 @@ val cancel : 'a t -> unit
 
     Cancellation terminates all the children. After the cancellation, the
     promise and its children all stopped. Resolved children are also cancelled
-    (their results are erased). Cancelling a {i resolved} promise that has
-    already been {!val:await}ed does nothing:
+    (their results are erased). Canceling a task that has already been solved
+    changes the state of the task to abnormal termination [Error Cancelled].
 
     {[
       # Miou.run @@ fun () ->
@@ -772,10 +862,11 @@ val cancel : 'a t -> unit
         Miou.await_exn p;
         Miou.cancel p;
         Miou.await_exn p ;;
-      - : unit = ()
+      Exception: Miou.Cancelled.
     ]}
 
-    However, cancellation does occur if a resolved promise was not awaited:
+    This case shows that, even if the task has been resolved internally, the
+    cancellation also applies.
 
     {[
       # Miou.run @@ fun () ->
@@ -787,7 +878,8 @@ val cancel : 'a t -> unit
       Exception: Miou.Cancelled.
     ]}
 
-    We can only {!val:cancel} for a promise that the task has created.
+    Only the creator of a task can {!val:cancel} it (the relationship also
+    applies to cancellation, otherwise Miou raises the exception [Not_a_child]).
 
     {b NOTE}: Cancellation {i asynchronicity} means that other concurrent tasks
     can run while the cancellation is in progress. In fact, in the case of an
@@ -796,14 +888,13 @@ val cancel : 'a t -> unit
     which should not affect the opportunity for other concurrent tasks to run.
 *)
 
-type handler = { handler: 'a 'b. ('a -> 'b) -> 'a -> 'b } [@@unboxed]
 (** {2 Composition.}
 
     It is possible to compose Miou with a library that also generates effects.
     The user can compose in 2 ways:
     - simply apply his/her effect manager with its function in Miou
       [Miou.call{,_cc} @@ fun () -> handler fn ()]
-    - inform Miou of an effect handler that should comply with the {b "quanta"
+    - inform Miou of an effect handler that should comply with the {b {i quanta}
       rule}
 
     Remember that Miou suspends a task as soon as it emits an effect. The second
@@ -838,8 +929,27 @@ type handler = { handler: 'a 'b. ('a -> 'b) -> 'a -> 'b } [@@unboxed]
     {b NOTE}: We want to reiterate that such a composition implies that the
     effect will not be executed {i immediately}: the task will be suspended and
     the effect will be produced only as soon as the said task has its execution
-    slot.
+    slot. One type of composition therefore becomes impossible if we want the
+    production of an effect to produce an immediate action.
+
+    The example below shows that {!val:Effect.perform} suspends and gives [_p]
+    the opportunity to execute its task {b before} the [Unhandled] exception is
+    raised.
+
+    {[
+      # try
+          Miou.run @@ fun () ->
+          let _p = Miou.call_cc @@ fun () -> print_endline "Hello" in
+          Effect.perform Foo
+        with Stdlib.Effect.Unhandled Foo -> print_endline "World"
+      ;;
+      Hello
+      World
+      - : unit = ()
+    ]}
 *)
+
+type handler = { handler: 'a 'b. ('a -> 'b) -> 'a -> 'b } [@@unboxed]
 
 val run :
      ?quanta:int
