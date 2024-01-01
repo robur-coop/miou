@@ -258,7 +258,6 @@ end
 (** Effects *)
 
 [@@@warning "-30"]
-[@@@warning "-37"]
 
 type kind = Concurrent | Parallel of Domain_uid.t
 type _ Effect.t += Domain_uid : Domain_uid.t Effect.t
