@@ -245,8 +245,7 @@ module Promise = struct
      up" any children that have been cancelled. *)
   let children_terminated prm =
     let to_delete = ref [] in
-    let f node =
-      let (Pack prm) = Sequence.data node in
+    let f (Sequence.{ data= Pack prm; _ } as node) =
       if is_cancelled prm then to_delete := node :: !to_delete
     in
     Sequence.iter_node ~f prm.active_children;
@@ -494,8 +493,7 @@ module Domain = struct
         else Some suspended)
       domain.system_tasks;
     let to_delete = ref [] in
-    let f node =
-      let (Continue (uid', _)) = Sequence.data node in
+    let f (Sequence.{ data= Continue (uid', _); _ } as node) =
       if Hashtbl.mem set uid' then begin
         Logs.debug (fun m ->
             m "[%a] clean the syscall [%a] (system-events)" Domain_uid.pp
@@ -593,8 +591,7 @@ module Domain = struct
               (own_it prm res));
         if own_it prm res then begin
           let to_delete = ref Option.none in
-          let f node =
-            let (Resource { uid= uid'; _ }) = Sequence.data node in
+          let f (Sequence.{ data= Resource { uid= uid'; _ }; _ } as node) =
             if uid = uid' then to_delete := Option.some node
           in
           Sequence.iter_node ~f prm.resources;
@@ -609,13 +606,14 @@ module Domain = struct
           | None -> k (Op.fail (error_impossible_to_transfer prm))
           | Some (Pack prm') ->
               let to_transmit = ref Option.none in
-              let f node =
-                let (Resource { uid= uid'; _ }) = Sequence.data node in
+              let f (Sequence.{ data= Resource { uid= uid'; _ }; _ } as node) =
                 if uid = uid' then to_transmit := Option.some node
               in
               Sequence.iter_node ~f prm.resources;
-              let[@warning "-8"] (Option.Some node) = !to_transmit in
-              Sequence.push (Sequence.data node) prm'.resources;
+              let[@warning "-8"] (Option.Some ({ Sequence.data; _ } as node)) =
+                !to_transmit
+              in
+              Sequence.push data prm'.resources;
               Sequence.remove node;
               k (Op.return ())
         end
@@ -623,8 +621,7 @@ module Domain = struct
 
   let clean_children ~children current =
     let to_delete = ref [] in
-    let f node =
-      let (Pack prm) = Sequence.data node in
+    let f (Sequence.{ data= Pack prm; _ } as node) =
       if List.exists (Promise.Uid.equal prm.uid) children then
         to_delete := node :: !to_delete
     in
@@ -1139,15 +1136,15 @@ module Domain = struct
 
   let transmit_values domain =
     let to_delete = ref [] in
-    let transmit node =
-      let (Value (prm, value)) = Sequence.data node in
-      if Option.is_some (Atomic.get prm.k) then begin
-        Logs.debug (fun m ->
-            m "[%a] prepares %a to be consumed" Domain_uid.pp domain.uid
-              Promise.pp prm);
-        add_into_domain domain (Suspended (prm, State.pure value));
-        to_delete := node :: !to_delete
-      end
+    let transmit ({ Sequence.data= Value (prm, value); _ } as node) =
+      match Atomic.get prm.k with
+      | None -> ()
+      | Some _ ->
+          Logs.debug (fun m ->
+              m "[%a] prepares %a to be consumed" Domain_uid.pp domain.uid
+                Promise.pp prm);
+          add_into_domain domain (Suspended (prm, State.pure value));
+          to_delete := node :: !to_delete
     in
     Sequence.iter_node ~f:transmit domain.values;
     List.iter Sequence.remove !to_delete
@@ -1229,8 +1226,8 @@ module Pool = struct
 
   let rec transfer_all_tasks (pool : pool) (domain : domain) =
     let exception Task of elt Sequence.node in
-    let f node =
-      match Sequence.data node with
+    let f ({ Sequence.data; _ } as node) =
+      match data with
       | Delete prm when Domain_uid.equal prm.runner domain.uid ->
           raise_notrace (Task node)
       | Create (prm, _) when Domain_uid.equal prm.runner domain.uid ->
@@ -1240,8 +1237,7 @@ module Pool = struct
       | _ -> ()
     in
     try Sequence.iter_node ~f pool.tasks
-    with Task node ->
-      let data = Sequence.data node in
+    with Task ({ Sequence.data; _ } as node) ->
       Sequence.remove node;
       begin
         match data with
@@ -1403,8 +1399,8 @@ let orphans () = Sequence.create (random ())
 let care t =
   let exception Found in
   let ready = ref Option.none in
-  let f node =
-    match Atomic.get (Sequence.data node).state with
+  let f (Sequence.{ data= { state; _ }; _ } as node) =
+    match Atomic.get state with
     | Pending -> ()
     | _ ->
         ready := Option.some node;
@@ -1415,8 +1411,9 @@ let care t =
       Sequence.iter_node ~f t;
       Option.(some none)
     with Found ->
-      let[@warning "-8"] (Option.Some node) = !ready in
-      let data = Sequence.data node in
+      let[@warning "-8"] (Option.Some ({ Sequence.data; _ } as node)) =
+        !ready
+      in
       Sequence.remove node;
       Option.(some (some data))
   end

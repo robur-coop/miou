@@ -3,8 +3,17 @@
 type 'a t
 (** Type of a sequence holding values of type ['a]. *)
 
-type 'a node
-(** Type of a node holding one value of type ['a] in a sequence. *)
+type 'a node = private {
+    g: Random.State.t
+  ; mutable prev: 'a t
+  ; mutable next: 'a t
+  ; mutable data: 'a
+  ; mutable active: bool
+}
+(** Type of a node holding one value of type ['a] in a sequence.
+
+    {b NOTE}: The user can deconstruct a node to avoid indirect access to
+    values, but it is not advisable to modify the fields. *)
 
 exception Empty
 (** Exception raised by {!val:take} when the sequence is empty. *)
