@@ -1,265 +1,348 @@
 (** {1 Miou, a simple scheduler for OCaml 5.}
 
-    Miou is a simple scheduler for OCaml 5. The purpose of this library is to
-    provide an interface for launching tasks concurrently and/or in parallel
-    with others. Miou proposes a minimal, homogeneous, simple and conservative
-    interface.
-    
-    This presentation will allow us to introduce several concepts and what Miou
-    can offer.
-    
-    {2 Definitions of terms.}
-    
-    {3 A task.}
-    
-    A task is a function on which several operations required by Miou exist:
-    + a task can be launched/executed
-    + a task can be stopped (suspended)
-    + stopping a task produces a state of the task
-    + a task can be restarted from its state
-    
-    The {!module:State} module offers a more concrete definition of these
-    operations with what the OCaml 5 {!module:Effect} module offers. Suspension
-    is the fundamental operation in the implementation of a scheduleur. We have
-    therefore chosen to be able to suspend a task as soon as it emits an effect.
-    
-    This is perhaps the most important thing to remember about this definition:
-    a task is suspended as soon as it emits {b one} effect.
-    
-    {3 Suspension.}
-    
-    Suspension consists of obtaining a {i state} for the task which we can be
-    "stored" and which allows us to {i continue} the task. The task has stopped
-    at a specific point and its state consists roughly of:
-    - the point where the task stopped
-    - a particular state of the memory required to perform the task
-    - and the disruptive element of the suspension: the effect.
-    
-    From this state, Miou can continue or {i discontinue} the task. Continuing
-    the task consists of restarting the execution of the task from its stopping
-    point. Discontinuing a task consists of not restarting the task and
-    transitioning the state of the task to an error (in this case, the raising
-    of an exception).
-    
-    {3:quanta A quanta.}
-    
-    A {i quanta} is a measure used to limit the execution of a task. Usually,
-    the {i quanta} used is time: you limit the execution time of a task to
-    100ms, for example, and then suspend the task and execute another one.
-    
-    As far as Miou is concerned, the {i quanta} used is the production of
-    effects. For more details on the reasons for this, please refer to the
-    {!module:State} module. The user can modify the number of {i quantas}
-    allocated to tasks. By default, Miou only allocates one {i quanta} per task
-    so that they can be reordered later. However, it may be appropriate for a
-    task to consume a maximum of 10, 20 or 1000 {i quantas}.
-    
-    {3 Concurrency.}
-    
-    Concurrency consists of swapping the execution of several tasks on the same
-    core. The aim of the scheduler is to have several tasks, some of which
-    depend on the result of others, and to schedule these tasks in a certain
-    execution order in order to obtain the final result.
-    
-    It is important to note that, in the context of concurrency, tasks have
-    exclusive access to memory as only one core is able to execute them: there
-    cannot be 2 tasks executing at the same time. However, the order in which
-    the tasks are executed is decided by the scheduler.
-    
-    The policy of concurrency can be to "prioritise" some tasks so that other
-    tasks, which depend on the result of the first tasks, can be unblocked. In
-    our case, Miou does {b not} prioritise tasks but has a re-scheduling and
-    execution policy which ensures that all tasks have the same opportunity to
-    be executed (and that those producing a result needed by others can be
-    executed just as well as the others).
-    
-    The user can launch a concurrently-running task using {!val:call_cc}. The
-    function returns {i a promise} ({!type:t}), {i a witness} to the execution
-    of the task. This witness can be used to obtain the result of the task:
+    Miou is a simple scheduler for OCaml 5 that uses effects. It allows you to
+    launch tasks (functions) concurrently and/or in parallel, as well as
+    offering your application high availability to system events.
+
+    {2 Basics.}
+
+    {3 Effects.}
+
+    Since OCaml 5, it has been possible to use effects. An effect allows you to
+    suspend the execution of a function and {i fall} into a handler which,
+    depending on the effect, would perform a specific operation that would
+    {i continue} the suspended function with the result of the operation.
+
+    For example, a [Hello: unit Effect.t] effect can suspend using
+    {!val:Effect.perform}. A pre-installed {i handler} will then retrieve this
+    effect, perform the operation (say, display ["Hello"]), and unsuspend the
+    function with the result of the operation (here, [() : unit]).
+
+    {[
+      type _ Effect.t += Hello : unit Effect.t
+
+      let handler =
+        let retc = Fun.id in
+        let exnc = raise in
+        let effc
+          : type c. c Effect.t -> ((c, 'a) continuation -> 'a) option
+          = function
+          | Hello ->
+            Some (fun k -> continue k (print_endline "Hello"))
+          | _ -> None in
+        { retc; exnc; effc }
+
+      let my_function () =
+        Effect.perform Hello;
+        print_endline "World"
+
+      let () = match_with my_function () handler
+    ]}
+
+    To go back to familiar OCaml elements, an effect is like an exception in
+    that it breaks the execution flow. The "handler" is the [with ...] part of a
+    [try ... with ...] in OCaml, and its installation corresponds to the
+    [try ...]. Finally, and this is the fundamental difference with exceptions,
+    there is the {i continuation} which allows us to return to the point where
+    the effect was launched.
+
+    {[
+      exception Hello
+
+      let my_function () =
+        raise Hello;
+        print_endline "World"
+
+      let () =
+        try my_function ()
+        with Hello k ->
+          print_endline "Hello";
+          k ()
+    ]}
+
+    Miou defines several effects that allow the user to interact with Miou's
+    "task manager". Miou's effects manager is installed using {!val:run}. So,
+    if you want to use Miou, you should always start with {!val:run}:
+
+    {[
+      val my_program : unit -> unit
+
+      let () = Miou.run my_program ()
+    ]}
+
+    {3 A task manager.}
+
+    Miou is a task manager. In other words, it manages a list of to-do tasks
+    (which you can add to with {!val:call_cc}/{!val:call}) and allows the user
+    to manage these tasks. When a task is created, Miou gives the user a
+    representation of the task: a promise {!type:t}.
+
+    From this promise, the user can:
+    + {!val:await} for the result of the task
+    + {!val:cancel} the task
+
+    Here's an example where a list of tasks are initiated and awaited.
+    Interaction (task creation and awaiting) with Miou takes place via effects.
+    Miou manages the execution order of these tasks and attempts to finish them
+    all in order to terminate your program. 
+
+    {[
+      let digest filename =
+        Miou.call_cc @@ fun () ->
+        (filename, Digest.file filename)
+
+      let my_program filenames =
+        (* 1) we create a list of tasks *)
+        let prms = List.map digest filenames in
+        (* 2) Miou manages the execution of these tasks *)
+        (* 3) we wait these tasks *)
+        let results = List.map Miou.await_exn prms in
+        (* 4) we print results *)
+        List.iter (fun (filename, hash) ->
+          Format.printf "%s: %s\n%!" filename (Digest.to_hex hash))
+          results
+
+      let () = Miou.run @@ fun () ->
+        my_program ["file01.ml"; "file02.ml"]
+    ]}
+
+    Miou suggests a {{!page:scheduler}little exercise} to implement a task
+    manager with effects. It explains the role of promises, creation and
+    awaiting for a task (it does not, however, describe cancellation).
+
+    {3 Domains.}
+
+    Since OCaml 5, it has been possible to run functions in parallel. These
+    functions run on a domain that has its own minor heap - so allocating small
+    amounts of data doesn't require synchronization with other domains. Miou
+    provides a {i pool} of domains to which the user can assign tasks to run in
+    parallel.
+
+    {[
+      # let dom = Stdlib.Domain.spawn my_parallel_computation ;;
+      # Stdlib.Domain.join dom ;;
+    ]}
+
+    For more details on parallelism and garbage collection, we recommend reading
+    the OCaml manual.
+
+    Miou prepares the allocation of a certain number of domains in advance.
+    These will be waiting for tasks. The {!val:call} function is used to assign
+    a new task to one of these domains. The user can specify the number of
+    domains Miou can allocate via the [domains] argument to the {!val:run}
+    function. We recommend using [Domain.recommended_domain_count () - 1]
+    domains.
+
+    {2 Design.}
+
+    After this brief introduction to the basics of Miou (i.e. the use of effects
+    and domains and the definition of a task manager), Miou stands out from
+    other schedulers through its design, which we'll describe here.
+
+    However, we need to define 3 terms that will be used throughout this
+    description:
+    - a {i task} is the smallest sequence of programmed instructions that can be
+      managed by Miou. In concrete terms, it's an OCaml function.
+    - a domain (see {!module:Domain} is a resource representing a processor
+      available to execute a task
+    - a {i fiber} is a task that will run on a domain in cooperation with other
+      tasks
+
+    {3 Preemption and cooperation}
+
+    OCaml offers only a fundamentally cooperative model for executing these
+    tasks. Indeed, there are no mechanisms in OCaml to force the suspension of
+    a given task. However, a given task can suspend itself in order to cooperate
+    with other tasks on a limited resource such as a particular domain.
+
+    Miou offers a way of creating tasks (see {!val:call_cc}) that are more
+    precisely called {i fibers}. These fibers must cooperate with each other to
+    share the domain on which they run. This means that a fiber should not have
+    exclusive domain control when other fibers are waiting to be executed. 
 
     {[
       # Miou.run @@ fun () ->
-        let promise = Miou.call_cc @@ fun () -> 21 + 21 in
-        Miou.await_exn promise ;;
-      - : int = 42
+        let rec pr str n =
+          if n >= 0 then
+          begin Miou.yield (); print_endline str; pr str (pred n) end in
+        let prm0 = Miou.call_cc @@ fun () -> pr "Hello" 1 in
+        let prm1 = Miou.call_cc @@ fun () -> pr "World" 1 in
+        Miou.await_exn prm0;
+        Miou.await_exn prm1 ;;
+      Hello
+      World
+      Hello
+      World
+      - : unit = ()
     ]}
 
-    {3 Parallelism.}
-    
-    Since OCaml 5, it has been possible to run functions in parallel. In other
-    words, they can run "at the same time" using several cores. The advantage of
-    parallelism is that execution time can be shared between several cores. For
-    example, if 2 tasks require 100ms to calculate a result, in a concurrent
-    context we would need 200ms to complete these tasks, whereas we would only
-    need 2 cores and 100ms to complete them in parallel.
-    
-    Earlier, we mentioned exclusive access to memory by tasks if they are
-    concurrent. Unfortunately, this is no longer true in parallel. If you want
-    to keep this property for certain values, you should use the
-    {!module:Atomic} module.
+    This task cooperation is achieved by {!val:yield}, which interrupts the
+    current task to leave the domain to another waiting task.
 
-    The user can launch tasks in parallel using {!val:call}. Note that the
-    {i witness} for the parallel task (the promise {!type:t}) is of the same
-    type as that produced by {!val:call_cc}.
+    The problem with cooperation is that it does not take into account the
+    irruption of external elements such as system events. Miou's objective is to
+    be able to {i interrupt} your application as soon as these events occur: in
+    other words, to {b preempt} the interruption of your tasks when these
+    events occur.
 
-    We recommend that you let Miou decide how many domains to allocate.
-    
-    {4 Domains.}
-    
-    Miou is able to use several cores and thus launch tasks in parallel because
-    it is able to create {!type:Domain.t}. However, the number of domains is
-    {b limited}: it is counter-productive to launch 10 domains when we only have
-    (physically) 4 cores, for example.
+    {4 Availability.}
 
-    Miou also differentiates between [dom0] (the main domain that runs your
-    program) and the other domains. The main difference is that {!val:call} (or
-    {!val:parallel}) will {b never} assign a new task in parallel to [dom0].
-    
-    {3 Synchronisation points.}
-    
-    We mentioned earlier that some tasks can "wait" for the results of other
-    tasks. We call these "synchronisation points". Since tasks can run
-    concurrently and/or in parallel, Miou offers functions where a particular
-    state of the tasks (the termination state) is expected.
-    
-    Miou will then be in a waiting state (it will simply observe the state of
-    the said task until this state has changed):
-    - while waiting for a concurrent task, Miou will then re-schedule and
-      execute other tasks in order to "unblock" the first one
-    - while waiting for a task to run in parallel, Miou will suggest that other
-      tasks assigned to the same domain can run while the first one continues to
-      run (on another domain) and return to a waiting state until the task in
-      question has finished.
+    If it's important for us to interrupt your application as soon as these
+    events are received, it's to increase the availability of your application
+    to handle these events.
 
-    It may be possible to wait for one ({!val:await}) or more tasks
-    ({!val:await_all}) using their promises. It is also possible to wait for one
-    of the available tasks ({!val:await_first} or {!val:await_one}). The result
-    of the first task to finish will be given when it is used.
-    
-    {3 System events.}
-    
-    Another waiting state exists: waiting for a system event, such as waiting
-    for a TCP/IP connection to arrive. Miou provides the ability for users to
-    implement these system event synchronisation points themselves. We recommend
-    reading the implementation of {!page:sleepers} with Miou to find out more
-    about this.
-    
-    {!module:Miou_unix} implements some of these points, such as waiting to
-    receive information ([read]) or waiting to be able to write information
-    ([write]), as well as other system events.
-    
-    What makes these points of synchronisation of system events different from
-    waiting for the result of a {i pure} task (which does not interact with the
-    system) is that we cannot calculate the {i waiting time}. We can wait a few
-    milliseconds or 1 hour for the arrival of a TCP/IP connection, for example.
-    
-    This makes it difficult to prioritise tasks in relation to each other, as
-    we lack too much information to find the optimum order for executing tasks.
-    Once again, Miou doesn't prioritise tasks.
-    
-    {2 The "round-robin" scheduler.}
-    
-    Miou implements what is known as a round-robin scheduler. This is a
-    scheduler with very simple rules:
-    + if a task arrives, execute it up to a certain {i quanta}
-    + if the task has finished, give the result
-    + if not, re-order the task at the end of the to-do list
-    + take the next task and repeat the operation.
-    
-    The special feature of a round-robin scheduler is that it does not
-    prioritise tasks according to their status. It simply allocates {b a fair}
-    amount of time/{i quanta} of domain usage to all tasks (a bit like
-    communism).
-    
-    So, by default, Miou suggests that a task can only emit one and only one
-    effect, which is our {!section:quanta}. Most of the functions proposed by
-    Miou produce an effect. Miou then reorders the task at the end of the to-do
-    list and repeats the operation.
-    
-    {3 Availability.}
-    
-    The advantage of this type of task management policy is that it increases
-    the availability of tasks. For example, 2 tasks waiting for 2 system events
-    (the reception of a TCP/IP packet and the waiting for a new TCP/IP
-    connection) will have the same execution time allocated to them.
-    
-    This availability means that Miou is more {i in-sync} with system events. In
-    fact, the system keeps these events until the application space requests
-    them (with [select()]) and consumes them ([read()], [accept()], etc.).
-    Miou's objective is to ensure that several tasks (dependent on these events)
-    can all respond to the consumption of these events from the system, without
-    one of them being able to have exclusive execution time on a domain.
-    
-    In this way, a Miou application can respond to the consumption of a [read()]
-    and an [accept()] without one of these tasks blocking the other - even
-    though the two correspond to completely different execution paths. Finally,
-    a Miou application {b is} available from a system and network point of view.
-    
-    {3 Time wasted.}
-    
-    The disadvantage of such a policy is the execution of pending tasks. This is
-    because Miou does not discriminate between tasks: it does not prioritise
-    tasks that can do something over those that are waiting.
-    
-    So it could happen that Miou "wastes" its time trying to execute pending
-    tasks for 1 {i quanta} and that the result of this execution comes to
-    nothing (because the result is not yet available).
-    
-    This non-discriminatory approach is important because if we consider waiting
-    for system events, it becomes difficult to prioritise tasks fairly since, by
-    definition, system events can occur at any time. Miou therefore responds to
-    the availability of tasks to consume system events. It does not address the
-    optimal scheduling of {i pure} tasks.
-    
-    {3 The famine problem.}
-    
-    The prioritisation of tasks coupled with the limited use of domains can lead
-    to a starvation problem. Indeed, through prioritisation, a task can be
-    excluded from using one of the available domains - because it has been
-    decided that other tasks have priority there. However, this excluded task
-    may be necessary (and even central) to the completion of our program.
-    
-    In this case, we talk about a starvation problem. The round-robin scheduler
-    solves this problem by not discriminating between tasks and by allocating
-    them a fair execution time on the domains. The round-robin scheduler is
-    {i starvation-free}. Even if it appears that Miou wasting time executing
-    tasks that would not produce any results, the central task required to
-    terminate our program would be invariably run in all cases.
-    
-    {3 Tuning.}
-    
-    It is possible to modify Miou's behaviour depending on the purpose of your
-    program. Choosing to allow a task to emit only one effect can have serious
-    implications for the application's performance. Miou therefore suggests that
-    the user can decide how many {i quantas} that tasks can consume.
-    
-    In this case, for certain so-called {i pure} applications, it can be
-    interesting to increase this number. We recommend that you read the
-    {{!page:merkle}merkle-tree} tutorial to understand all the subtleties.
-    
-    {2 Rules}
-    
-    Over and above its design, Miou imposes rules to assist the programmer in
-    designing his/her application. These rules are explained here. If the
-    developer does not respect these rules, Miou raises an {i uncatchable}
-    exception. In other words, an exception that the user has {b not} the
-    definition of and cannot ignore.
-    
-    {3 Rule 1, wait for all your tasks.}
+    Let's take the example of a task making a long calculation. If an event such
+    as the arrival of a TCP/IP connection were to occur at the same time as the
+    calculation, we would consider the latter to be more important than the
+    completion of the calculation. So we'd like to interrupt the calculation so
+    that your application can handle this event as a priority.
+
+    {[
+      let _, _ = Miou.run @@ fun () ->
+        let rec server () =
+          let socket = accept () in
+          let _ = Miou.call (handler socket) in
+          server () in
+        let prm0 = Miou.call_cc server in
+        let prm1 = Miou.call_cc my_long_computation in
+        Miou.both prm0 prm1 ;;
+
+      (* [my_long_computation] should have multiple cooperative points to let
+         the other task (our [server]) to accept incoming TCP/IP connexions. *)
+    ]}
+
+    In other words, your application is "more" available to handle events than
+    to perform the calculations requested. This approach becomes interesting for
+    services (such as an HTTP server) where the availability to handle such
+    events is more important than prioritizing the calculation requested by a
+    client.
+ 
+    {4 Cooperation and effects.}
+
+    And therein lies the crux of the problem: how do you preempt in a
+    fundamentally cooperative system?
+
+    If we want to be in the best position to manage system events, we need to
+    {i increase} the points of cooperation that the fibers can emit. This is how
+    Miou came up with a fundamental rule: {b an effect yields}.
+
+    All effects (those defined by Miou as well as those defined by the user)
+    reorder task execution. During this reordering, Miou can collect the system
+    events that have just occurred. The objective is to do this as often as
+    possible!
+
+    {4 Performance and events.}
+
+    At this point, we need to make clear to our future users a crucial choice we
+    made for Miou: we prefer a scheduler that's available for system events,
+    rather than one that performs well in calculations.
+
+    Indeed, on the cooperation points presented above, Miou will systematically
+    ask whether any system events have occurred. However, if your ambition is to
+    do nothing but calculations, the latter will be {i "polluted"} by these
+    unnecessary points of cooperation. So, by default, Miou is {b less}
+    efficient than other schedulers.
+
+    We've put together a short tutorial to explain Miou's behavior in such
+    cases: {{!page:merkle}Calculating a Merkle tree}.
+
+    {3 Miou and the system.}
+
+    One of Miou's objectives is to be used in a unikernel. As far as the latter
+    is concerned, possible interactions can be very limited. So we decided to
+    separate the scheduler ({!module:Miou}) from interactions with the
+    underlying system ({!module:Miou_unix} for a UNIX system).
+
+    There is a way to do this:
+    + define suspensions that will only be released when certain events occur
+    + Miou can collect these events and we can tell it which suspension should
+      be "unblocked" according to the collection.
+
+    {4 Suspension points.}
+
+    Miou offers a way of creating what we call a suspension point. This can be
+    created from a value {!type:syscall} (with a unique identifier) that the
+    user can keep. This suspension point can be "unblocked" if the
+    {!type:select} function given to Miou (via {!val:run}) informs it of the
+    "continuation" of this suspension.
+
+    Let's take [read()] as an example. This function, which interacts with the
+    system, can "block" (for example, if you try to read from a socket). To
+    avoid blocking (and leave it to the system), you can ask Miou to suspend
+    just beforehand so that it can do other tasks, and inform Miou as soon as
+    you know that this [read()] will not block.
+
+    {[
+      let global = Hashtbl.create 0x100
+
+      let miou_read fd buf off len =
+        let syscall = Miou.make (Fun.const ()) in
+        Hashtbl.add global fd syscall;
+        Miou.suspend syscall;
+        Unix.read fd buf off len
+    ]}
+
+    Here, we use a global table to remind us that the file-descriptor we're
+    using is associated with a {!type:syscall} we've just created. The next
+    objective is to define a {!type:select} function that will observe whether
+    the added file-descriptor is ready to be read.
+
+    {4 The [select()] function.}
+
+    Miou lets you inject a function to observe system events. This should appear
+    each time tasks are rescheduled, as explained above with regard to
+    application availability. This function should return any suspension points
+    that can be unblocked.
+
+    {[
+      let select ~poll:_ _cancelled_points =
+        let fds = Hashtbl.to_seq_keys global |> List.of_seq in
+        match Unix.select fds [] [] 0.1 with
+        | fds ->
+          let continuations = List.map (fun fd ->
+            let syscall = Hashtbl.find global fd in
+            Miou.continue_with syscall (fun () -> Hashtbl.remove global fd))
+            fds in
+          continuations
+
+      let run fn =
+        let events _domain =
+          { Miou.select; interrupt= Fun.const () } in
+        Miou.run ~events fn
+    ]}
+
+    As you can see, the next step is to produce a {!val:run} function that uses
+    our [select]. This is what {!module:Miou_unix} proposes for the example.
+    However, there are a number of unresolved issues:
+    + in particular, the cancellation of a task and its suspension point
+    + or the ability to wait only for system events
+    + or the ability to interrupt such an observation
+
+    We recommend reading the chapter on {{!section:system}system events}
+    and its tutorial on {!page:sleepers}.
+
+    {3 User task management.}
+
+    Users can manipulate their tasks via their {i promises} (see {!type:t}). A
+    promise is an OCaml value representing the task. It can be used to
+    {!val:await} for or {!val:cancel} a task. However, certain rules apply to
+    its use.
+
+    {4 Rule 1, await for all your tasks.}
     
     It is forbidden to forget your children. The creation of a task necessarily
-    implies that the developer waits ({!val:await}) or cancels ({!val:cancel})
-    the task afterwards:
+    implies that the developer {!val:await}s or {!val:cancel}s the task
+    afterwards:
     
     {[
       # Miou.run @@ fun () -> Miou.call_cc (Fun.const ()) ;;
       Exception: Miou.Still_has_children.
     ]}
     
-    {3 Rule 2, only wait for direct children.}
+    {4 Rule 2, only await for direct children.}
     
-    You can only wait for your direct children. Transferring a promise to
-    another task so that it can wait for it is illegal:
+    You can only await for your direct children. Transferring a promise to
+    another task so that it can await for it is illegal:
     
     {[
       # Miou.run @@ fun () ->
@@ -268,18 +351,104 @@
         Miou.await_all [ p; q ] |> ignore
       Exception: Miou.Not_a_child.
     ]}
+
+    Task relationship clarifies what is involved in managing tasks and what they
+    should transmit to each other. To answer this question, users will have to
+    find their own mechanisms ({i mutex}, {i condition}, {i ipc}, etc.) to share
+    results between tasks that are not directly related.
     
-    {3 Rule 3, a task can only be awaited or cancelled.}
+    {4 Rule 3, a task can only be awaited or cancelled.}
     
-    Miou only allows you to wait for or cancel a task. It is also impossible to
+    Miou only allows you to await for or cancel a task. It is also impossible to
     detach a task. For more information on this subject, we recommend reading
-    the {!section:orphans} section.
+    the {!section:orphans} section and our following rule:
+    {{!section:background}background tasks}.
     
-    {3 Rule 4, a task only finishes after its children have finished.}
+    {4 Rule 4, a task only finishes after its children have finished.}
     
     By extension, as soon as a task is finished, all its children are finished
     too. The same applies to cancellation. If you cancel a task, you also cancel
     its children.
+
+    {4:background Rule 5, background tasks.}
+
+    There is, however, a {i pattern} in which we'd like to put a task aside: in
+    other words, forget about it for a while. Miou offers a specific API for
+    this pattern, described {{!section:orphans}here}.
+
+    {4 Rule 6, a parallel task will never appear in the main domain.}
+
+    There may be a {i contention} problem if you involve [dom0] in the tasks to
+    be run in parallel. There may in fact be a situation where [dom0] is
+    awaiting for [dom1], which is awaiting for [dom0].
+
+    Miou does not allow [dom0] to be assigned a parallel task. These assertions
+    in the code below are true all the time.
+
+    {[
+      # Miou.run @@ fun () ->
+        let prm1 = Miou.call @@ fun () ->
+          let prm2 = Miou.call @@ fun () ->
+            Miou.Domain.self () in
+          Miou.await_exn prm2, Miou.Domain.self () in
+        let u, v = Miou.await_exn prm1 in
+        assert (Miou.Domain.Uid.to_int u <> 0);
+        assert (Miou.Domain.Uid.to_int v <> 0);
+        assert (u <> v);;
+      - : unit = ()
+    ]}
+
+    However, you can involve [dom0] in the calculations with {!val:call_cc}.
+
+    {[
+      let () = Miou.run @@ fun () ->
+        let prm = Miou.call_cc server in
+        Miou.parallel server (List.init (Miou.Domain.count ()) (Fun.const ()))
+        |> List.iter (function Ok () -> () | Error exn -> raise exn);
+        Miou.await_exn prm
+    ]}
+
+    {4 Rule 7, suspension points are local to the domain.}
+
+    A suspension point is local to the domain. This means that only the domain
+    in which it was created can unlock it. The Event value is created for each
+    domain created by Miou. The unique identifier is also local to the domain.
+
+    {[
+      # Miou.run @@ fun () ->
+        let fn () = let s = Miou.make (Fun.const ()) in Miou.uid s in
+        let uids = Miou.parallel fn (List.init 2 (Fun.const ())) in
+        let[@warning "-8"] [ a; b ] = List.map Result.get_ok uids in
+        assert (a = b)
+      ;;
+      - : unit = ()
+    ]}
+
+    This code shows that two suspension points are created in two different
+    domains and their unique ids are the same.
+
+    The advantage of making suspension points local to domains is that the
+    domain is solely responsible for these points and there are no inter-domain
+    transfer mechanisms for managing system events. For the example,
+    {!module:Domain.DLS} can be used for a table of current events in each
+    domain.
+
+    {[
+      let get, set =
+        let make () = Hashtbl.create () in
+        let dom = Stdlib.Domain.DLS.new_key make in
+        let get () = Stdlib.Domain.DLS.get dom in
+        let set value = Stdlib.Domain.DLS.set dom value in
+        get, set
+
+      let miou_read fd buf off len =
+        let syscall = Miou.make (Fun.const ()) in
+        let tbl = get () in
+        Hashtbl.add tbl fd syscall;
+        set tbl;
+        Miou.suspend syscall;
+        Unix.read fd buf off len
+    ]}
 *)
 
 module State = State
@@ -309,9 +478,10 @@ module Ownership : sig
   *)
 
   type t
-
-  and uid
   (** The type of ownerships. *)
+
+  type uid
+  (** The type of unique resource identifiers. *)
 
   val own : finally:('a -> unit) -> 'a -> t
   (** [own ~finally value] associates the value and this finaliser with the
@@ -383,7 +553,10 @@ module Ownership : sig
       {!val:check} will raise an {i uncatchable} exception [Not_owner]. *)
 
   val uid : t -> uid
+  (** [uid resource] returns its unique ID. *)
+
   val pp : Format.formatter -> uid -> unit
+  (** A pretty-printer for {!type:uid}s. *)
 end
 
 type 'a t
@@ -421,6 +594,10 @@ val self : unit -> Promise.Uid.t * Domain.Uid.t * int
     runs the current promise and how many resources has the current promise. *)
 
 val stats : unit -> int
+(** [stats ()] returns the number of words (in the OCaml sense) reachable from
+    the current promise. A promise keeps several pieces of information, such as
+    its active children or associated resources. It can be interesting to
+    monitor its memory usage. *)
 
 (** {2:orphans Daemon and orphan tasks.}
 
@@ -574,7 +751,7 @@ val parallel : ('a -> 'b) -> 'a list -> ('b, exn) result list
         end
     ]}
 
-    Note that {!val:parallel} launches tasks ({i fork}) and waits for them
+    Note that {!val:parallel} launches tasks ({i fork}) and awaits for them
     ({i join}). Conceptually, this corresponds to a {!val:call} on each elements
     of the given list and a {!val:await_all} on all of them, with tasks
     allocated equally to the domains.
@@ -594,7 +771,7 @@ val parallel : ('a -> 'b) -> 'a list -> ('b, exn) result list
         Miou.await_exn p
     ]} *)
 
-(** {2 System events.}
+(** {2:system System events.}
 
     Miou does not monitor system events. We arbitrarily leave this event
     monitoring to the user (so that Miou only requires OCaml to run). The
@@ -729,7 +906,7 @@ val is_pending : 'a syscall -> bool
 (** {2 Await a promise.} *)
 
 val await : 'a t -> ('a, exn) result
-(** [await prm] waits for the task associated with the promise to finish. You
+(** [await prm] awaits for the task associated with the promise to finish. You
     can assume that after {!val:await}, the task has ended with an exception
     with the [Error] case or normally with the [Ok] case. In the case of an
     abnormal termination (the raising of an exception), the children of the
@@ -743,12 +920,12 @@ val await : 'a t -> ('a, exn) result
           Miou.await_exn child_of_p in
         Miou.await p ;;
       - (unit, exn) result = Error (Failure "p")
-      # (* [child_of_p] was cancelled and you don't wait 10s. *)
+      # (* [child_of_p] was cancelled and you don't await 10s. *)
     ]}
 
-    Note that you should {b always} wait for your children (it's illegal to
+    Note that you should {b always} await for your children (it's illegal to
     forget your children), as in the example above (even if an exception
-    occurs). If a task does not wait for its children, an {i uncatchable}
+    occurs). If a task does not await for its children, an {i uncatchable}
     exception is raised by Miou:
 
     {[
@@ -762,16 +939,16 @@ val await_exn : 'a t -> 'a
     the [Error] case. *)
 
 val await_all : 'a t list -> ('a, exn) result list
-(** [await_all prms] waits for all the tasks linked to the promises given. If
+(** [await_all prms] awaits for all the tasks linked to the promises given. If
     one of the tasks raises an {i uncatchable} exception, {!val:await_all}
-    reraises the said exception. All tasks are waited for, regardless of whether
-    any fail. *)
+    reraises the said exception. All tasks are awaited for, regardless of
+    whether any fail. *)
 
 val await_first : 'a t list -> ('a, exn) result
-(** [await_first prms] waits for a task to finish (by exception or normally) and
-    cancels all the others. If several tasks finish "at the same time", normally
-    completed tasks are preferred to failed ones. This function can be useful
-    for timeouts:
+(** [await_first prms] awaits for a task to finish (by exception or normally)
+    and cancels all the others. If several tasks finish "at the same time",
+    normally completed tasks are preferred to failed ones. This function can
+    be useful for timeouts:
 
     {[
       # exception Timeout ;;
@@ -785,7 +962,7 @@ val await_first : 'a t list -> ('a, exn) result
     @raise Invalid_argument if the promise list is empty. *)
 
 val await_one : 'a t list -> ('a, exn) result
-(** [await_one prms] waits for a task to finish (by exception or normally).
+(** [await_one prms] awaits for a task to finish (by exception or normally).
     Despite {!val:await_first}, {!val:await_one} does {b not} cancel all the
     others. The user must {!val:await} them, otherwise Miou will assume they're
     still active and will raise [Still_has_children].
@@ -801,7 +978,7 @@ val await_one : 'a t list -> ('a, exn) result
     @raise Invalid_argument if the promise list is empty. *)
 
 val both : 'a t -> 'b t -> ('a, exn) result * ('b, exn) result
-(** [both prm0 prm1] waits [prm0] {b and}) [prm1]. It's equivalent to:
+(** [both prm0 prm1] awaits [prm0] {b and}) [prm1]. It's equivalent to:
 
     {[
       let both prm0 prm1 =
