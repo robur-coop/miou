@@ -16,4 +16,5 @@ examples/digest/main.ml: 28cfc08ddef2d9f0bd78bdd2d5e5f5e33d77f1eab5d8d61d482cbd1
 ```
 
 The program expects a list of files which can be given on the command line or
-transmitted via standard input. The hash algorithm used is SHA256.
+transmitted via standard input. The hash algorithm used is SHA256. It requires
+`digestif` to calculate hashes.
