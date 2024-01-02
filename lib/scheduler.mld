@@ -291,7 +291,7 @@ In this small example, it's clear that our first task didn't run directly! It
 was added to our todo list, but it was only the [Await] and its rescheduling
 that gave our first task the opportunity to run.
 
-{Conclusion.}
+{2 Conclusion.}
 
 Admittedly, this code is quite simple and doesn't really define concepts that
 are important for a scheduler such as this:
