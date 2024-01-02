@@ -12,14 +12,11 @@ As stated in the documentation, and this is a fundamental rule:
 > you should never give Miou blocking tasks (such as [Unix.sleepf])
 
 That said, how do you manage blocking tasks? Miou offers an API that allows
-you to extend its API with such tasks. The idea is to inform Miou of a promise
-that is {b not} associated with a task (because the latter would be blocking)
-and to notify it of the task that we would like to do as soon as we are {b sure}
-that it is a non-blocking task.
-
-This notification is possible because Miou lets you inject such a function
-which will notify it. This is the [events] function expected as a parameter to
-the {!val:Miou.run} function.
+you to extend its API with such tasks. The idea is to create a
+{!type:Miou.syscall} which will then allow us to create a {i suspension point}.
+In other words, we will deliberately suspend the execution of our function.
+Finally, by injecting another function, we'll inform Miou when it's time to
+{i unblock} our suspension point - and let the function continue.
 
 {2 What we want to do?}
 
@@ -65,7 +62,7 @@ have waited [n] seconds. In this way, the user is able to:
 + organise their indicator management according to a unique ID
   ({!val:Miou.uid})
 + transfer the continuation once the system has warned us to do so
-  ({!val:Miou.task})
+  ({!val:Miou.continue_with})
 
 The first function allows us to create our [sleep] "syscall". The second will
 allow us to specify the point at which we would like to obtain the result of our
@@ -86,10 +83,10 @@ let sleep until =
 
 As you can see, the implementation of a 'syscall' is relatively simple, but it
 is always associated with the implementation or extension of another function:
-the [events] function. The [return] value is the function that is called as soon
-as the given continuation has ended. In our case, we would like to return
-[() : unit] but we could very well return the value of a reference that the
-given continuation filled up.
+the {!type:Miou.select} function. The [return] value is the function that is
+called as soon as the given continuation has ended. In our case, we would like
+to return [() : unit] but we could very well return the value of a reference
+that the given continuation filled up.
 
 Miou is quite stupid, trying to carry out all the tasks we give it in the hope
 that they will solve our promises. And it does this as long as it has at least
@@ -99,8 +96,8 @@ can run this code:
 
 {[
 let dummy _ =
-  { select= Fun.const []
-  ; interrupt= ignore }
+  let select ~poll:_ _cancelled_syscalls = [] in
+  { Miou.select; Miou.interrupt= ignore }
 
 let () = Miou.(run ~events:dummy @@ fun () -> sleep 1.; ())
 ]}
@@ -109,45 +106,47 @@ This code will never end simply because we didn't give Miou anything (a
 {!type:Miou.continue} value) to {i un-suspend} (and continue) our suspension
 point.
 
-But as you can see, I've specified an [events] function here which always
-returns an empty list. In truth, if Miou has no more tasks to do and there are
-still syscalls, it will try one last thing: execute our [events] function. This
-can return a new continuation (always non-blocking) that could resolve our
-syscall. And it's here that we'll be able to inject the tasks that will continue 
-({i un-suspend}) our sleepers.
+But as you can see, I've specified an {!type:Miou.select} function here which
+always returns an empty list. In truth, if Miou has no more tasks to do and
+there are still syscalls, it will try one last thing: execute our
+{!type:Miou.select} function. This can return a new continuation (always
+non-blocking) that could resolve our syscall. And it's here that we'll be able
+to inject the tasks that will continue  ({i un-suspend}) our sleepers.
 
-Contrary to what we have just said, this [events] function (and only this one)
-{b can block}! And, in reality, this is not a problem as all the tasks have been
-executed. We can therefore be in a {i busy waiting} state for the next event to
-unblock our execution flow.
+Contrary to what we have just said, this {!type:Miou.select} function (and only
+this one) {b can block}! And, in reality, this is not a problem as all the tasks
+have been executed. We can therefore be in a {i busy waiting} state for the next
+event to unblock our execution flow.
 
 In our case, it's a case of taking the {b smallest} sleeper, waiting and then
 returning a continuation that un-suspend that same sleeper. We also need to
 update the other sleepers because we're going to consume time.
 
 {[
-let select () =
+let select ~poll:_ _cancelled_syscalls =
   let min =
     Hashtbl.fold
-      (fun uid (prm, until) -> function
-        | Some (_uid', _prm', until') when until < until' ->
-            Some (uid, prm, until)
+      (fun uid (syscall, until) -> function
+        | Some (_uid', _syscall', until') when until < until' ->
+            Some (uid, syscall, until)
         | Some _ as acc -> acc
-        | None -> Some (uid, prm, until))
+        | None -> Some (uid, syscall, until))
       sleepers None
   in
   match min with
   | None -> []
-  | Some (uid, prm, until) ->
+  | Some (_, _, until) ->
       let until = Float.min 0.100 until in
       Unix.sleepf until;
       Hashtbl.filter_map_inplace
-        (fun _ (prm, until') -> Some (prm, Float.max 0. (until' -. until)))
+        (fun _ (syscall, until') ->
+          Some (syscall, Float.max 0. (until' -. until)))
         sleepers;
       Hashtbl.fold
         (fun uid (syscall, until) acc ->
           if until <= 0. then
-            Miou.task syscall (fun () -> Hashtbl.remove sleepers uid) :: acc
+            Miou.continue_with syscall (fun () -> Hashtbl.remove sleepers uid)
+            :: acc
           else acc)
         sleepers []
 
@@ -169,8 +168,8 @@ them.
 
 {2 Usage.}
 
-Now that we have our [events] function and our {i syscall} [sleep], we can use
-them:
+Now that we have our {!type:Miou.select} function and our {i syscall} [sleep],
+we can use them:
 
 {[
 let prgm () =
@@ -187,12 +186,13 @@ let () =
   assert (t1 -. t0 < 3.)
 ]}
 
-Note that our [events] function has been transferred to {!val:Miou.run}! Without
-it, our code wouldn't work. And that's it! Our program did not fail to run,
-which means that we used {b less} than 3 seconds (about 2).
+Note that our {!type:Miou.select} function has been transferred to
+{!val:Miou.run} (via the {!type:Miou.events} value)! Without it, our code
+wouldn't work. And that's it! Our program did not fail to run, which means that
+we used {b less} than 3 seconds (about 2).
 
 {[
-$ ocamlfind opt -linkpkg -package miou main.ml
+$ ocamlfind opt -linkpkg -package unix,miou main.ml
 $ ./a.out
 $ echo $?
 0
@@ -247,9 +247,9 @@ done some parallel programming, these mechanisms can:
 - be error prone in very subtle cases of how domains will react.
 
 Based on these findings, we propose a fairly simple design: a {i syscall}
-is {b always} managed by the domain that launched it. It is somewhat equivalent
-to {!val:Miou.call_cc}, suspension only ({!val:Miou.suspend}) operates
-concurrently with other tasks.
+is {b always} managed by the domain that launched it. It is {b local} to the
+domain. It is somewhat equivalent to {!val:Miou.call_cc}, suspension only
+({!val:Miou.suspend}) operates concurrently with other tasks.
 
 {3 Local events at domains and local storage.}
 
@@ -263,13 +263,22 @@ associate values with domains and retrieve these values according to the domain.
 This is done using the {!module:Domain.DLS} module.
 
 {[
-let sleepers =
+let get, set =
   let make () = Hashtbl.create 0x100 in
-  let key = Domain.DLS.new_key make in
-  fun () -> Domain.DLS.get key
+  let key = Stdlib.Domain.DLS.new_key make in
+  let get () = Stdlib.Domain.DLS.get key in
+  let set value = Stdlib.Domain.DLS.set key value in
+  get, set
+
+let sleep until =
+  let syscall = Miou.make (Fun.const ()) in
+  let sleepers = get () in
+  Hashtbl.add sleepers (Miou.uid syscall) (syscall, until);
+  set sleepers;
+  Miou.suspend syscall
 ]}
 
-We then just need to call [sleepers ()] in all the places where we use our
+We then just need to call [get ()] & [set ()] in all the places where we use our
 hash-table to make sure we're using the one that's local to the domain. And
 voilà! As you can see, using {i Domain Local Storage} simplifies our code
 enormously and saves us from having to implement and manage synchronisation
@@ -278,10 +287,11 @@ mechanisms between domains.
 {3 Cancellation & interruption.}
 
 There is, however, one final point that we have deliberately omitted from this
-little tutorial: interruption. It was explained above that our [events] function
-can block and that it's no big deal - in fact, it is. We need to rephrase this
-assumption: [events] can block, but there must be a way for Miou to unblock
-the function - and by extension, the domain.
+little tutorial: interruption. It was explained above that our
+{!type:Miou.select} function can block and that it's no big deal - in fact, it
+is. We need to rephrase this assumption: {!type:Miou.select} can block, but
+there must be a way for Miou to unblock the function - and by extension, the
+domain.
 
 It's fair to ask why we would need such a mechanism. The answer is cancellation.
 It is possible to {!val:Miou.cancel} a task with Miou.
@@ -311,8 +321,9 @@ and re-observe their states before finally realising that the task it was doing
 has just been cancelled.
 
 The problem is that this interrupt must also interrupt our [Unix.sleepf] on
-which our domain is based. It's here, in our [events] function, that we're going
-to replace [Unix.sleepf] (which can't be interrupted) with [Unix.select]!
+which our domain is based. It's here, in our {!type:Miou.select} function, that
+we're going to replace [Unix.sleepf] (which can't be interrupted) with
+[Unix.select]!
 
 In fact, [Unix.select] can both wait (like [Unix.sleepf]) and interrupt itself
 if an event occurs on one of its file-descriptors. We are going to use the
@@ -324,7 +335,9 @@ observes the other side.
 
 We also need to handle only syscalls that are pending. A task cancellation
 clean-up syscalls into the said task and we also need to clean-up the syscalls
-that have been deleted by Miou in our sleepers.
+that have been deleted by Miou in our sleepers. Miou passes to our
+{!type:Miou.select} function the points that have been cancelled. From this
+list, we can 'clean up' our table to keep only the active sleepers.
 
 Finally, we will have to manage 2 cases, the one where we receive an interrupt
 and the one where we have just consumed our {i quanta}. In the first case, we'll
@@ -332,73 +345,94 @@ need to consume the byte sent to us by Miou, while the second case is similar to
 what we did before.
 
 {[
-let rec consume_interrupt ic =
-  if Unix.read ic (Bytes.create 1) 0 1 = 0 then consume_interrupt ic
+let consume_interrupt ic =
+  let buf = Bytes.create 0x1000 in
+  let _ = Unix.read ic buf 0 (Bytes.length buf) in
+  ()
 
 let update sleepers n =
   Hashtbl.filter_map_inplace
-    (fun _ (prm, until) ->
+    (fun _ (syscall, until) ->
       let until' = Float.max 0. (until -. n) in
-      Some (prm, until'))
+      Some (syscall, until'))
     sleepers
 
-let select interrupt () =
-  let sleepers = sleepers () in
-  (* clean-up our sleepers. *)
+let minimums sleepers =
+  let cs = ref [] in
   Hashtbl.filter_map_inplace
-    (fun _ (prm, until) ->
-      if Miou.is_pending prm then Some (prm, until) else None)
+    (fun _ (syscall, until) ->
+      if until <= 0. then (
+        cs := Miou.continue_with syscall (Fun.const ()) :: !cs;
+        None)
+      else Some (syscall, until))
+    sleepers;
+  !cs
+
+let select interrupt ~poll cancelled =
+  let sleepers = get () in
+  Hashtbl.filter_map_inplace
+    (fun _ (syscall, until) ->
+      if List.exists (( = ) (Miou.uid syscall)) cancelled then None
+      else Some (syscall, until))
     sleepers;
   let min =
     Hashtbl.fold
-      (fun uid (prm, until) -> function
-        | Some (_uid', _prm', until') when until < until' ->
-            Some (uid, prm, until)
+      (fun uid (syscall, until) -> function
+        | Some (_uid', _syscall', until') when until < until' ->
+            Some (uid, syscall, until)
         | Some _ as acc -> acc
-        | None -> Some (uid, prm, until))
+        | None -> Some (uid, syscall, until))
       sleepers None
   in
   let ts =
     Option.map (fun (_, _, until) -> until) min |> function
-    | Some ts -> ts
-    | None -> 0. (* don't wait *) in
-  let t0 = Unix.gettimeofday ()
-  (* we must record how long we [select ()] to update then our [sleepers]. *)
+    | Some ts -> Float.min ts 0.100
+    | None -> if poll then 0. else 0.100
+  in
+  let t0 = Unix.gettimeofday () in
   match Unix.select [ interrupt ] [] [] ts with
-  | [], _, _ -> (
-    (* no interruption *)
-    let t1 = Unix.gettimeofday () in
-    update sleepers (t1 -. t0);
-    match min with
-    | Some (uid, prm, _) ->
-      Hashtbl.remove sleepers uid;
-      [ Miou.task prm (Fun.const ()) ]
-    | None -> [])
+  | [], _, _ ->
+      let t1 = Unix.gettimeofday () in
+      update sleepers (t1 -. t0);
+      set sleepers;
+      minimums sleepers
   | _ ->
-    (* we got an interruption signal *)
-    let t1 = Unix.gettimeofday () in
-    consume_interrupt interrupt;
-    update sleepers (t1 -. t0);
-    []
+      let t1 = Unix.gettimeofday () in
+      update sleepers (t1 -. t0);
+      consume_interrupt interrupt;
+      set sleepers;
+      minimums sleepers
 
 let events _ =
   let ic, oc = Unix.pipe ~cloexec:true () in
   let rec interrupt () =
-    if Unix.write oc (Bytes.make 1 '\000') 0 1 = 0 then interrupt () in
+    if Unix.write oc (Bytes.make 1 '\000') 0 1 = 0 then interrupt ()
+  in
   { Miou.select= select ic; interrupt }
 ]}
+
+{4 The [poll] argument.}
+
+There's a situation where Miou has no more tasks to do. In other words, your
+program only has suspension points waiting for events from the system. In this
+very specific case, it is possible to wait {b indefinitely} for any event from
+the system (including an {i interrupt}, of course). In this case, the [poll]
+value is [true]. You can therefore give a negative value to [select()] (which
+means that it waits indefinitely).
+
+{4 Result.}
 
 And there you have it, if you run our example code with cancellation, you can
 see the interrupt mechanism and the fact that one of our syscalls has been
 cleaned out. And our program finishes after 1 second.
 
 This code shows the basic architecture of a real scheduler. We centralise
-everything around the [select] (which can become [poll] or something else).
-Quite a few issues have not been mentioned here (such as signal management,
-system interruption, or how to properly close our pipes). Above all, this means
-that this code is just an example! It does, however, give a general idea of how
-{!module:Miou_unix} (Miou's Unix extension) works and how you can extend Miou
-for more specific system events.
+everything around the {!type:Miou.select}. Quite a few issues have not been
+mentioned here (such as signal management, system interruption, or how to
+properly close our pipes). Above all, this means that this code is just an
+example! It does, however, give a general idea of how {!module:Miou_unix}
+(Miou's Unix extension) works and how you can extend Miou for more specific
+system events.
 
 {2 Conclusion.}
 
