@@ -1267,7 +1267,7 @@ module Pool = struct
     && Domain.system_tasks_suspended domain = false
     && Domain.one_task_for ~domain pool = false
 
-  let _pp_stats ppf (pool, domain) =
+  let pp_stats ppf (pool, domain) =
     Fmt.pf ppf
       "[pool:%dw, domain:%dw, domain.tasks:%dw, domain.pending_events: %dw]"
       Obj.(reachable_words (repr pool))
@@ -1331,7 +1331,7 @@ module Pool = struct
         pool.working_counter <- pool.working_counter + 1;
         Mutex.unlock pool.mutex;
         Domain.run pool domain ();
-        (* Logs.debug (fun m -> m "%a" pp_stats (pool, domain)); *)
+        Logs.debug (fun m -> m "%a" pp_stats (pool, domain));
         Mutex.lock pool.mutex;
         pool.working_counter <- pool.working_counter - 1;
         if (not pool.stop) && Int.equal pool.working_counter 0 then
@@ -1568,8 +1568,8 @@ let run ?(quanta = quanta) ?(events = Fun.const dummy_events)
     try
       while Promise.is_pending prm0 && not pool.fail do
         transfer_continuations_into_dom0 pool dom0;
-        handler.handler (Domain.run pool dom0) ()
-        (* Logs.debug (fun m -> m "%a" Pool.pp_stats (pool, dom0)) *)
+        handler.handler (Domain.run pool dom0) ();
+        Logs.debug (fun m -> m "%a" Pool.pp_stats (pool, dom0))
       done;
       if not pool.fail then Promise.to_result prm0
       else Error (Failure "A domain failed")

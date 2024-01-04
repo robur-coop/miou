@@ -57,10 +57,11 @@ let report src level ~over k msgf =
     (domain, level, src, header)
 
 let mutex_logs = Mutex.create ()
+let miou_debug = Sys.getenv_opt "MIOU_DEBUG"
 
 let kmsg : type a b. (unit -> b) -> ?src:string -> level -> (a, b) msgf -> b =
  fun k ?src level msgf ->
-  match (Sys.getenv_opt "MIOU_DEBUG", level) with
+  match (miou_debug, level) with
   | Some _, _ ->
       let over () = Mutex.unlock mutex_logs in
       Mutex.lock mutex_logs;
