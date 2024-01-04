@@ -46,23 +46,30 @@ let bind_and_listen ?(backlog = 64) { fd; owner; _ } sockaddr =
   Unix.bind fd sockaddr;
   Unix.listen fd backlog
 
+module Table = Hashtbl.Make (struct
+  type t = Unix.file_descr
+
+  let equal a b = Int.equal (Obj.magic a) (Obj.magic b)
+  let hash v = (Obj.magic v) land max_int
+end)
+
 type unix_scheduler = {
-    rd: (Unix.file_descr, unit Miou.syscall list) Hashtbl.t
-  ; wr: (Unix.file_descr, unit Miou.syscall list) Hashtbl.t
+    rd: unit Miou.syscall list Table.t
+  ; wr: unit Miou.syscall list Table.t
   ; sleepers: (float * unit Miou.syscall * bool ref) Miou.Heapq.t
   ; revert: (Miou.uid, Unix.file_descr) Hashtbl.t
 }
 
 let clean_syscalls dom (uids : Miou.uid list) =
   let clean uid' (fd : Unix.file_descr) tbl =
-    match Hashtbl.find tbl fd with
+    match Table.find tbl fd with
     | syscalls -> begin
         Logs.debug (fun m -> m "clean syscalls linked to %a" pp_file_descr fd);
         match
           List.filter (fun syscall -> uid' <> Miou.uid syscall) syscalls
         with
-        | [] -> Hashtbl.remove tbl fd
-        | syscalls -> Hashtbl.replace tbl fd syscalls
+        | [] -> Table.remove tbl fd
+        | syscalls -> Table.replace tbl fd syscalls
       end
     | exception Not_found -> ()
   in
@@ -86,8 +93,8 @@ let get, set =
     let dummy = (0.0, Miou.make (Fun.const ()), ref false) in
     let compare (a, _, _) (b, _, _) = Float.compare a b in
     {
-      rd= Hashtbl.create 0x100
-    ; wr= Hashtbl.create 0x100
+      rd= Table.create 0x100
+    ; wr= Table.create 0x100
     ; sleepers= Miou.Heapq.create ~compare ~dummy 0x100
     ; revert= Hashtbl.create 0x100
     }
@@ -137,9 +144,9 @@ let blocking_read fd =
   let unix = get () in
   Hashtbl.add unix.revert uid fd;
   (try
-     let syscalls = Hashtbl.find unix.rd fd in
-     Hashtbl.replace unix.rd fd (syscall :: syscalls)
-   with Not_found -> Hashtbl.add unix.rd fd [ syscall ]);
+     let syscalls = Table.find unix.rd fd in
+     Table.replace unix.rd fd (syscall :: syscalls)
+   with Not_found -> Table.add unix.rd fd [ syscall ]);
   Logs.debug (fun m ->
       m "new read() point [%d] on %a" (uid :> int) pp_file_descr fd);
   set unix;
@@ -151,9 +158,9 @@ let blocking_write fd =
   let unix = get () in
   Hashtbl.add unix.revert uid fd;
   (try
-     let syscalls = Hashtbl.find unix.wr fd in
-     Hashtbl.replace unix.wr fd (syscall :: syscalls)
-   with Not_found -> Hashtbl.add unix.wr fd [ syscall ]);
+     let syscalls = Table.find unix.wr fd in
+     Table.replace unix.wr fd (syscall :: syscalls)
+   with Not_found -> Table.add unix.wr fd [ syscall ]);
   Logs.debug (fun m ->
       m "new write() point [%d] on %a" (uid :> int) pp_file_descr fd);
   set unix;
@@ -350,20 +357,24 @@ let quanta =
 
 let transmit_fds syscalls tbl fds =
   let fold acc fd =
-    match Hashtbl.find tbl fd with
-    | [] -> Hashtbl.remove tbl fd; acc
+    match Table.find tbl fd with
+    | [] -> Table.remove tbl fd; acc
     | syscalls ->
         let f syscall = Miou.continue_with syscall (Fun.const ()) in
-        Hashtbl.remove tbl fd;
+        Table.remove tbl fd;
         List.(rev_append (rev_map f syscalls) acc)
     | exception Not_found -> acc
   in
   List.fold_left fold syscalls fds
 
 let no_events unix =
-  Hashtbl.length unix.rd = 0
-  && Hashtbl.length unix.wr = 0
+  Table.length unix.rd = 0
+  && Table.length unix.wr = 0
   && Miou.Heapq.is_empty unix.sleepers
+
+let[@inline always] keys_of_table tbl =
+  let res = ref [] in
+  Table.iter (fun k _ -> res := k :: !res) tbl; !res
 
 let select _domain interrupt ~poll (cancelled_syscalls : Miou.uid list) =
   let unix = get () in
@@ -378,8 +389,8 @@ let select _domain interrupt ~poll (cancelled_syscalls : Miou.uid list) =
     []
   end
   else begin
-    let rds = List.of_seq (Hashtbl.to_seq_keys unix.rd) in
-    let wrs = List.of_seq (Hashtbl.to_seq_keys unix.wr) in
+    let rds = keys_of_table unix.rd in
+    let wrs = keys_of_table unix.wr in
     let now = Unix.gettimeofday () in
     let ts =
       match smallest_sleeper ~now unix.sleepers with
