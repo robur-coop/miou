@@ -294,17 +294,7 @@ let suspend t he ~prms =
           Log.debug (fun m -> m "return %d action(s)" (List.length actions));
           (he, actions))
 
-let rec launch_stack ?aaaa_timeout ?connect_delay ?connect_timeout
-    ?resolve_timeout ?resolve_retries t () =
-  let prms = Miou.orphans () in
-  let he =
-    Happy_eyeballs.create ?aaaa_timeout ?connect_delay ?connect_timeout
-      ?resolve_timeout ?resolve_retries (clock ())
-  in
-  Log.debug (fun m -> m "the daemon is launched");
-  Miou.call (go t ~prms he)
-
-and go t ~prms he () =
+let rec go t ~prms he () =
   let he, cont, actions =
     if Miou.Queue.is_empty t.queue then Happy_eyeballs.timer he (clock ())
     else (he, `Suspend, [])
@@ -323,6 +313,16 @@ and go t ~prms he () =
       List.iter (handle_one_action ~prms t) actions;
       Miou.yield ();
       go t ~prms he ()
+
+let launch_stack ?aaaa_timeout ?connect_delay ?connect_timeout ?resolve_timeout
+    ?resolve_retries t () =
+  let prms = Miou.orphans () in
+  let he =
+    Happy_eyeballs.create ?aaaa_timeout ?connect_delay ?connect_timeout
+      ?resolve_timeout ?resolve_retries (clock ())
+  in
+  Log.debug (fun m -> m "the daemon is launched");
+  Miou.call (go t ~prms he)
 
 let connect_ip t ips =
   let waiter = Atomic.make In_progress in
@@ -436,16 +436,19 @@ let send_recv (timeout, closed, fd) ({ Cstruct.len; _ } as tx) =
           let packet = read_loop ~id `Tcp fd in
           (packet, Miou_unix.transfer fd)
         in
-        Miou_unix.disown fd;
         match with_timeout ~timeout ~give:[ Miou_unix.owner fd ] fn with
         | Ok (packet, _) ->
             Log.debug (fun m -> m "got a DNS packet from the resolver");
+            Miou_unix.disown fd;
             Ok packet
         | Error Timeout ->
             Log.warn (fun m -> m "DNS request timeout");
+            Miou_unix.disown fd;
+            closed := true;
             error_msgf "DNS request timeout"
         | Error (Failure msg) ->
             Log.warn (fun m -> m "Got a failure: %s" msg);
+            Miou_unix.disown fd;
             closed := true;
             Error (`Msg msg)
         | Error exn ->
