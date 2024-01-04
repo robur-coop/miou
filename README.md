@@ -192,20 +192,6 @@ those cases that we consider *marginal* in the interest of internalizing
 suspension mecanism rather than exporting it to the user (but which are equally
 important in the design of an application).
 
-### A round-robin scheduler
-
-Miou implements what is known as a round-robin scheduler. In other words, a
-scheduler that gives equivalent opportunities to all tasks to consume a certain
-amount of CPU time. This kind of task execution order management is intended to
-improve the availability of tasks to be synchronised with system events.
-
-The round-robin scheduler also allows us to avoid domain starvation problems.
-
-However, we would like to warn the user that Miou does not correspond to all
-applications. To find out more about this, we recommend that you read the
-tutorial on implementing an application that calculates the hash of a folder:
-[merkle-tree][merkle-tree].
-
 ## Genesis
 
 The development of Miou began following discussions with a number of actors,

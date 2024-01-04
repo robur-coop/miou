@@ -242,8 +242,6 @@ Developing a system and network application with Miou addresses several points:
 
 This tutorial shows what Miou is finally proposing. However, there are a few
 caveats:
-+ The question of availability is better explained in our tutorial about
-  {{!page:merkle}merkle-trees}.
 + The extension of Miou to other system events is explained in more detail in
   our tutorial on {!page:sleepers}.
 + We have not attempted to implement a mechanism that stops our servers. We
