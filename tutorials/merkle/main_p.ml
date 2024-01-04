@@ -45,11 +45,9 @@ and perform = function
 and hash_of_entries = function
   | [] -> empty_tree
   | hd :: tl ->
-      let entries =
-        let prm = Miou.call_cc @@ fun () -> perform hd in
-        Miou.await prm :: Miou.parallel perform tl
-        |> List.map (function Ok v -> v | Error exn -> raise exn)
-      in
+      let hd = Miou.call_cc @@ fun () -> perform hd in
+      let entries = Miou.await hd :: Miou.parallel perform tl in
+      let entries = List.map Result.get_ok entries in
       let ctx = Hash.empty in
       let len =
         List.fold_left (fun acc str -> acc + String.length str) 0 entries

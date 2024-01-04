@@ -243,9 +243,6 @@
     unnecessary points of cooperation. So, by default, Miou is {b less}
     efficient than other schedulers.
 
-    We've put together a short tutorial to explain Miou's behavior in such
-    cases: {{!page:merkle}Calculating a Merkle tree}.
-
     {3 Miou and the system.}
 
     One of Miou's objectives is to be used in a unikernel. As far as the latter

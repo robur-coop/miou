@@ -18,14 +18,13 @@ let hash_of_blob filename =
   let res = go (Bytes.create 0x1000) ctx in
   close_in ic; res
 
-let rec hash_of_tree filename =
-  let entries = Sys.readdir filename in
+let rec hash_of_tree dirname =
+  let entries = Sys.readdir dirname in
   let entries =
     List.map
       (fun v ->
-        let filename = filename / v in
-        if Sys.is_directory filename then (`Dir, filename)
-        else (`Normal, filename))
+        let v = dirname / v in
+        if Sys.is_directory v then (`Dir, v) else (`Normal, v))
       (List.sort String.compare (Array.to_list entries))
   in
   hash_of_entries entries
@@ -34,9 +33,9 @@ and hash_of_entries entries =
   let entries =
     List.map
       (function
-        | `Dir, filename ->
-            let name = Filename.basename filename in
-            let hash = hash_of_tree filename in
+        | `Dir, dirname ->
+            let name = Filename.basename dirname in
+            let hash = hash_of_tree dirname in
             Fmt.str "40000 %s\000%s" name (Hash.to_raw_string hash)
         | `Normal, filename ->
             let name = Filename.basename filename in
