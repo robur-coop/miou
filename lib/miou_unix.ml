@@ -102,7 +102,9 @@ let get, set =
 let rec sleepers_to_syscalls ~now syscalls sleepers =
   match Miou.Heapq.minimum sleepers with
   | exception Miou.Heapq.Empty ->
-      List.map (fun syscall -> Miou.task syscall (Fun.const ())) syscalls
+      List.map
+        (fun syscall -> Miou.continue_with syscall (Fun.const ()))
+        syscalls
   | time, syscall, cancelled ->
       if !cancelled then begin
         Miou.Heapq.remove sleepers;
@@ -112,7 +114,10 @@ let rec sleepers_to_syscalls ~now syscalls sleepers =
         Miou.Heapq.remove sleepers;
         sleepers_to_syscalls ~now (syscall :: syscalls) sleepers
       end
-      else List.map (fun syscall -> Miou.task syscall (Fun.const ())) syscalls
+      else
+        List.map
+          (fun syscall -> Miou.continue_with syscall (Fun.const ()))
+          syscalls
 
 let rec smallest_sleeper ~now sleepers =
   match Miou.Heapq.minimum sleepers with
@@ -348,12 +353,17 @@ let transmit_fds syscalls tbl fds =
     match Hashtbl.find tbl fd with
     | [] -> Hashtbl.remove tbl fd; acc
     | syscalls ->
-        let f syscall = Miou.task syscall (Fun.const ()) in
+        let f syscall = Miou.continue_with syscall (Fun.const ()) in
         Hashtbl.remove tbl fd;
         List.(rev_append (rev_map f syscalls) acc)
     | exception Not_found -> acc
   in
   List.fold_left fold syscalls fds
+
+let no_events unix =
+  Hashtbl.length unix.rd = 0
+  && Hashtbl.length unix.wr = 0
+  && Miou.Heapq.is_empty unix.sleepers
 
 let select _domain interrupt ~poll (cancelled_syscalls : Miou.uid list) =
   let unix = get () in
@@ -362,34 +372,41 @@ let select _domain interrupt ~poll (cancelled_syscalls : Miou.uid list) =
         Miou.Fmt.(Dump.list int)
         (cancelled_syscalls :> int list));
   clean_syscalls unix cancelled_syscalls;
-  let rds = Hashtbl.fold (fun fd _syscalls acc -> fd :: acc) unix.rd [] in
-  let wrs = Hashtbl.fold (fun fd _syscalls acc -> fd :: acc) unix.wr [] in
-  let now = Unix.gettimeofday () in
-  let ts =
-    match smallest_sleeper ~now unix.sleepers with
-    | Some ts -> min ts quanta
-    | None -> if poll then -1. else 0.
-  in
-  Logs.debug (fun m ->
-      m "@[<7>select(%a,@ %a, %f)@]"
-        Miou.Fmt.(Dump.list pp_file_descr)
-        rds
-        Miou.Fmt.(Dump.list pp_file_descr)
-        wrs ts);
-  match Unix.select (interrupt :: rds) wrs [] ts with
-  | exception Unix.(Unix_error (EINTR, _, _)) -> []
-  | [], [], _ ->
-      let now = Unix.gettimeofday () in
-      let syscalls = sleepers_to_syscalls ~now [] unix.sleepers in
-      set unix; syscalls
-  | rds, wrs, [] ->
-      if List.exists (( = ) interrupt) rds then consume_interrupt interrupt;
-      let now = Unix.gettimeofday () in
-      let syscalls = sleepers_to_syscalls ~now [] unix.sleepers in
-      let syscalls = transmit_fds syscalls unix.rd rds in
-      let syscalls = transmit_fds syscalls unix.wr wrs in
-      set unix; syscalls
-  | _ -> set unix; []
+  if (not poll) && no_events unix then begin
+    Logs.debug (fun m -> m "no expected events");
+    set unix;
+    []
+  end
+  else begin
+    let rds = List.of_seq (Hashtbl.to_seq_keys unix.rd) in
+    let wrs = List.of_seq (Hashtbl.to_seq_keys unix.wr) in
+    let now = Unix.gettimeofday () in
+    let ts =
+      match smallest_sleeper ~now unix.sleepers with
+      | Some ts -> min ts quanta
+      | None -> if poll then -1. else 0.
+    in
+    Logs.debug (fun m ->
+        m "@[<7>select(%a,@ %a, %f)@]"
+          Miou.Fmt.(Dump.list pp_file_descr)
+          rds
+          Miou.Fmt.(Dump.list pp_file_descr)
+          wrs ts);
+    match Unix.select (interrupt :: rds) wrs [] ts with
+    | exception Unix.(Unix_error (EINTR, _, _)) -> []
+    | [], [], _ ->
+        let now = Unix.gettimeofday () in
+        let syscalls = sleepers_to_syscalls ~now [] unix.sleepers in
+        set unix; syscalls
+    | rds, wrs, [] ->
+        if List.exists (( = ) interrupt) rds then consume_interrupt interrupt;
+        let now = Unix.gettimeofday () in
+        let syscalls = sleepers_to_syscalls ~now [] unix.sleepers in
+        let syscalls = transmit_fds syscalls unix.rd rds in
+        let syscalls = transmit_fds syscalls unix.wr wrs in
+        set unix; syscalls
+    | _ -> set unix; []
+  end
 
 let events domain =
   let ic, oc = Unix.pipe ~cloexec:true () in

@@ -53,3 +53,8 @@
   $ ./t28.exe
   $ ./t29.exe
   $ ./t30.exe
+  $ ./t31.exe
+  Hello
+  World
+  Hello
+  World

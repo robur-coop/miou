@@ -1,5 +1,9 @@
 let () = Random.self_init ()
-let with_lock m fn = Mutex.lock m; fn (); Mutex.unlock m
+
+let with_lock m fn =
+  let finally () = Mutex.unlock m in
+  Mutex.lock m; Fun.protect ~finally fn
+
 let n = 5
 let l i = (i - 1 + n) mod n
 let r i = (i + 1) mod n
@@ -41,13 +45,7 @@ let put_forks sem state i =
 
 let philosopher sem state i =
   let rec go () =
-    think i;
-    take_forks sem state i;
-    Miou.yield ();
-    eat i;
-    put_forks sem state i;
-    Miou.yield ();
-    go ()
+    think i; take_forks sem state i; eat i; put_forks sem state i; go ()
   in
   go ()
 

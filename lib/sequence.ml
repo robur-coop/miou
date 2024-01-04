@@ -28,7 +28,7 @@ let remove node =
     t.next.prev <- t.prev)
 
 let is_empty (t : 'a t) = t.next == t
-let data { data; _ } = data
+let[@inline always] data { data; _ } = data
 
 let add_l data (t : 'a t) =
   let node = { g= t.g; prev= t; next= t.next; data; active= true } in

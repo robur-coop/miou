@@ -117,7 +117,7 @@ val pure : ('a, exn) result -> 'a t
 
 val run : quanta:int -> perform:perform -> 'a t -> 'a t
 (** [run ~quanta ~perform state] applies {!val:once} [quanta] times. If
-    [perform] responds with {!val:interrupt} (and therefore does nothing),
+    [perform] responds with {!val:Op.interrupt} (and therefore does nothing),
     even though there may be a few {i quanta} left, the function returns the
     last state obtained.
 

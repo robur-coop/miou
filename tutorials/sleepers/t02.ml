@@ -1,19 +1,22 @@
 open Miou
 
-let sleepers =
+let get, set =
   let make () = Hashtbl.create 0x100 in
   let key = Stdlib.Domain.DLS.new_key make in
-  fun () -> Stdlib.Domain.DLS.get key
+  let get () = Stdlib.Domain.DLS.get key in
+  let set value = Stdlib.Domain.DLS.set key value in
+  (get, set)
 
 let sleep until =
   let return () = () in
   let syscall = Miou.make return in
-  let sleepers = sleepers () in
+  let sleepers = get () in
   Hashtbl.add sleepers (Miou.uid syscall) (syscall, until);
+  set sleepers;
   Miou.suspend syscall
 
 let select ~poll:_ _ =
-  let sleepers = sleepers () in
+  let sleepers = get () in
   let min =
     Hashtbl.fold
       (fun uid (syscall, until) -> function
@@ -32,12 +35,16 @@ let select ~poll:_ _ =
         (fun _ (syscall, until') ->
           Some (syscall, Float.max 0. (until' -. until)))
         sleepers;
-      Hashtbl.fold
-        (fun uid (syscall, until) acc ->
-          if until <= 0. then
-            Miou.task syscall (fun () -> Hashtbl.remove sleepers uid) :: acc
-          else acc)
-        sleepers []
+      let continuations =
+        Hashtbl.fold
+          (fun uid (syscall, until) acc ->
+            if until <= 0. then
+              Miou.continue_with syscall (fun () -> Hashtbl.remove sleepers uid)
+              :: acc
+            else acc)
+          sleepers []
+      in
+      set sleepers; continuations
 
 let events _ = { select; interrupt= ignore }
 

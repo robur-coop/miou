@@ -5,7 +5,7 @@ let global = ref None
 
 let select ~poll:_ _ =
   match !global with
-  | Some v -> [ Miou.task v (fun () -> global := None) ]
+  | Some v -> [ Miou.continue_with v (fun () -> global := None) ]
   | None -> []
 
 let events _ = { Miou.interrupt= ignore; select }

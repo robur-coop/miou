@@ -1,7 +1,3 @@
-(documentation
- (package miou)
- (mld_files merkle))
-
 (executable
  (name main_p)
  (modules main_p)

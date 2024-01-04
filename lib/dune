@@ -8,3 +8,7 @@
  (public_name miou.unix)
  (modules miou_unix)
  (libraries miou unix))
+
+(documentation
+ (package miou)
+ (mld_files scheduler))

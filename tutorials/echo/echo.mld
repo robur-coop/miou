@@ -23,26 +23,26 @@ another function to manage the acceptance of connections.
 let handler fd =
   let buf = Bytes.create 0x100 in
   let rec go () =
-    let len = Miouu.read fd buf ~off:0 ~len:(Bytes.length buf) in
+    let len = Miou_unix.read fd buf ~off:0 ~len:(Bytes.length buf) in
     if len > 0 then begin
-      Miouu.write fd (Bytes.unsafe_to_string buf) ~off:0 ~len;
+      Miou_unix.write fd (Bytes.unsafe_to_string buf) ~off:0 ~len;
       go ()
-    end else Miouu.close fd in
+    end else Miou_unix.close fd in
   go
 
 let listen sockaddr =
-  let fd = Miouu.tcpv4 () in
-  Miouu.bind_and_listen fd sockaddr; fd
+  let fd = Miou_unix.tcpv4 () in
+  Miou_unix.bind_and_listen fd sockaddr; fd
 
 let server sockaddr =
   let rec server fd =
-    let fd', sockaddr = Miouu.accept fd in
+    let fd', sockaddr = Miou_unix.accept fd in
     handler fd' ();
     server fd in
   fun () -> server (listen sockaddr)
 
 let addr = Unix.ADDR_INET (Unix.inet_addr_loopback, 9000)
-let () = Miouu.run (server addr) 
+let () = Miou_unix.run (server addr) 
 ]}
 
 This small program provides a systematic structure for implementing a server:
@@ -70,8 +70,9 @@ To specify an asynchronous task with Miou, we use {!val:Miou.call_cc}:
 {[
 let server sockaddr =
   let rec server prms fd =
-    let fd', sockaddr = Miouu.accept fd in
+    let fd', sockaddr = Miou_unix.accept fd in
     let prm = Miou.call_cc ~give:[ Miou_unix.owner fd' ] (handler fd') in
+    Miou_unix.disown fd';
     server (prm :: prms) fd in
   fun () -> server [] (listen sockaddr)
 ]}
@@ -87,8 +88,9 @@ It is possible to manipulate this promise and wait for our task to finish:
 {[
 let server sockaddr =
   let rec server fd =
-    let fd', sockaddr = Miouu.accept fd in
-    let prm = Miou.call_cc @@ fun () -> handler fd' in
+    let fd', sockaddr = Miou_unix.accept fd in
+    let prm = Miou.call_cc ~give:[ Miou_unix.owner fd' ] (handler fd') in
+    Miou_unix.disown fd';
     ignore (Miou.await_exn prm);
     server fd in
   fun () -> server (listen sockaddr)
@@ -115,7 +117,7 @@ developer, we have a duty to release all our resources (even in abnormal cases).
 So, if our [handler] function raises an exception, Miou will take care of
 closing our associated file-descritptor.
 
-{2 Detachment and Miou.}
+{2 Background tasks and Miou.}
 
 Miou enforce good practice and one of them is to always take care of these
 promises. In this case, we'd like to both keep our promise and launch others
@@ -140,19 +142,20 @@ an {!type:Miou.orphans} value.
 
 {[
 let rec clean_up orphans = match Miou.care orphans with
-  | Some promise -> Miou.await_exn prm; clean_up orphans
+  | Some (Some prm) -> Miou.await_exn prm; clean_up orphans
+  | Some None -> ()
   | None -> ()
 
 let server sockaddr =
   let rec server orphans fd =
     clean_up orphans;
-    let fd', sockaddr = Miouu.accept fd in
+    let fd', sockaddr = Miou_unix.accept fd in
     let _ = Miou.call_cc
       ~give:[ Miou_unix.owner fd' ] ~orphans (handler fd') in
-    server fd in
+    Miou_unix.disown fd';
+    server orphans fd in
   fun () ->
-    let orphans = Miou.orphans () in
-    server orphans (listen sockaddr)
+    server (Miou.orphans ()) (listen sockaddr)
 ]}
 
 The orphans value will aggregate the promises (which are the children of the
@@ -185,13 +188,13 @@ replaced by {!val:Miou.call}.
 let server sockaddr =
   let rec server orphans fd =
     clean_up orphans;
-    let fd', sockaddr = Miouu.accept fd in
-    let _ = Miou.call
+    let fd', sockaddr = Miou_unix.accept fd in
+    let _ = Miou.call_cc
       ~give:[ Miou_unix.owner fd' ] ~orphans (handler fd') in
-    server fd in
+    Miou_unix.disown fd';
+    server orphans fd in
   fun () ->
-    let orphans = Miou.orphans () in
-    server orphans (listen sockaddr)
+    server (Miou.orphans ()) (listen sockaddr)
 ]}
 
 However, there is a bottleneck. In this case, our [dom0] is the only one to
@@ -207,19 +210,22 @@ domain that manages the reception of connections, we could have several?
 let server sockaddr =
   let rec server orphans fd =
     clean_up orphans;
-    let fd', sockaddr = Miouu.accept fd in
-    let _ = Miou.call
+    let fd', sockaddr = Miou_unix.accept fd in
+    let _ = Miou.call_cc
       ~give:[ Miou_unix.owner fd' ] ~orphans (handler fd') in
-    server fd in
-  let orphans = Miou.orphans () in
-  server orphans (listen sockaddr)
+    Miou_unix.disown fd';
+    server orphans fd in
+  fun () ->
+    server (Miou.orphans ()) (listen sockaddr)
 
 let addr = Unix.ADDR_INET (Unix.inet_addr_loopback, 9000)
 
 let () = Miou.run @@ fun () ->
+  let prm = Miou.call_cc (server addr) in
   Miou.parallel server
     (List.init (Miou.Domain.count ()) (Fun.const addr))
-  |> List.iter (function Ok () -> () | Error exn -> raise exn)
+  |> List.iter (function Ok () -> () | Error exn -> raise exn);
+  Miou.await_exn prm
 ]}
 
 So we've gone from 1 domain handling all the connections to several domains
@@ -240,6 +246,9 @@ caveats:
   {{!page:merkle}merkle-trees}.
 + The extension of Miou to other system events is explained in more detail in
   our tutorial on {!page:sleepers}.
++ We have not attempted to implement a mechanism that stops our servers. We
+  could do it with a signal handler and {!type:Miou_unix.Cond.t} but we let the
+  user choose the best way according to their expectations.
 
 We therefore recommend that you read these tutorials to learn more about Miou's
 design, its reasons and its implications. At the very least, we hope that this

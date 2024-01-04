@@ -29,7 +29,7 @@ let minimums sleepers =
   Hashtbl.filter_map_inplace
     (fun _ (syscall, until) ->
       if until <= 0. then (
-        cs := Miou.task syscall (Fun.const ()) :: !cs;
+        cs := Miou.continue_with syscall (Fun.const ()) :: !cs;
         None)
       else Some (syscall, until))
     sleepers;
