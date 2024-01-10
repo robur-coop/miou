@@ -79,6 +79,17 @@
   [d795f08fc64f3e53077172dbfedfcefe47a2b832](https://git.robur.coop/robur/miou/commit/d795f08fc64f3e53077172dbfedfcefe47a2b832)
   [42ef35bafa21ea0c264f6f3519fcb72732c1abd8](https://git.robur.coop/robur/miou/commit/42ef35bafa21ea0c264f6f3519fcb72732c1abd8)
 
+- Expose [Miou_unix.on_{read,write}]
+
+  @dinosaure
+  [27174019f959414051bfbdb5057a17e6b7a036ee](https://git.robur.coop/robur/miou/commit/27174019f959414051bfbdb5057a17e6b7a036ee)
+
+- Fix the documentation about [Miou.call] and the possible situation where no
+  domain are available to execute a parallel task
+
+  @dinosaure, @zapashcanon
+  [aab9996ab2a3a59db2fed59f8ed997ef6f5abe14](https://git.robur.coop/robur/miou/commit/aab9996ab2a3a59db2fed59f8ed997ef6f5abe14)
+
 ### v0.0.1~beta1 (2023-09-05)
 
 - First release of `miou`
