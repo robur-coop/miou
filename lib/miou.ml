@@ -1467,8 +1467,9 @@ let call ?orphans ?(give = []) fn =
   let cur = Domain.self () in
   let uid =
     let g = random () in
-    let l = List.filter (Fun.negate (Domain_uid.equal cur)) domains in
-    List.nth l (Random.State.int g (List.length l))
+    match List.filter (Fun.negate (Domain_uid.equal cur)) domains with
+    | [] -> raise No_domain_available
+    | lst -> List.nth lst (Random.State.int g (List.length lst))
   in
   let prm = Effect.perform (Spawn (Parallel uid, give, fn)) in
   Option.iter (Sequence.push prm) orphans;

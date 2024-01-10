@@ -405,6 +405,15 @@
         Miou.await_exn prm
     ]}
 
+    The above rule also limits the use of {!val:call} if you only have (or want)
+    less than 3 domains. In fact, if you only have one domain, {!val:call}
+    cannot launch tasks in parallel. In the event that you only have 2 domains,
+    it is possible to launch a task in parallel from [dom0] but it is impossible
+    to launch a task in parallel from this [dom1].
+
+    In both cases and in such a situation, an exception is thrown:
+    {!exception:No_domain_available}.
+
     {4 Rule 7, suspension points are local to the domain.}
 
     A suspension point is local to the domain. This means that only the domain
@@ -715,7 +724,12 @@ val call : ?orphans:'a orphans -> ?give:Ownership.t list -> (unit -> 'a) -> 'a t
     {!val:parallel}.
 
     {b NOTE}: {!val:call} will never run a task on {i dom0} (the main domain).
-    Only the other domains can manage tasks in parallel. *)
+    Only the other domains can manage tasks in parallel.
+
+    @raise No_domain_available if no domain is available to execute the task in
+    parallel or if the function is executed by the only domain available in
+    parallel (it is impossible to assign a task to [dom0] from the other
+    domains). *)
 
 val parallel : ('a -> 'b) -> 'a list -> ('b, exn) result list
 (** [parallel fn lst] is the {i fork-join} model: it is a way of setting up and
@@ -1124,6 +1138,10 @@ val cancel : 'a t -> unit
 *)
 
 type handler = { handler: 'a 'b. ('a -> 'b) -> 'a -> 'b } [@@unboxed]
+
+exception No_domain_available
+(** An exception which can be raised by {!val:call} if no domain is available to
+    execute the task in parallel. *)
 
 val run :
      ?quanta:int
