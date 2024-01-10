@@ -135,3 +135,8 @@ val bind_and_listen : ?backlog:int -> file_descr -> Unix.sockaddr -> unit
     [backlog] is the maximal number of pending requests. *)
 
 val run : ?g:Random.State.t -> ?domains:int -> (unit -> 'a) -> 'a
+
+(**/**)
+
+val on_read : Unix.file_descr -> (unit -> unit) -> unit
+val on_write : Unix.file_descr -> (unit -> unit) -> unit
