@@ -58,3 +58,4 @@
   World
   Hello
   World
+  $ ./t32.exe

@@ -50,7 +50,7 @@ module Table = Hashtbl.Make (struct
   type t = Unix.file_descr
 
   let equal a b = Int.equal (Obj.magic a) (Obj.magic b)
-  let hash v = (Obj.magic v) land max_int
+  let hash v = Obj.magic v land max_int
 end)
 
 type unix_scheduler = {
@@ -138,8 +138,8 @@ let rec smallest_sleeper ~now sleepers =
         let delta = time -. now in
         if delta <= 0. then None else Some delta
 
-let blocking_read fd =
-  let syscall = Miou.make (Fun.const ()) in
+let on_read fd fn =
+  let syscall = Miou.make fn in
   let uid = Miou.uid syscall in
   let unix = get () in
   Hashtbl.add unix.revert uid fd;
@@ -152,8 +152,10 @@ let blocking_read fd =
   set unix;
   Miou.suspend syscall
 
-let blocking_write fd =
-  let syscall = Miou.make (Fun.const ()) in
+let blocking_read fd = on_read fd (Fun.const ())
+
+let on_write fd fn =
+  let syscall = Miou.make fn in
   let uid = Miou.uid syscall in
   let unix = get () in
   Hashtbl.add unix.revert uid fd;
@@ -165,6 +167,8 @@ let blocking_write fd =
       m "new write() point [%d] on %a" (uid :> int) pp_file_descr fd);
   set unix;
   Miou.suspend syscall
+
+let blocking_write fd = on_write fd (Fun.const ())
 
 let with_lock ~lock fn =
   Mutex.lock lock;
@@ -374,7 +378,8 @@ let no_events unix =
 
 let[@inline always] keys_of_table tbl =
   let res = ref [] in
-  Table.iter (fun k _ -> res := k :: !res) tbl; !res
+  Table.iter (fun k _ -> res := k :: !res) tbl;
+  !res
 
 let select _domain interrupt ~poll (cancelled_syscalls : Miou.uid list) =
   let unix = get () in
