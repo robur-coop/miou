@@ -268,8 +268,6 @@ and system =
       -> system
 
 and 'a syscall = Syscall : Syscall_uid.t * (unit -> 'a) -> 'a syscall
-
-(* and value = Value : 'a t * ('a, exn) result -> value *)
 and continue = Continue : Syscall_uid.t * (unit -> unit) -> continue
 
 and domain = {
@@ -683,38 +681,6 @@ module Domain = struct
     in
     { State.perform }
 
-  (* NOTE(dinosaure): [invariant] (used by [handle]) makes it possible to check
-     the invariants in the case of [Await]. Indeed, the [Await] can cause the
-     domain to wait (see [Condition.wait] & [run]) but we must make sure that
-     these [Await] are right (and not wait for an impossible situation). Before
-     adding the suspension of our tasks, we check if it respects our rules.
-
-     The illegal case corresponds when a promise is passed from one domain to
-     another and the latter "waits" for the said promise. The relationship
-     (parent <-> children) does not exist, we should fail with [Not_a_child].
-     However, it can happen that the domain reaches the [Condition.wait] point
-     **before** having done the illegal "await" - in this case, and if it has
-     nothing to do, the domain will do the [Condition. wait] thinking there is a
-     pending task in another domain (although it may have already completed).
-
-     XXX(dinosaure): This case is still relevant (and, currently, it is rather
-     healthy to do this post-cleaning) but the [Condition.wait] of a domain
-     poses other concerns (starvation). We preferred the simple idea that a
-     domain could continue to work (and sometimes even go into a burning loop)
-     than to deal with the subtleties of a [Condition.wait] that would block the
-     whole program. *)
-  let invariant current state =
-    match state with
-    | State.Suspended (k, Await prms) ->
-        if List.for_all (Promise.is_a_children ~parent:current) prms = false
-        then State.discontinue_with k Not_a_child
-        else state
-    | State.Suspended (k, Choose (_, prms)) ->
-        if List.for_all (Promise.is_a_children ~parent:current) prms = false
-        then State.discontinue_with k Not_a_child
-        else state
-    | state -> state
-
   let resource_leak prm =
     let leak = ref false in
     let f (Resource { uid; finaliser; value }) =
@@ -858,12 +824,10 @@ module Domain = struct
         Promise.transition prm (Ok value);
         trigger pool domain prm (Ok value)
     | State.Suspended _ as state ->
-        let state = invariant prm state in
         add_into_domain domain (Suspended (prm, state))
     | State.Unhandled _ as state ->
         Logs.debug (fun m ->
             m "%a suspended due to unhandled effect" Promise.pp prm);
-        let state = invariant prm state in
         add_into_domain domain (Suspended (prm, state))
 
   let transfer_system_task domain (Continue (uid, fn0) as continue : continue) =
@@ -1466,8 +1430,6 @@ let parallel fn tasks =
 
 let is_pending (Syscall (uid, _) : _ syscall) =
   Effect.perform (Syscall_exists uid)
-
-external reraise : exn -> 'a = "%reraise"
 
 let await_one = function
   | [] -> invalid_arg "Miou.await_one"
