@@ -59,3 +59,4 @@
   Hello
   World
   $ ./t32.exe
+  $ ./t33.exe
