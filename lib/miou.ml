@@ -972,9 +972,12 @@ module Domain = struct
         assert (List.for_all (Fun.negate Promise.is_pending) prms);
         let results = List.map Promise.to_result prms in
         assert (Domain_uid.equal current.runner domain.uid);
-        let state = State.continue_with k results in
         let children = List.map (fun ({ uid; _ } : _ t) -> uid) prms in
         clean_children ~children current;
+        let state =
+          State.suspended_with k
+            (Spin { terminated= []; to_cancel= []; and_return= results })
+        in
         add_into_domain domain (Suspended (current, state))
       end
     end
