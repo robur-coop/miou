@@ -84,7 +84,7 @@ module Op : sig
   val interrupt : _ t
   val continue : 'a Effect.t -> 'a t
   val return : 'a -> 'a t
-  val fail : exn -> _ t
+  val fail : ?backtrace:Printexc.raw_backtrace -> exn -> _ t
   val perform : 'a Effect.t -> 'a t
   val yield : unit t
 end
@@ -108,7 +108,7 @@ val once : perform:perform -> 'a t -> 'a t
 (** [once ~perform state] applies [perform] once on the given state if the
     latter emits an effect. *)
 
-val fail : exn:exn -> 'a t -> 'a t
+val fail : ?backtrace:Printexc.raw_backtrace -> exn:exn -> 'a t -> 'a t
 (** [fail ~exn state] discontinue the given state with the given exception. It
     always return [Finished (Error exn)]. *)
 
@@ -128,6 +128,8 @@ val run : quanta:int -> perform:perform -> 'a t -> 'a t
 (**/**)
 
 val continue_with : ('a, 'b) continuation -> 'a -> 'b t
-val discontinue_with : ('a, 'b) continuation -> exn -> 'b t
+
+val discontinue_with :
+  ?backtrace:Printexc.raw_backtrace -> ('a, 'b) continuation -> exn -> 'b t
 
 (* I didn't sign for this. *)

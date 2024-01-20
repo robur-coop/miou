@@ -19,4 +19,5 @@ val iter : ?sep:unit t -> (('a -> unit) -> 'b -> unit) -> 'a t -> 'b t
 module Dump : sig
   val iter : (('a -> unit) -> 'b -> unit) -> 'b t -> 'a t -> 'b t
   val list : 'a t -> 'a list t
+  val hashtbl : 'a t -> 'b t -> ('a, 'b) Hashtbl.t t
 end

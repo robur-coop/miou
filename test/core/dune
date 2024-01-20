@@ -158,6 +158,11 @@
  (modules t32)
  (libraries miou))
 
+(executable
+ (name t33)
+ (modules t33)
+ (libraries miou))
+
 (cram
  (package miou)
  (deps
@@ -192,4 +197,5 @@
   t29.exe
   t30.exe
   t31.exe
-  t32.exe))
+  t32.exe
+  t33.exe))

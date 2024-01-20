@@ -142,7 +142,7 @@ let on_read fd fn =
   let syscall = Miou.make fn in
   let uid = Miou.uid syscall in
   let unix = get () in
-  Hashtbl.add unix.revert uid fd;
+  Hashtbl.replace unix.revert uid fd;
   (try
      let syscalls = Table.find unix.rd fd in
      Table.replace unix.rd fd (syscall :: syscalls)
@@ -158,7 +158,7 @@ let on_write fd fn =
   let syscall = Miou.make fn in
   let uid = Miou.uid syscall in
   let unix = get () in
-  Hashtbl.add unix.revert uid fd;
+  Hashtbl.replace unix.revert uid fd;
   (try
      let syscalls = Table.find unix.wr fd in
      Table.replace unix.wr fd (syscall :: syscalls)
@@ -359,12 +359,15 @@ let quanta =
       with _ -> of_nano 1_000_000L)
   | None -> of_nano 1_000_000L
 
-let transmit_fds syscalls tbl fds =
+let transmit_fds syscalls revert tbl fds =
   let fold acc fd =
     match Table.find tbl fd with
     | [] -> Table.remove tbl fd; acc
     | syscalls ->
-        let f syscall = Miou.continue_with syscall (Fun.const ()) in
+        let f syscall =
+          Hashtbl.remove revert (Miou.uid syscall);
+          Miou.continue_with syscall (Fun.const ())
+        in
         Table.remove tbl fd;
         List.(rev_append (rev_map f syscalls) acc)
     | exception Not_found -> acc
@@ -418,8 +421,8 @@ let select _domain interrupt ~poll (cancelled_syscalls : Miou.uid list) =
         if List.exists (( = ) interrupt) rds then consume_interrupt interrupt;
         let now = Unix.gettimeofday () in
         let syscalls = sleepers_to_syscalls ~now [] unix.sleepers in
-        let syscalls = transmit_fds syscalls unix.rd rds in
-        let syscalls = transmit_fds syscalls unix.wr wrs in
+        let syscalls = transmit_fds syscalls unix.revert unix.rd rds in
+        let syscalls = transmit_fds syscalls unix.revert unix.wr wrs in
         set unix; syscalls
     | _ -> set unix; []
   end
