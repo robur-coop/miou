@@ -341,6 +341,18 @@ type _ Effect.t += Syscall_exists : Syscall_uid.t -> bool Effect.t
 let dummy_events = { select= (fun ~poll:_ _ -> []); interrupt= ignore }
 let dummy_handler = { handler= apply }
 
+let pp_stats ppf (pool, domain) =
+  Fmt.pf ppf
+    "[pool:%dw, domain:%dw, domain.tasks:%dw, domain.system_tasks:%dw, \
+     domain.pending_events:%dw, cancelled_syscalls:%dw, live_words:%dw]"
+    Obj.(reachable_words (repr pool))
+    Obj.(reachable_words (repr domain))
+    Obj.(reachable_words (repr domain.tasks))
+    Obj.(reachable_words (repr domain.system_tasks))
+    Obj.(reachable_words (repr domain.pending_events))
+    Obj.(reachable_words (repr domain.cancelled_syscalls))
+    (Gc.quick_stat ()).Gc.live_words
+
 module Domain = struct
   module Uid = Domain_uid
 
@@ -1182,14 +1194,6 @@ module Pool = struct
     && Domain.system_tasks_suspended domain = false
     && Domain.one_task_for ~domain pool = false
 
-  let pp_stats ppf (pool, domain) =
-    Fmt.pf ppf
-      "[pool:%dw, domain:%dw, domain.tasks:%dw, domain.pending_events: %dw]"
-      Obj.(reachable_words (repr pool))
-      Obj.(reachable_words (repr domain))
-      Obj.(reachable_words (repr domain.tasks))
-      Obj.(reachable_words (repr domain.pending_events))
-
   let rec transfer_all_tasks (pool : pool) (domain : domain) =
     let exception Task of elt Sequence.node in
     let f ({ Sequence.data; _ } as node) =
@@ -1233,7 +1237,7 @@ module Pool = struct
      goes back to sleep until the next signal. Domains can communicate with
      [dom0] (the launcher) by signaling that all domains are dormant ([idle]).
      Finally, [dom0] can communicate with the domains asking to stop. *)
-  let worker pool domain _ =
+  let worker pool domain () =
     let exception Exit in
     try
       while true do
@@ -1483,7 +1487,8 @@ let run ?(quanta = quanta) ?(events = Fun.const dummy_events)
       while Promise.is_pending prm0 && not pool.fail do
         transfer_continuations_into_dom0 pool dom0;
         handler.handler (Domain.run pool dom0) ();
-        Logs.debug (fun m -> m "%a" Pool.pp_stats (pool, dom0))
+        Logs.debug (fun m -> m "%a" pp_stats (pool, dom0));
+        Logs.debug (fun m -> m "[prm0:%dw]" Obj.(reachable_words (repr prm0)))
       done;
       if not pool.fail then Promise.to_result prm0
       else Error (Failure "A domain failed")
