@@ -3,6 +3,8 @@ let str = Format.asprintf
 let kstr = Format.kasprintf
 let failwith fmt = kstr failwith fmt
 let invalid_arg fmt = kstr invalid_arg fmt
+let using f pp ppf v = pp ppf (f v)
+let any fmt ppf _ = pf ppf fmt
 
 type 'a t = Format.formatter -> 'a -> unit
 
@@ -19,6 +21,10 @@ let iter ?sep:(pp_sep = cut) iter pp_elt ppf v =
   iter pp_elt v
 
 let space ppf _ = Format.pp_print_space ppf ()
+
+let comma ppf _ =
+  Format.pp_print_string ppf ",";
+  space ppf ()
 
 let semi ppf _ =
   Format.pp_print_string ppf ";";
@@ -40,10 +46,26 @@ let box ?(indent = 0) pp_v ppf v =
 let parens pp_v = box ~indent:1 (surround "(" ")" pp_v)
 let brackets pp_v = box ~indent:1 (surround "[" "]" pp_v)
 
+let iter_bindings ?sep:(pp_sep = cut) iter pp_binding ppf v =
+  let is_first = ref true in
+  let pp_binding k v =
+    if !is_first then is_first := false else pp_sep ppf ();
+    pp_binding ppf (k, v)
+  in
+  iter pp_binding v
+
 module Dump = struct
   let iter f pp_name pp_elt =
     let pp_v = iter ~sep:space f (box pp_elt) in
     parens (pp_name ++ space ++ pp_v)
 
+  let pair pp_fst pp_snd =
+    parens (using fst (box pp_fst) ++ comma ++ using snd (box pp_snd))
+
+  let iter_bindings f pp_name pp_k pp_v =
+    let pp_v = iter_bindings ~sep:space f (pair pp_k pp_v) in
+    parens (pp_name ++ space ++ pp_v)
+
   let list pp_elt = brackets (list ~sep:semi (box pp_elt))
+  let hashtbl pp_k pp_v = iter_bindings Hashtbl.iter (any "hashtbl") pp_k pp_v
 end
