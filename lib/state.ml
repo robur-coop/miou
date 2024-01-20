@@ -30,8 +30,14 @@ let handler_discontinue exn =
   and exnc = const in
   { retc; exnc; effc }
 
-let discontinue_with : ('c, 'a) continuation -> exn -> 'a t =
- fun k exn -> Effect.Shallow.discontinue_with k exn (handler_discontinue exn)
+let discontinue_with :
+    ?backtrace:Printexc.raw_backtrace -> ('c, 'a) continuation -> exn -> 'a t =
+ fun ?backtrace k exn ->
+  match backtrace with
+  | None -> Effect.Shallow.discontinue_with k exn (handler_discontinue exn)
+  | Some bt ->
+      Effect.Shallow.discontinue_with_backtrace k exn bt
+        (handler_discontinue exn)
 
 let suspended_with : ('c, 'a) continuation -> 'c Effect.t -> 'a t =
  fun k e -> Suspended (k, e)
@@ -48,7 +54,7 @@ let make k v =
 module Op = struct
   type 'a t =
     | Return of 'a
-    | Fail of exn
+    | Fail of Printexc.raw_backtrace option * exn
     | Interrupt
     | Continue : 'a Effect.t -> 'a t
     | Perform : 'a Effect.t -> 'a t
@@ -57,7 +63,7 @@ module Op = struct
   let interrupt = Interrupt
   let continue eff = Continue eff
   let return value = Return value
-  let fail exn = Fail exn
+  let fail ?backtrace:bt exn = Fail (bt, exn)
   let perform eff = Perform eff
   let yield = Yield
 end
@@ -73,7 +79,7 @@ let once : type a. perform:perform -> a t -> a t =
       let k : type c. (c, a) continuation -> c Op.t -> a t =
        fun fn -> function
         | Return v -> continue_with fn v
-        | Fail exn -> discontinue_with fn exn
+        | Fail (bt, exn) -> discontinue_with ?backtrace:bt fn exn
         | Interrupt -> state
         | Continue e -> suspended_with fn e
         | Perform eff ->
@@ -95,7 +101,7 @@ let run : type a. quanta:int -> perform:perform -> a t -> a t =
   let k : type c. (c, a) continuation -> c Op.t -> a t =
    fun fn -> function
     | Return v -> continue_with fn v
-    | Fail e -> discontinue_with fn e
+    | Fail (bt, e) -> discontinue_with ?backtrace:bt fn e
     | Continue e -> suspended_with fn e
     | Perform e ->
         let v = Effect.perform e in
@@ -123,7 +129,7 @@ let run : type a. quanta:int -> perform:perform -> a t -> a t =
 
 [@@@warning "+8"]
 
-let fail ~exn = function
+let fail ?backtrace ~exn = function
   | Finished _ -> Finished (Error exn)
-  | Suspended (k, _) -> discontinue_with k exn
-  | Unhandled (k, _) -> discontinue_with k exn
+  | Suspended (k, _) -> discontinue_with ?backtrace k exn
+  | Unhandled (k, _) -> discontinue_with ?backtrace k exn

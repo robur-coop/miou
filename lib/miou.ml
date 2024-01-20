@@ -858,7 +858,9 @@ module Domain = struct
           try
             fn0 ();
             State.continue_with k (fn1 ())
-          with exn -> State.discontinue_with k exn
+          with exn ->
+            let bt = Printexc.get_raw_backtrace () in
+            State.discontinue_with ~backtrace:bt k exn
         in
         match state with
         | State.Finished value ->
