@@ -105,10 +105,10 @@ type 'a await =
       -> 'a await
   | Await_one : {
         prm: 'b t
-      ; k: (('a, exn) result, 'b) State.continuation
-      ; others: 'a t list
+      ; prms: 'a t list
       ; triggered: bool Atomic.t
       ; and_cancel: bool
+      ; k: (('a, exn) result, 'b) State.continuation
     }
       -> 'a await
 
@@ -370,12 +370,14 @@ module Domain = struct
     let value = Task.compare a b in
     if value = 0 then Int.compare tick0 tick1 else value
 
+  let dummy = (0, Tick)
+
   let make ?(quanta = 1) ~g events =
     let uid = Uid.gen () in
     {
       g= Random.State.copy g
     ; uid
-    ; tasks= Heapq.create ~compare ~dummy:(0, Tick) 0x100
+    ; tasks= Heapq.create ~compare ~dummy 0x100
     ; system_tasks= Hashtbl.create 0x10
     ; events= events uid
     ; quanta
@@ -758,20 +760,20 @@ module Domain = struct
               add_into_pool ~domain:prm.runner pool
                 (Signal { prm; terminated; and_return; to_cancel= []; k })
           end
-      | Await (Await_one { prm; k; others; triggered; and_cancel }) ->
+      | Await (Await_one { prm; prms; triggered; and_cancel; k }) ->
           Logs.debug (fun m ->
               m "[%a] %a => %a" Domain_uid.pp domain.uid Promise.pp current
                 Promise.pp prm);
-          let an_other_is_resolved = List.exists Promise.is_resolved others in
+          let an_other_is_resolved = List.exists Promise.is_resolved prms in
           let current_failed = not (Promise.is_resolved current) in
           let ignore = an_other_is_resolved && current_failed in
           if (not ignore) && Atomic.compare_and_set triggered false true then begin
             Logs.debug (fun m ->
                 m "[%a] %a is chosen as the resolved promise" Domain_uid.pp
                   domain.uid Promise.pp current);
-            let others = List.map Promise.pack others in
-            if and_cancel then List.iter (terminate pool domain) others;
-            let to_cancel = if and_cancel then others else [] in
+            let prms = List.map Promise.pack prms in
+            if and_cancel then List.iter (terminate pool domain) prms;
+            let to_cancel = if and_cancel then prms else [] in
             let terminated = [ current.uid ] in
             if Domain_uid.equal prm.runner domain.uid then
               add_into_domain domain
@@ -950,19 +952,18 @@ module Domain = struct
          second case is "faster" - it depends on how users use Miou.
       *)
       let triggered = Atomic.make false in
-      let await = Await_all { prm= current; prms; triggered; k } in
       let attach prm =
         Logs.debug (fun m ->
             m "[%a] add a new waiter (%a) for %a" Domain_uid.pp domain.uid
               Promise.pp current Promise.pp prm);
-        if
+        let await = Await_all { prm= current; prms; triggered; k } in
+        let attached =
           Promise.is_cancelled prm = false
           && Atomic.compare_and_set prm.cell Empty (Await await)
-        then begin
+        in
+        if attached && Domain_uid.equal prm.runner domain.uid = false then
           interrupt pool ~domain:prm.runner;
-          true
-        end
-        else false
+        attached
       in
       let states = List.map attach prms in
       let all_terminated = List.for_all Fun.(negate id) states in
@@ -1020,12 +1021,13 @@ module Domain = struct
       really_choose pool domain current k ~and_cancel prms
     else
       let triggered = Atomic.make false in
-      let attach others prm =
+      let attach prms prm =
         let await =
-          Await_one { prm= current; k; others; triggered; and_cancel }
+          Await_one { prm= current; k; prms; triggered; and_cancel }
         in
         Atomic.set prm.cell (Await await);
-        interrupt pool ~domain:prm.runner
+        if Domain_uid.equal prm.runner domain.uid = false then
+          interrupt pool ~domain:prm.runner
       in
       iter_with_exclusion ~f:attach prms
 
