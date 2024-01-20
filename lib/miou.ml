@@ -64,52 +64,6 @@ module Resource_uid = struct
     fun () -> Atomic.fetch_and_add value 1
 end
 
-module Backoff = struct
-  (* Copyright (c) 2015, Théo Laurent <theo.laurent@ens.fr>
-     Copyright (c) 2016, KC Sivaramakrishnan <kc@kcsrk.info>
-     Copyright (c) 2021, Sudha Parimala <sudharg247@gmail.com>
-     Copyright (c) 2023, Vesa Karvonen <vesa.a.j.k@gmail.com>
-
-     Under ISC license. *)
-
-  let bits = 5
-  let mask = 1 lsl bits
-  let max_wait_log = 30
-  let single_mask = Bool.to_int (Domain.recommended_domain_count () = 1) - 1
-
-  let make ?(lower_wait_log = 4) ?(upper_wait_log = 17) () =
-    if
-      not
-        (0 <= lower_wait_log
-        && lower_wait_log <= upper_wait_log
-        && upper_wait_log <= max_wait_log)
-    then invalid_arg "Backoff.make";
-    (upper_wait_log lsl (bits * 2))
-    lor (lower_wait_log lsl bits)
-    lor lower_wait_log
-
-  let get_upper_wait_log t = t lsr (bits * 2)
-  let get_lower_wait_log t = (t lsr bits) land mask
-  let get_wait_log t = t land mask
-
-  let[@warning "-32"] reset t =
-    let lower_wait_log = get_lower_wait_log t in
-    t land lnot mask lor lower_wait_log
-
-  let once t =
-    let wait_log = get_wait_log t in
-    let wait_mask = (1 lsl wait_log) - 1 in
-    let v = Random.bits () land wait_mask land single_mask in
-    for _ = 0 to v do
-      Domain.cpu_relax ()
-    done;
-    let upper_wait_log = get_upper_wait_log t in
-    let next_wait_log = Int.min upper_wait_log (wait_log + 1) in
-    t lxor wait_log lor next_wait_log
-
-  let default = make ()
-end
-
 (** Exceptions *)
 
 exception Cancelled
@@ -181,22 +135,19 @@ module Promise = struct
     Format.fprintf ppf "[%a:%a](%d)" Domain_uid.pp runner Uid.pp uid
       (Sequence.length resources)
 
-  let rec transition ?(backoff = Backoff.default) prm value =
+  let transition prm value =
     match (Atomic.get prm.state, value) with
-    | (Pending as state), Ok v ->
-        let set = Atomic.compare_and_set prm.state state (Resolved v) in
-        if not set then transition ~backoff:(Backoff.once backoff) prm value
-    | (Pending as state), Error e ->
-        let set = Atomic.compare_and_set prm.state state (Failed e) in
-        if not set then transition ~backoff:(Backoff.once backoff) prm value
+    | (Pending as seen), Ok v ->
+        assert (Atomic.compare_and_set prm.state seen (Resolved v))
+    | (Pending as seen), Error e ->
+        assert (Atomic.compare_and_set prm.state seen (Failed e))
     | _ -> ()
 
-  let rec cancel ?(backoff = Backoff.default) prm =
+  let cancel prm =
     match Atomic.get prm.state with
     | (Pending | Resolved _ | Failed _) as seen ->
         let cancelled = Failed Cancelled in
-        let set = Atomic.compare_and_set prm.state seen cancelled in
-        if not set then cancel ~backoff:(Backoff.once backoff) prm
+        assert (Atomic.compare_and_set prm.state seen cancelled)
 
   let[@inline never] is_cancelled prm =
     match Atomic.get prm.state with Failed Cancelled -> true | _ -> false
