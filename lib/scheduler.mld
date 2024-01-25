@@ -49,7 +49,7 @@ Effects do the same thing. An effects handler exists, and if the user "performs"
 an effect, the execution flow is broken in order to "fall" into the handler.
 
 {[
-open Effect.Shallow
+open Effect.Deep
 
 type _ Effect.t += World : unit Effect.t
 
@@ -82,7 +82,7 @@ For the example, this code would have no equivalence with exceptions, as we want
 to continue.
 
 {[
-open Effect.Shallow
+open Effect.Deep
 
 type _ Effect.t += Hello : unit Effect.t
 
