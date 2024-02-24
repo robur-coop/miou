@@ -144,7 +144,7 @@
     - a {i task} is the smallest sequence of programmed instructions that can be
       managed by Miou. In concrete terms, it's an OCaml function.
     - a domain (see {!module:Domain} is a resource representing a processor
-      available to execute a task
+      available to execute a task)
     - a {i fiber} is a task that will run on a domain in cooperation with other
       tasks
 
