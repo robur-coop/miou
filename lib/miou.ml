@@ -97,13 +97,13 @@ end
 
 type 'a state = Pending | Resolved of 'a | Failed of exn
 
-type 'a await =
+type 'a resume =
   | One : {
         parent: 'b t
       ; prm: 'a t
       ; k: (('a, exn) result, 'b) State.continuation
     }
-      -> 'a await
+      -> 'a resume
   | Some : {
         prm: 'b t
       ; prms: 'a t list
@@ -111,18 +111,18 @@ type 'a await =
       ; and_cancel: bool
       ; k: (('a, exn) result, 'b) State.continuation
     }
-      -> 'a await
+      -> 'a resume
 
-and 'a cell = Empty | Awaiting of 'a await | Triggered
+and 'a trigger = Initial | Awaiting of 'a resume | Signaled
 
 and 'a t = {
     uid: Promise_uid.t
   ; runner: Domain_uid.t
   ; state: 'a state Atomic.t
   ; parent: pack option
-  ; active_children: pack Sequence.t
+  ; children: pack Sequence.t
   ; resources: resource Sequence.t
-  ; cell: 'a cell Atomic.t
+  ; trigger: 'a trigger Atomic.t
 }
 
 and pack = Pack : 'a t -> pack
@@ -136,19 +136,21 @@ module Promise = struct
     Format.fprintf ppf "[%a:%a](%d)" Domain_uid.pp runner Uid.pp uid
       (Sequence.length resources)
 
-  let transition prm value =
+  let rec transition prm value =
     match (Atomic.get prm.state, value) with
     | (Pending as seen), Ok v ->
-        assert (Atomic.compare_and_set prm.state seen (Resolved v))
+        Atomic.compare_and_set prm.state seen (Resolved v)
+        || transition prm value
     | (Pending as seen), Error e ->
-        assert (Atomic.compare_and_set prm.state seen (Failed e))
-    | _ -> ()
+        Atomic.compare_and_set prm.state seen (Failed e) || transition prm value
+    | _ -> true
 
-  let cancel prm =
+  let cancelled = Failed Cancelled
+
+  let rec cancel prm =
     match Atomic.get prm.state with
     | (Pending | Resolved _ | Failed _) as seen ->
-        let cancelled = Failed Cancelled in
-        assert (Atomic.compare_and_set prm.state seen cancelled)
+        Atomic.compare_and_set prm.state seen cancelled || cancel prm
 
   let[@inline never] is_cancelled prm =
     match Atomic.get prm.state with Failed Cancelled -> true | _ -> false
@@ -176,9 +178,9 @@ module Promise = struct
     ; runner
     ; state= Atomic.make Pending
     ; parent
-    ; active_children= Sequence.create g
+    ; children= Sequence.create g
     ; resources
-    ; cell= Atomic.make Empty
+    ; trigger= Atomic.make Initial
     }
 
   let pack : type a. a t -> pack = fun prm -> Pack prm
@@ -202,9 +204,9 @@ module Promise = struct
     let f (Sequence.{ data= Pack prm; _ } as node) =
       if is_cancelled prm then to_delete := node :: !to_delete
     in
-    Sequence.iter_node ~f prm.active_children;
+    Sequence.iter_node ~f prm.children;
     List.iter Sequence.remove !to_delete;
-    Sequence.is_empty prm.active_children
+    Sequence.is_empty prm.children
 
   let uid { uid; _ } = uid
 end
@@ -600,7 +602,7 @@ module Domain = struct
       if List.exists (Promise.Uid.equal prm.uid) children then
         to_delete := node :: !to_delete
     in
-    Sequence.iter_node ~f current.active_children;
+    Sequence.iter_node ~f current.children;
     List.iter Sequence.remove !to_delete
 
   let perform pool domain (Pack current) =
@@ -634,7 +636,7 @@ module Domain = struct
           Logs.debug (fun m ->
               m "[%a] create a new concurrent task %a" Domain_uid.pp domain.uid
                 Promise.pp prm);
-          Sequence.add_l (Promise.pack prm) current.active_children;
+          Sequence.add_l (Promise.pack prm) current.children;
           add_into_domain domain (Arrived (prm, fn));
           k (Op.return prm)
       | Spawn (Parallel runner, resources, fn) ->
@@ -645,7 +647,7 @@ module Domain = struct
           Logs.debug (fun m ->
               m "[%a] create a new parallel task %a" Domain_uid.pp domain.uid
                 Promise.pp prm);
-          Sequence.add_l (Promise.pack prm) current.active_children;
+          Sequence.add_l (Promise.pack prm) current.children;
           add_into_pool ~domain:runner pool (Create (prm, fn));
           k (Op.return prm)
       | Yield ->
@@ -676,12 +678,12 @@ module Domain = struct
             k (Op.return ())
           end
           else k (Op.fail Not_a_child)
-      | Cancel prm when Promise.is_resolved prm ->
+      | Cancel prm when Promise.is_pending prm = false ->
           Logs.debug (fun m ->
               m "[%a] %a cancels %a (resolved)" Domain_uid.pp domain.uid
                 Promise.pp current Promise.pp prm);
           if Promise.is_a_children ~parent:current prm then begin
-            assert (Sequence.is_empty prm.active_children);
+            assert (Sequence.is_empty prm.children);
             Atomic.set prm.state (Failed Cancelled);
             k (Op.return ())
           end
@@ -722,38 +724,50 @@ module Domain = struct
     Sequence.iter ~f prm.resources;
     !leak
 
+  (* NOTE(dinosaure): about [compare_and_set] here:
+     - the first [compare_and_set] tries to set [trigger] from [Initial] to
+       [Signaled]. Two options can appear:
+       + [trigger] was not in the [Initial] state
+       + an other domain tried to set [trigger] to something else "at the same
+         time" (probably to [Awaiting]).
+
+       In both case, we re-observe the atomic value and in both case, we should
+       have something else than [Initial] - because if someone else tried to set
+       this value, it has to be for something other than [Initial]. It explains
+       our [assert false] in such case.
+     - the second [compare_and_set] tries to set [trigger] to [Signaled]. We can
+       found these cases when [trigger] is in the [Awaiting] state. Miou offers
+       a pretty simple assumption: no one, expect the [parent], can set
+       [current.trigger]. If we have in the [Awaiting] case, this means that the
+       parent is not executing and we are in possession of its continuation [k].
+       In other words, nobody can change [current.trigger] - even at the same
+       time. These [compare_and_set] should **always** returns [true].
+     - the third [compare_and_set] protect us against a "multi-shot"
+       continuation. We are allowed to execute [k] only one time. If the value
+       is not [true] OR another domain set this atomic value, this means that it
+       has taken ownership of [k] (and the ability to [continue] the
+       continuation).
+
+     Any other [compare_and_set] tries desperately to modify the atomic value
+     via a loop/recursion (until [compare_and_set] returns [true]). It's only
+     here that, depending on the context and what we want, we don't need to
+     repeat [compare_and_set]. *)
+
   let trigger pool domain current and_return =
     assert (Domain_uid.equal current.runner domain.uid);
     Logs.debug (fun m ->
         m "[%a] %a finished, check if it trigger something." Domain_uid.pp
           domain.uid Promise.pp current);
-    (* NOTE(dinosaure): if we can not do the transition from [Empty] to
-       [Triggered], this means that the parent task has added a continuation to
-       the current task (via [await]). So we need to manage this continuation to
-       pass it the result of our task via an inter-domain transfer (the parent
-       task may be running on a domain other than the current one).
-
-       If several tasks are part of the queue, the continuation is managed with
-       the value [triggered]. If this value has already been modified, it means
-       that a task has already passed on its value. Our task should therefore be
-       cancelled ([await_first]), waiting for the other tasks to be finished
-       ([await_all]) or unchanged ([await_one]). *)
-    if Atomic.compare_and_set current.cell Empty Triggered = false then
-      match Atomic.get current.cell with
-      | Empty ->
-          assert false
-          (* NOTE(dinosaure): we were not able to do the transition, this means
-             that [current.cell] must not be [Empty]. *)
-      | Triggered ->
-          ()
-          (* NOTE(dinosaure): no continuation has been connected to the task,
-             you can just do nothing. *)
+    if Atomic.compare_and_set current.trigger Initial Signaled = false then
+      match Atomic.get current.trigger with
+      | Initial -> assert false
+      | Signaled -> ()
       | Awaiting (One { parent; prm; k }) as seen ->
           Logs.debug (fun m ->
               m "%a is terminated, let's continue the parent %a" Promise.pp prm
                 Promise.pp parent);
           assert (Promise_uid.equal (Promise.uid prm) (Promise.uid current));
-          assert (Atomic.compare_and_set current.cell seen Triggered);
+          assert (Atomic.compare_and_set current.trigger seen Signaled);
           let terminated = [ Promise.uid prm ]
           and and_return = Promise.to_result prm
           and to_cancel = [] in
@@ -773,7 +787,14 @@ module Domain = struct
           let an_other_is_resolved = List.exists Promise.is_resolved prms in
           let current_failed = not (Promise.is_resolved current) in
           let ignore = an_other_is_resolved && current_failed in
-          assert (Atomic.compare_and_set current.cell seen Triggered);
+          (* NOTE(dinosaure): We can ignore this promise because:
+             1) an other resolved promise exists
+             2) **AND** this promise has been cancelled
+
+             If we have multiple resolved promises: first come (AND resolved),
+             first served. Indeed, an errored promise run also this function. We
+             don't actually randomly choose one but we should (TODO). *)
+          assert (Atomic.compare_and_set current.trigger seen Signaled);
           if (not ignore) && Atomic.compare_and_set triggered false true then begin
             Logs.debug (fun m ->
                 m "[%a] %a is chosen as the resolved promise" Domain_uid.pp
@@ -813,7 +834,7 @@ module Domain = struct
            [Suspended (prm, State.Supended (_, Spin _)_)] into our domain. We
            must clear resources to avoid a double-[Unix.close] (for instance). *)
         assert (Domain_uid.equal domain.uid prm.runner);
-        Promise.transition prm (Error exn);
+        assert (Promise.transition prm (Error exn));
         trigger pool domain prm (Error exn)
     | State.Finished (Error exn) ->
         (* XXX(dinosaure): A subtlety operates here. Even if the function has
@@ -824,7 +845,7 @@ module Domain = struct
 
            It should be noted that we can sanely "pollute" our heap with several
            cancellations (even if they already exist in our heap). Indeed, it is
-           cheaper to add an cancellation than to check if the cancellation has
+           cheaper to add a cancellation than to check if the cancellation has
            already been added. In the event that the cancellation appears but
            the promise has already been canceled, we do absolutely nothing (see
            the [once] (and the [Cancelled prm when Promise.is_cancelled prm]
@@ -832,15 +853,15 @@ module Domain = struct
         Logs.debug (fun m ->
             m "[%a] %a finished with an error, cancel %d children" Domain_uid.pp
               domain.uid Promise.pp prm
-              (Sequence.length prm.active_children));
-        Sequence.iter ~f:(terminate pool domain) prm.active_children;
+              (Sequence.length prm.children));
+        Sequence.iter ~f:(terminate pool domain) prm.children;
         add_into_domain domain (Suspended (prm, State.pure (Error exn)))
     | State.Finished (Ok value) ->
         Logs.debug (fun m -> m "%a resolved" Promise.pp prm);
         if Promise.children_terminated prm = false then raise Still_has_children;
         if resource_leak prm then raise Resource_leak;
         assert (Domain_uid.equal domain.uid prm.runner);
-        Promise.transition prm (Ok value);
+        assert (Promise.transition prm (Ok value));
         trigger pool domain prm (Ok value)
     | State.Suspended _ as state ->
         add_into_domain domain (Suspended (prm, state))
@@ -872,13 +893,13 @@ module Domain = struct
         match state with
         | State.Finished value ->
             assert (Domain_uid.equal domain.uid prm.runner);
-            Promise.transition prm value;
+            assert (Promise.transition prm value);
             (* NOTE(dinosaure): the transition should be done by [handle] from
                the computed [state]. So we should execute [handle] here.
                However, [handle] can generate continuations via the [trigger]
                function that should "not yet" be executed.
 
-               At this point in the process, we've probably already executed a
+               At this point in the iteration, we've probably already executed a
                [handle] and therefore consumed a quanta. System event management
                must be delayed to the next iteration. However, system events can
                result in contradictory cases, such as a choice between 2 system
@@ -910,38 +931,24 @@ module Domain = struct
   let[@inline never] invalid_promise prm =
     Fmt.invalid_arg "The current promise %a is already attached" Promise.pp prm
 
-  let rec attach : type a. a t -> a await -> bool =
+  let rec attach : type a. a t -> a resume -> bool =
    fun parent await ->
-    match Atomic.get parent.cell with
-    | Empty ->
-        Atomic.compare_and_set parent.cell Empty (Awaiting await)
+    match Atomic.get parent.trigger with
+    | Initial ->
+        Atomic.compare_and_set parent.trigger Initial (Awaiting await)
         || attach parent await
-    | Triggered -> false
+    | Signaled -> false
     | Awaiting _ -> invalid_promise parent
 
   let await :
       type a b.
       domain -> a t -> ((b, exn) result, a) State.continuation -> b t -> unit =
    fun domain parent k prm ->
-    (* NOTE(dinosaure): [current] is a promise associated to a task which run
-       into the given [domain]. [prm] is a promise given by a [Miou.await]
-       (performed by the [current]'s task) and the latter's task _can_ run into
-       another domain.
-
-       The goal of this function is to _save_ the continuation [k] into
-       [prm] so that at the end of its task, we trigger/run/continue the
-       [current]'s task. However, one rule exists: a domain cannot transmit
-       a task to [dom0]. We must filter the case where the [current]'s task
-       actually run into [dom0] and the [prm]'s task run into different domain.
-       In such case, (eg. [| 0, false ->]), we just check if the [prm]'s task
-       was finished and reschedule this observation if it's not. In the other
-       case, we save the continuation [k] into [prm]. When the [prm]'s task is
-       completed, it will schedule/transmit the continuation [k] to the correct
-       domain of the [current]'s task (see [trigger]).
-
-       If the [current]'s task and the [prm]'s task run into [dom0], it's safe
-       to save the continuation. Scheduling the continuation will be local, so
-       there will be no transmission from a domain to [dom0]. *)
+    (* NOTE(dinosaure): [await] is executed by the task [parent] (the one that
+       _performed_ the [Await] effect). We possibly add a new task then into the
+       [domain]'s [parent] but we **don't** need to figure out which domains it
+       is ([dom0] or another domain than [domain]) because it is currently this
+       [domain]'s [parent] that executes this code. *)
     assert (Domain_uid.equal domain.uid parent.runner);
     if Promise.is_a_children ~parent prm = false then
       let state = State.discontinue_with k Not_a_child in
@@ -952,7 +959,6 @@ module Domain = struct
         Logs.debug (fun m ->
             m "%a is already resolved (attached)" Promise.pp prm);
         assert (Promise.is_pending prm = false);
-        assert (Domain_uid.equal parent.runner domain.uid);
         clean_children ~children:[ Promise.uid prm ] parent;
         let and_return = Promise.to_result prm in
         let state =
@@ -1007,12 +1013,17 @@ module Domain = struct
       let triggered = Atomic.make false in
       let attach prms prm =
         let await = Some { prm= current; k; prms; triggered; and_cancel } in
-        Atomic.set prm.cell (Awaiting await);
+        Atomic.set prm.trigger (Awaiting await);
         if Domain_uid.equal prm.runner domain.uid = false then
           interrupt pool ~domain:prm.runner
       in
       iter_with_exclusion ~f:attach prms
 
+  (* NOTE(dinosaure): Morally, this function should also aggregate
+     cancellations. However, the only time it's used is when there's a
+     cancellation. In this case, the aim is not to search for all occurrences of
+     our promise in the heap, but to find out whether our task has just arrived
+     or has been suspended. *)
   let get_promise_into_domain ~uid domain =
     let tasks = ref [] in
     let f (_, task) =
@@ -1022,11 +1033,6 @@ module Domain = struct
           if Promise_uid.equal prm.uid uid then tasks := task :: !tasks
       | Suspended (prm, _) ->
           if Promise_uid.equal prm.uid uid then tasks := task :: !tasks
-      (* Morally, this function should also aggregate cancellations. However,
-         the only time it's used is when there's a cancellation. In this case,
-         the aim is not to search for all occurrences of our promise in the
-         heap, but to find out whether our task has just arrived or has been
-         suspended. *)
     in
     Heapq.iter f domain.tasks;
     match !tasks with
@@ -1099,20 +1105,20 @@ module Domain = struct
             assert (Domain_uid.equal domain.uid prm'.runner);
             clean_system_task_if_suspended domain state;
             clean_system_tasks domain prm';
-            Promise.cancel prm';
+            assert (Promise.cancel prm');
             handle pool domain prm' (State.fail ~exn:Cancelled state)
         | Some (Arrived (prm', _)) ->
             assert (Promise.Uid.equal prm'.uid prm.uid);
             assert (Domain_uid.equal domain.uid prm'.runner);
             clean_system_tasks domain prm';
-            Promise.cancel prm';
+            assert (Promise.cancel prm');
             handle pool domain prm (State.pure (Error Cancelled))
         | Some (Cancelled _ | Tick) ->
             () (* Impossible case, but let's do nothing *)
         | None ->
             assert (Domain_uid.equal domain.uid prm.runner);
             clean_system_tasks domain prm;
-            Promise.cancel prm;
+            assert (Promise.cancel prm);
             handle pool domain prm (State.pure (Error Cancelled)))
 
   let transmit_pending_events domain =
@@ -1486,7 +1492,7 @@ let run ?(quanta = quanta) ?(events = Fun.const dummy_events)
       if not pool.fail then Promise.to_result prm0
       else Error (Failure "A domain failed")
         (* XXX(dinosaure): if [pool.fail = true], a domain re-raised the
-           exception it got during the process. Event if we return
+           exception it got during the process. Even if we return
            [Failure "A domain failed"], we should get the initial exception via
            [Domain.join]. *)
     with exn -> Error exn
