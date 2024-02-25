@@ -1,3 +1,5 @@
+[@@@warning "-30"]
+
 external apply : ('a -> 'b) -> 'a -> 'b = "%apply"
 external reraise : exn -> 'a = "%reraise"
 
@@ -96,14 +98,13 @@ end
 type 'a state = Pending | Resolved of 'a | Failed of exn
 
 type 'a await =
-  | Await_all : {
-        prm: 'b t
-      ; prms: 'a t list
-      ; triggered: bool Atomic.t
-      ; k: (('a, exn) result list, 'b) State.continuation
+  | One : {
+        parent: 'b t
+      ; prm: 'a t
+      ; k: (('a, exn) result, 'b) State.continuation
     }
       -> 'a await
-  | Await_one : {
+  | Some : {
         prm: 'b t
       ; prms: 'a t list
       ; triggered: bool Atomic.t
@@ -112,7 +113,7 @@ type 'a await =
     }
       -> 'a await
 
-and 'a cell = Empty | Await of 'a await | Triggered
+and 'a cell = Empty | Awaiting of 'a await | Triggered
 
 and 'a t = {
     uid: Promise_uid.t
@@ -222,7 +223,7 @@ type _ Effect.t += Domains : Domain_uid.t list Effect.t
 type _ Effect.t += Random : Random.State.t Effect.t
 type _ Effect.t += Self : (Promise.Uid.t * Domain_uid.t * int) Effect.t
 type _ Effect.t += Stats : int Effect.t
-type _ Effect.t += Await : 'a t list -> ('a, exn) result list Effect.t
+type _ Effect.t += Await : 'a t -> ('a, exn) result Effect.t
 type _ Effect.t += Choose : bool * 'a t list -> ('a, exn) result Effect.t
 
 let pp_kind ppf = function
@@ -240,8 +241,7 @@ let pp_effect : type a. a Effect.t Fmt.t =
   | Random -> Fmt.string ppf "Random"
   | Self -> Fmt.string ppf "Self"
   | Stats -> Fmt.string ppf "Stats"
-  | Await prms ->
-      Fmt.pf ppf "@[<1>](Await@ @[<hov>%a@])@]" Fmt.(Dump.list Promise.pp) prms
+  | Await prm -> Fmt.pf ppf "@[<1>](Await@ @[<hov>%a@])@]" Promise.pp prm
   | Choose (_, prms) ->
       Fmt.pf ppf "@[<1>](Choose@ @[<hov>%a@])@]" Fmt.(Dump.list Promise.pp) prms
   | _ -> Fmt.string ppf "#effect"
@@ -676,6 +676,16 @@ module Domain = struct
             k (Op.return ())
           end
           else k (Op.fail Not_a_child)
+      | Cancel prm when Promise.is_resolved prm ->
+          Logs.debug (fun m ->
+              m "[%a] %a cancels %a (resolved)" Domain_uid.pp domain.uid
+                Promise.pp current Promise.pp prm);
+          if Promise.is_a_children ~parent:current prm then begin
+            assert (Sequence.is_empty prm.active_children);
+            Atomic.set prm.state (Failed Cancelled);
+            k (Op.return ())
+          end
+          else k (Op.fail Not_a_child)
       | Cancel prm ->
           Logs.debug (fun m ->
               m "[%a] %a cancels %a" Domain_uid.pp domain.uid Promise.pp current
@@ -738,35 +748,32 @@ module Domain = struct
           ()
           (* NOTE(dinosaure): no continuation has been connected to the task,
              you can just do nothing. *)
-      | Await (Await_all { prm; prms; triggered; k }) ->
-          let all_terminated =
-            List.for_all (Fun.negate Promise.is_pending) prms
-          in
+      | Awaiting (One { parent; prm; k }) as seen ->
           Logs.debug (fun m ->
-              m "[%a] %a => %a (all terminated: %b)" Domain_uid.pp domain.uid
-                Promise.pp current Promise.pp prm all_terminated);
-          if all_terminated && Atomic.compare_and_set triggered false true then begin
-            let terminated = List.map (fun ({ uid; _ } : _ t) -> uid) prms in
-            let and_return = List.map Promise.to_result prms in
-            if Domain_uid.equal prm.runner domain.uid then
-              add_into_domain domain
-                (Suspended
-                   ( prm
-                   , State.suspended_with k
-                       (Spin { terminated; to_cancel= []; and_return }) ))
-            else if prm.runner = 0 then
-              add_into_dom0 pool prm ~terminated ~and_return k
-            else
-              add_into_pool ~domain:prm.runner pool
-                (Signal { prm; terminated; and_return; to_cancel= []; k })
-          end
-      | Await (Await_one { prm; prms; triggered; and_cancel; k }) ->
+              m "%a is terminated, let's continue the parent %a" Promise.pp prm
+                Promise.pp parent);
+          assert (Promise_uid.equal (Promise.uid prm) (Promise.uid current));
+          assert (Atomic.compare_and_set current.cell seen Triggered);
+          let terminated = [ Promise.uid prm ]
+          and and_return = Promise.to_result prm
+          and to_cancel = [] in
+          if parent.runner = 0 then
+            add_into_dom0 pool parent ~terminated ~and_return k
+          else if Domain_uid.equal parent.runner domain.uid then
+            let spin = Spin { terminated; to_cancel; and_return } in
+            let state = State.suspended_with k spin in
+            add_into_domain domain (Suspended (parent, state))
+          else
+            add_into_pool ~domain:parent.runner pool
+              (Signal { prm= parent; terminated; and_return; to_cancel; k })
+      | Awaiting (Some { prm; prms; triggered; and_cancel; k }) as seen ->
           Logs.debug (fun m ->
               m "[%a] %a => %a" Domain_uid.pp domain.uid Promise.pp current
                 Promise.pp prm);
           let an_other_is_resolved = List.exists Promise.is_resolved prms in
           let current_failed = not (Promise.is_resolved current) in
           let ignore = an_other_is_resolved && current_failed in
+          assert (Atomic.compare_and_set current.cell seen Triggered);
           if (not ignore) && Atomic.compare_and_set triggered false true then begin
             Logs.debug (fun m ->
                 m "[%a] %a is chosen as the resolved promise" Domain_uid.pp
@@ -776,11 +783,9 @@ module Domain = struct
             let to_cancel = if and_cancel then prms else [] in
             let terminated = [ current.uid ] in
             if Domain_uid.equal prm.runner domain.uid then
-              add_into_domain domain
-                (Suspended
-                   ( prm
-                   , State.suspended_with k
-                       (Spin { terminated; to_cancel; and_return }) ))
+              let spin = Spin { terminated; to_cancel; and_return } in
+              let state = State.suspended_with k spin in
+              add_into_domain domain (Suspended (prm, state))
             else if prm.runner = 0 then
               add_into_dom0 pool prm ~terminated ~to_cancel ~and_return k
             else
@@ -902,15 +907,22 @@ module Domain = struct
             add_into_domain domain (Suspended (prm, state))
         | _ -> add_into_domain domain (Suspended (prm, state)))
 
+  let[@inline never] invalid_promise prm =
+    Fmt.invalid_arg "The current promise %a is already attached" Promise.pp prm
+
+  let rec attach : type a. a t -> a await -> bool =
+   fun parent await ->
+    match Atomic.get parent.cell with
+    | Empty ->
+        Atomic.compare_and_set parent.cell Empty (Awaiting await)
+        || attach parent await
+    | Triggered -> false
+    | Awaiting _ -> invalid_promise parent
+
   let await :
       type a b.
-         pool
-      -> domain
-      -> a t
-      -> ((b, exn) result list, a) State.continuation
-      -> b t list
-      -> unit =
-   fun pool domain current k prms ->
+      domain -> a t -> ((b, exn) result, a) State.continuation -> b t -> unit =
+   fun domain parent k prm ->
     (* NOTE(dinosaure): [current] is a promise associated to a task which run
        into the given [domain]. [prm] is a promise given by a [Miou.await]
        (performed by the [current]'s task) and the latter's task _can_ run into
@@ -930,55 +942,24 @@ module Domain = struct
        If the [current]'s task and the [prm]'s task run into [dom0], it's safe
        to save the continuation. Scheduling the continuation will be local, so
        there will be no transmission from a domain to [dom0]. *)
-    assert (Domain_uid.equal domain.uid current.runner);
-    Logs.debug (fun m ->
-        m "[%a] promises %a are finished: %b" Domain_uid.pp domain.uid
-          Fmt.(Dump.list Promise.pp)
-          prms
-          (List.for_all (Fun.negate Promise.is_pending) prms));
-    if List.for_all (Promise.is_a_children ~parent:current) prms = false then
+    assert (Domain_uid.equal domain.uid parent.runner);
+    if Promise.is_a_children ~parent prm = false then
       let state = State.discontinue_with k Not_a_child in
-      add_into_domain domain (Suspended (current, state))
+      add_into_domain domain (Suspended (parent, state))
     else begin
-      (* NOTE(dinosaure): 2 behaviors can be implemented here:
-         1) we can try to attach the continuation to all given promises and
-            check if we updated, at least, one of these promises. If it's not
-            the case, this means that all the tasks have been terminated, so you
-            can "continue" straight away.
-         2) or we can check that all promises are terminated and, if it's the
-            case, we do the continuation.
-
-         Actually, we implement the first behavior. It's not sure that the
-         second case is "faster" - it depends on how users use Miou.
-      *)
-      let triggered = Atomic.make false in
-      let attach prm =
+      let await = One { parent; prm; k } in
+      if attach prm await = false then begin
         Logs.debug (fun m ->
-            m "[%a] add a new waiter (%a) for %a" Domain_uid.pp domain.uid
-              Promise.pp current Promise.pp prm);
-        let await = Await_all { prm= current; prms; triggered; k } in
-        let attached =
-          Promise.is_cancelled prm = false
-          && Atomic.compare_and_set prm.cell Empty (Await await)
-        in
-        if attached && Domain_uid.equal prm.runner domain.uid = false then
-          interrupt pool ~domain:prm.runner;
-        attached
-      in
-      let states = List.map attach prms in
-      let all_terminated = List.for_all Fun.(negate id) states in
-      if all_terminated then begin
-        (* XXX(dinosaure): [really_await], all [prms] are terminated. *)
-        assert (List.for_all (Fun.negate Promise.is_pending) prms);
-        let results = List.map Promise.to_result prms in
-        assert (Domain_uid.equal current.runner domain.uid);
-        let children = List.map (fun ({ uid; _ } : _ t) -> uid) prms in
-        clean_children ~children current;
+            m "%a is already resolved (attached)" Promise.pp prm);
+        assert (Promise.is_pending prm = false);
+        assert (Domain_uid.equal parent.runner domain.uid);
+        clean_children ~children:[ Promise.uid prm ] parent;
+        let and_return = Promise.to_result prm in
         let state =
           State.suspended_with k
-            (Spin { terminated= []; to_cancel= []; and_return= results })
+            (Spin { terminated= []; to_cancel= []; and_return })
         in
-        add_into_domain domain (Suspended (current, state))
+        add_into_domain domain (Suspended (parent, state))
       end
     end
 
@@ -1025,10 +1006,8 @@ module Domain = struct
     else
       let triggered = Atomic.make false in
       let attach prms prm =
-        let await =
-          Await_one { prm= current; k; prms; triggered; and_cancel }
-        in
-        Atomic.set prm.cell (Await await);
+        let await = Some { prm= current; k; prms; triggered; and_cancel } in
+        Atomic.set prm.cell (Awaiting await);
         if Domain_uid.equal prm.runner domain.uid = false then
           interrupt pool ~domain:prm.runner
       in
@@ -1051,7 +1030,7 @@ module Domain = struct
     in
     Heapq.iter f domain.tasks;
     match !tasks with
-    | [ (Arrived _ as elt) ] | [ (Suspended _ as elt) ] -> Some elt
+    | [ (Arrived _ as elt) ] | [ (Suspended _ as elt) ] -> Option.Some elt
     | [] -> None
     | tasks ->
         Logs.err (fun m ->
@@ -1101,12 +1080,10 @@ module Domain = struct
             m "[%a] new system suspension point for [%a] into %a" Domain_uid.pp
               domain.uid Syscall_uid.pp uid Promise.pp current);
         suspend_system_call domain syscall current k
-    | Suspended (current, State.Suspended (k, Await prms)) ->
+    | Suspended (current, State.Suspended (k, Await prm)) ->
         Logs.debug (fun m ->
-            m "[%a] await %a" Domain_uid.pp domain.uid
-              Fmt.(Dump.list Promise.pp)
-              prms);
-        await pool domain current k prms
+            m "[%a] await %a" Domain_uid.pp domain.uid Promise.pp prm);
+        await domain current k prm
     | Suspended (current, State.Suspended (k, Choose (and_cancel, prms))) ->
         choose pool domain current k ~and_cancel prms
     | Suspended (prm, state) ->
@@ -1411,10 +1388,19 @@ let make fn =
   Syscall (uid, fn)
 
 let suspend syscall = Effect.perform (Suspend syscall)
-let await prm = Effect.perform (Await [ prm ]) |> List.hd
+let await prm = Effect.perform (Await prm)
 let yield () = Effect.perform Yield
 let cancel prm = Effect.perform (Cancel prm)
-let await_all prms = Effect.perform (Await prms)
+
+let await_all prms =
+  let results = ref [] in
+  let push prm =
+    let result = await prm in
+    Logs.debug (fun m -> m "%a terminated, let's continue" Promise.pp prm);
+    results := result :: !results
+  in
+  List.iter push prms; List.rev !results
+
 let uid (Syscall (uid, _) : _ syscall) = uid
 
 let parallel fn tasks =
