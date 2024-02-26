@@ -1,12 +1,17 @@
 type ('a, 'b) continuation = ('a, 'b) Effect.Shallow.continuation
+type error = Printexc.raw_backtrace * exn
 
 type 'a t =
-  | Finished of ('a, exn) result
+  | Finished of ('a, error) result
   | Suspended : ('a, 'b) continuation * 'a Effect.t -> 'b t
   | Unhandled : ('a, 'b) continuation * 'a -> 'b t
 
 let retc value = Finished (Ok value)
-let exnc exn = Finished (Error exn)
+
+let exnc exn =
+  let bt = Printexc.get_raw_backtrace () in
+  Finished (Error (bt, exn))
+
 let effc eff k = Suspended (k, eff)
 
 let handler_continue =
@@ -20,9 +25,9 @@ let handler_continue =
 let continue_with : ('c, 'a) continuation -> 'c -> 'a t =
  fun k v -> Effect.Shallow.continue_with k v handler_continue
 
-let handler_discontinue exn =
+let handler_discontinue bt_and_exn =
   let open Effect.Shallow in
-  let const _ = Finished (Error exn) in
+  let const _ = Finished (Error bt_and_exn) in
   let effc :
       type c. c Effect.t -> ((c, 'a) Effect.Shallow.continuation -> 'b) option =
    fun _ -> Some const
@@ -31,13 +36,10 @@ let handler_discontinue exn =
   { retc; exnc; effc }
 
 let discontinue_with :
-    ?backtrace:Printexc.raw_backtrace -> ('c, 'a) continuation -> exn -> 'a t =
- fun ?backtrace k exn ->
-  match backtrace with
-  | None -> Effect.Shallow.discontinue_with k exn (handler_discontinue exn)
-  | Some bt ->
-      Effect.Shallow.discontinue_with_backtrace k exn bt
-        (handler_discontinue exn)
+    backtrace:Printexc.raw_backtrace -> ('c, 'a) continuation -> exn -> 'a t =
+ fun ~backtrace:bt k exn ->
+  Effect.Shallow.discontinue_with_backtrace k exn bt
+    (handler_discontinue (bt, exn))
 
 let suspended_with : ('c, 'a) continuation -> 'c Effect.t -> 'a t =
  fun k e -> Suspended (k, e)
@@ -54,7 +56,7 @@ let make k v =
 module Op = struct
   type 'a t =
     | Return of 'a
-    | Fail of Printexc.raw_backtrace option * exn
+    | Fail of Printexc.raw_backtrace * exn
     | Interrupt
     | Continue : 'a Effect.t -> 'a t
     | Perform : 'a Effect.t -> 'a t
@@ -63,7 +65,7 @@ module Op = struct
   let interrupt = Interrupt
   let continue eff = Continue eff
   let return value = Return value
-  let fail ?backtrace:bt exn = Fail (bt, exn)
+  let fail ~backtrace:bt exn = Fail (bt, exn)
   let perform eff = Perform eff
   let yield = Yield
 end
@@ -79,7 +81,7 @@ let once : type a. perform:perform -> a t -> a t =
       let k : type c. (c, a) continuation -> c Op.t -> a t =
        fun fn -> function
         | Return v -> continue_with fn v
-        | Fail (bt, exn) -> discontinue_with ?backtrace:bt fn exn
+        | Fail (bt, exn) -> discontinue_with ~backtrace:bt fn exn
         | Interrupt -> state
         | Continue e -> suspended_with fn e
         | Perform eff ->
@@ -101,7 +103,7 @@ let run : type a. quanta:int -> perform:perform -> a t -> a t =
   let k : type c. (c, a) continuation -> c Op.t -> a t =
    fun fn -> function
     | Return v -> continue_with fn v
-    | Fail (bt, e) -> discontinue_with ?backtrace:bt fn e
+    | Fail (bt, exn) -> discontinue_with ~backtrace:bt fn exn
     | Continue e -> suspended_with fn e
     | Perform e ->
         let v = Effect.perform e in
@@ -129,7 +131,7 @@ let run : type a. quanta:int -> perform:perform -> a t -> a t =
 
 [@@@warning "+8"]
 
-let fail ?backtrace ~exn = function
-  | Finished _ -> Finished (Error exn)
-  | Suspended (k, _) -> discontinue_with ?backtrace k exn
-  | Unhandled (k, _) -> discontinue_with ?backtrace k exn
+let fail ~backtrace:bt ~exn = function
+  | Finished _ -> Finished (Error (bt, exn))
+  | Suspended (k, _) -> discontinue_with ~backtrace:bt k exn
+  | Unhandled (k, _) -> discontinue_with ~backtrace:bt k exn

@@ -64,6 +64,8 @@ type ('a, 'b) continuation
     the continuation. The user can also {i discontinue} with an exception
     the continuation. *)
 
+type error = Printexc.raw_backtrace * exn
+
 (** The type of function states.
 
     The state of a function is its execution state. A function can finish with
@@ -74,7 +76,7 @@ type ('a, 'b) continuation
     a given value (otherwise, an exception
     {!exception:Continuation_already_resumed} is raised by OCaml). *)
 type 'a t = private
-  | Finished of ('a, exn) result
+  | Finished of ('a, error) result
   | Suspended : ('a, 'b) continuation * 'a Effect.t -> 'b t
   | Unhandled : ('a, 'b) continuation * 'a -> 'b t
 
@@ -84,7 +86,7 @@ module Op : sig
   val interrupt : _ t
   val continue : 'a Effect.t -> 'a t
   val return : 'a -> 'a t
-  val fail : ?backtrace:Printexc.raw_backtrace -> exn -> _ t
+  val fail : backtrace:Printexc.raw_backtrace -> exn -> _ t
   val perform : 'a Effect.t -> 'a t
   val yield : unit t
 end
@@ -108,11 +110,11 @@ val once : perform:perform -> 'a t -> 'a t
 (** [once ~perform state] applies [perform] once on the given state if the
     latter emits an effect. *)
 
-val fail : ?backtrace:Printexc.raw_backtrace -> exn:exn -> 'a t -> 'a t
+val fail : backtrace:Printexc.raw_backtrace -> exn:exn -> 'a t -> 'a t
 (** [fail ~exn state] discontinue the given state with the given exception. It
     always return [Finished (Error exn)]. *)
 
-val pure : ('a, exn) result -> 'a t
+val pure : ('a, error) result -> 'a t
 (** [pure value] returns [Finished value]. *)
 
 val run : quanta:int -> perform:perform -> 'a t -> 'a t
@@ -130,6 +132,6 @@ val run : quanta:int -> perform:perform -> 'a t -> 'a t
 val continue_with : ('a, 'b) continuation -> 'a -> 'b t
 
 val discontinue_with :
-  ?backtrace:Printexc.raw_backtrace -> ('a, 'b) continuation -> exn -> 'b t
+  backtrace:Printexc.raw_backtrace -> ('a, 'b) continuation -> exn -> 'b t
 
 (* I didn't sign for this. *)
