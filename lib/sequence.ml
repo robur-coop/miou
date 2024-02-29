@@ -56,7 +56,8 @@ let length t =
 
 let take_l (t : 'a t) =
   let node = node_of_t t.next in
-  remove node; node.data
+  let data = node.data in
+  remove node; data
 
 let drop t =
   while not (is_empty t) do
@@ -65,7 +66,8 @@ let drop t =
 
 let take_r (t : 'a t) =
   let node = node_of_t t.prev in
-  remove node; node.data
+  let data = node.data in
+  remove node; data
 
 let take t =
   if is_empty t then raise Empty
