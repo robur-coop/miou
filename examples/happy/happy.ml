@@ -184,6 +184,7 @@ let handle t prm =
         Happy_eyeballs.Waiter_map.update id fold t.cancel_connecting;
       Some (Happy_eyeballs.Connection_failed (host, id, addr, msg))
   | Ok (`Connection fd), Some (id, attempt, host, addr) ->
+      Hashtbl.remove t.connections (Miou.Promise.uid prm);
       let cancel_connecting, others =
         Happy_eyeballs.Waiter_map.find_and_remove id t.cancel_connecting
       in
@@ -210,7 +211,10 @@ let handle t prm =
       in
       Option.iter transition waiter;
       Some (Happy_eyeballs.Connected (host, id, addr))
-  | Ok (`Connection fd), None -> Miou_unix.close fd; None
+  | Ok (`Connection fd), None ->
+      Hashtbl.remove t.connections (Miou.Promise.uid prm);
+      Miou_unix.close fd;
+      None
   | Ok (`Resolution_v4 (host, Ok ips)), _ ->
       Log.debug (fun m -> m "%a resolved" Domain_name.pp host);
       Some (Happy_eyeballs.Resolved_a (host, ips))
@@ -295,6 +299,16 @@ let suspend t he ~prms =
           (he, actions))
 
 let rec go t ~prms he () =
+  Log.debug (fun m ->
+      m
+        "[happy: %dw, cancel_connecting: %dw, waiters: %dw, connections: %dw, \
+         prms: %dw, he: %dw]"
+        Obj.(reachable_words (repr t))
+        Obj.(reachable_words (repr t.cancel_connecting))
+        Obj.(reachable_words (repr t.waiters))
+        Obj.(reachable_words (repr t.connections))
+        Obj.(reachable_words (repr prms))
+        Obj.(reachable_words (repr he)));
   let he, cont, actions =
     if Miou.Queue.is_empty t.queue then Happy_eyeballs.timer he (clock ())
     else (he, `Suspend, [])
@@ -306,12 +320,10 @@ let rec go t ~prms he () =
       Log.debug (fun m -> m "consume %d action(s)" (List.length actions));
       List.iter (handle_one_action ~prms t) actions;
       Log.debug (fun m -> m "action(s) launched");
-      Miou.yield ();
       go t ~prms he ()
   | _, actions ->
       let he, actions = get_events t he ~prms actions in
       List.iter (handle_one_action ~prms t) actions;
-      Miou.yield ();
       go t ~prms he ()
 
 let launch_stack ?aaaa_timeout ?connect_delay ?connect_timeout ?resolve_timeout
