@@ -1183,7 +1183,7 @@ module Domain = struct
             assert (Promise.cancel ~backtrace prm);
             handle pool domain prm (State.pure (Error (backtrace, Cancelled))))
 
-  let transmit_pending_events domain =
+  let _transmit_pending_events domain =
     let syscalls = Sequence.to_list domain.pending_events in
     Sequence.drop domain.pending_events;
     List.iter (transfer_system_task domain) syscalls
@@ -1203,8 +1203,12 @@ module Domain = struct
     let poll =
       Heapq.length domain.tasks = 0 && Sequence.length domain.pending_events = 0
     in
-    let syscalls = Queue.(to_list (transfer domain.cancelled_syscalls)) in
-    let syscalls = match_with (domain.events.select ~poll) syscalls handler in
+    let to_cancel = Queue.(to_list (transfer domain.cancelled_syscalls)) in
+    let syscalls =
+      match_with (domain.events.select ~poll) to_cancel handler
+      |> List.rev_append (Sequence.to_list domain.pending_events)
+    in
+    Sequence.drop domain.pending_events;
     Logs.debug (fun m ->
         m "[%a] got %d syscalls" Domain_uid.pp domain.uid (List.length syscalls));
     List.iter (transfer_system_task domain) syscalls
@@ -1228,7 +1232,6 @@ module Domain = struct
     with Yes -> true
 
   let run pool domain () =
-    transmit_pending_events domain;
     match Heapq.pop_minimum domain.tasks with
     | exception Heapq.Empty ->
         if system_tasks_suspended domain then
