@@ -1,0 +1,27 @@
+(library
+ (name backoff)
+ (public_name miou.backoff)
+ (modules backoff))
+
+(library
+ (name fmt)
+ (public_name miou.fmt)
+ (modules fmt))
+
+(library
+ (name sync)
+ (public_name miou.sync)
+ (modules sync)
+ (libraries miou.backoff miou.fmt))
+
+(library
+ (name miou)
+ (public_name miou)
+ (modules miou gen logs heapq sequence queue state)
+ (libraries miou.backoff miou.fmt miou.sync))
+
+(library
+ (name miou_unix)
+ (public_name miou.unix)
+ (modules miou_unix)
+ (libraries unix miou))
