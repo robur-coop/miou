@@ -638,7 +638,8 @@ let test32 =
     finally Stdlib.Domain.join @@ fun () ->
     Stdlib.Domain.spawn (fun () -> Miou.Trigger.signal trigger)
   in
-  let _ = Miou.Domain.Uid.gen () in (* NOTE(dinosaure): must be done due to [Stdlib.Domain.spawn]. *)
+  let _ = Miou.Domain.Uid.gen () in
+  (* NOTE(dinosaure): must be done due to [Stdlib.Domain.spawn]. *)
   Miou.Trigger.await trigger |> function
   | None -> Test.check true
   | Some _ -> Test.check false
@@ -654,14 +655,18 @@ let test33 =
     let rec fib i =
       Miou.Computation.raise_if_errored computation;
       Miou.yield ();
-      if i <= 1 then i else fib (i - 1) + (i - 2) in
-    ignore (Miou.Computation.try_capture computation fib 80) in
+      if i <= 1 then i else fib (i - 1) + (i - 2)
+    in
+    ignore (Miou.Computation.try_capture computation fib 80)
+  in
   let@ _ =
     finally Miou.await_exn @@ fun () ->
     Miou.call_cc @@ fun () ->
     let exn_bt = (Exit, Printexc.get_callstack 2) in
-    ignore (Miou.Computation.try_cancel computation exn_bt) in
-  try let _ : int = Miou.Computation.await_exn computation in
+    ignore (Miou.Computation.try_cancel computation exn_bt)
+  in
+  try
+    let _ : int = Miou.Computation.await_exn computation in
     Test.check false
   with exn -> Test.check (exn = Exit)
 
@@ -671,8 +676,7 @@ let test34 =
   let rec infinite () = infinite (Miou.yield ()) in
   Miou.run ~domains:1 @@ fun () ->
   let prm = Miou.call infinite in
-  Miou.cancel prm;
-  Test.check true
+  Miou.cancel prm; Test.check true
 
 let () =
   let tests =
@@ -680,7 +684,7 @@ let () =
       test01; test02; test03; test04; test05; test06; test07; test08; test09
     ; test10; test11; test12; test13; test14; test15; test16; test17; test18
     ; test19; test20; test21; test22; test23; test24; test25; test26; test27
-    ; test28; test29; test30; test31; test32; test33; test34 
+    ; test28; test29; test30; test31; test32; test33; test34
     ]
   in
   let ({ Test.directory } as runner) =

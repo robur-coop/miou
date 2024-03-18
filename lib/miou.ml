@@ -654,7 +654,9 @@ module Pool = struct
     try
       while true do
         Mutex.lock pool.mutex;
-        Logs.debug (fun m -> m "[%a] nothing to do? %b" Domain_uid.pp domain.uid (nothing_to_do pool domain));
+        Logs.debug (fun m ->
+            m "[%a] nothing to do? %b" Domain_uid.pp domain.uid
+              (nothing_to_do pool domain));
         while nothing_to_do pool domain && not pool.stop do
           Condition.wait pool.condition_pending_work pool.mutex
         done;
@@ -734,7 +736,7 @@ module Pool = struct
       let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
       assert (Domain_uid.equal runner domain.uid);
       Logs.debug (fun m -> m "spawn the domain [%a]" Domain_uid.pp runner);
-      worker pool domain 
+      worker pool domain
     in
     (pool, List.map spawn domains)
 end
