@@ -19,7 +19,13 @@
 (rule
  (alias runtest)
  (action
-  (setenv MIOU_DEBUG 1 (run ./test_core.exe))))
+  (setenv
+   MIOU_DEBUG
+   1
+   (setenv
+    MIOU_DOMAINS
+    3
+    (run ./test_core.exe)))))
 
 (rule
  (alias runtest)
