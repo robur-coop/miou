@@ -15,6 +15,7 @@ run-test: [ "dune" "runtest" "-p" name "-j" jobs ]
 depends: [
   "ocaml"             {>= "5.0.0"}
   "dune"              {>= "2.8.0"}
+  "dscheck"           {with-test}
   "digestif"          {with-test}
   "happy-eyeballs"    {with-test}
   "dns-client"        {with-test}
