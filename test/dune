@@ -19,7 +19,7 @@
 (rule
  (alias runtest)
  (action
-  (run ./test_core.exe)))
+  (setenv MIOU_DEBUG 1 (run ./test_core.exe))))
 
 (rule
  (alias runtest)
