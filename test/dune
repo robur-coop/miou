@@ -23,8 +23,8 @@
    MIOU_ASSERT
    1
    (setenv
-    MIOU_DEBUG
-    1
+    MIOU_DOMAINS
+    3
     (run ./test_core.exe)))))
 
 (rule
