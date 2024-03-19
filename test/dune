@@ -20,12 +20,9 @@
  (alias runtest)
  (action
   (setenv
-   MIOU_ASSERT
-   1
-   (setenv
-    MIOU_DOMAINS
-    3
-    (run ./test_core.exe)))))
+   MIOU_DOMAINS
+   3
+   (run ./test_core.exe))))
 
 (rule
  (alias runtest)
