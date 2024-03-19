@@ -640,9 +640,14 @@ let test32 =
     finally Stdlib.Domain.join @@ fun () ->
     Stdlib.Domain.spawn (fun () -> Miou.Trigger.signal trigger)
   in
-  Miou.Trigger.await trigger |> function
+  match Miou.Trigger.await trigger with
   | None -> Test.check true
-  | Some _ -> Test.check false
+  | Some (exn, _) ->
+      Format.eprintf "Got an unexpected exception: %S\n%!" (Printexc.to_string exn);
+      Test.check false
+  | exception exn ->
+      Format.eprintf "Got an unexpected exception: %S\n%!" (Printexc.to_string exn);
+      Test.check false
 
 let test33 =
   let description = {text|Simple test about computations.|text} in
