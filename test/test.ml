@@ -61,6 +61,7 @@ let run { directory } { title; fn; _ } =
   let finally () =
     flush stderr;
     Unix.dup2 old_stderr Unix.stderr;
+    Unix.close old_stderr;
     close_out new_stderr
   in
   Format.eprintf "*** %s ***\n%!" title;

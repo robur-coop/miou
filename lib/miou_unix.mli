@@ -9,6 +9,7 @@ val tcpv4 : unit -> file_descr
 val tcpv6 : unit -> file_descr
 val bind_and_listen : ?backlog:int -> file_descr -> Unix.sockaddr -> unit
 val accept : ?cloexec:bool -> file_descr -> file_descr * Unix.sockaddr
+val connect : file_descr -> Unix.sockaddr -> unit
 val read : file_descr -> bytes -> int -> int -> int
 val write : file_descr -> string -> int -> int -> unit
 val close : file_descr -> unit

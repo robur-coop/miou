@@ -638,8 +638,6 @@ let test32 =
     finally Stdlib.Domain.join @@ fun () ->
     Stdlib.Domain.spawn (fun () -> Miou.Trigger.signal trigger)
   in
-  let _ = Miou.Domain.Uid.gen () in
-  (* NOTE(dinosaure): must be done due to [Stdlib.Domain.spawn]. *)
   Miou.Trigger.await trigger |> function
   | None -> Test.check true
   | Some _ -> Test.check false

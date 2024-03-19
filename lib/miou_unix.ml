@@ -155,6 +155,19 @@ let rec accept ?cloexec ({ fd; non_blocking } as file_descr) =
     in
     blocking_read fd; go ()
 
+let rec connect ({ fd; non_blocking } as file_descr) sockaddr =
+  if not non_blocking then
+    invalid_arg
+      "Miou_unix.connect: we expect a file descriptor in the non-blocking mode";
+  match Unix.connect fd sockaddr with
+  | () -> ()
+  | exception Unix.(Unix_error (EINTR, _, _)) -> connect file_descr sockaddr
+  | exception Unix.(Unix_error (EINPROGRESS, _, _)) -> (
+      blocking_write fd;
+      match Unix.getsockopt_error fd with
+      | None -> ()
+      | Some err -> raise (Unix.Unix_error (err, "connect", "")))
+
 let close { fd; _ } = Unix.close fd
 
 let sleep until =

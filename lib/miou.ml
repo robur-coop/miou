@@ -41,6 +41,8 @@ type 'a t = {
 and pack = Pack : 'a t -> pack [@@unboxed]
 
 module Promise = struct
+  module Uid = Promise_uid
+
   let create ?parent ~forbid runner =
     {
       uid= Promise_uid.gen ()
@@ -61,6 +63,7 @@ module Promise = struct
   let pp_pack ppf (Pack prm) = pp ppf prm
   let has_forbidden { forbid; _ } = forbid
   let children_terminated prm = Sequence.is_empty prm.children
+  let is_running { state; _ } = Computation.is_running state
 
   open struct
     let explicitely ~forbid prm fn =
@@ -76,6 +79,9 @@ module Promise = struct
   end
 
   let forbid t fn = explicitely ~forbid:true t fn
+  let uid { uid; _ } = uid
+
+  type nonrec 'a t = 'a t
 end
 
 exception Clean_children of pack Sequence.node
@@ -169,11 +175,14 @@ type pool = {
   ; domains: domain list
   ; dom0: domain
   ; to_dom0: dom0_elt Queue.t
-  ; mutable stop: bool
-  ; mutable fail: bool
-  ; mutable working_counter: int
-  ; mutable domains_counter: int
+  ; stop: bool ref
+  ; fail: bool ref
+  ; working_counter: int ref
+  ; domains_counter: int ref
 }
+(* NOTE(dinosaure): when we create the pool, we do a copy (eg.
+   [{ pool with ... }]) to includes spawned domains. To continue sharing mutable
+   values when copying, we need to use [ref] rather than [mutable]. *)
 
 let get_domain_from_uid pool ~uid =
   List.find (fun domain -> Domain_uid.equal domain.uid uid) pool.domains
@@ -389,7 +398,7 @@ module Domain = struct
           k (Operation.continue (Await_cancellation child))
       | Await_cancellation child as await ->
           if
-            Computation.is_running child.state = false
+            Promise.is_running child = false
             && Sequence.is_empty child.children
             && Atomic.get child.cleaned
           then k (Operation.return (clean_children ~self:prm child))
@@ -598,6 +607,28 @@ module Domain = struct
     uid
 end
 
+module Clatch = struct
+  type t = { mutex: Mutex.t; condition: Condition.t; mutable count: int }
+
+  let create n =
+    { mutex= Mutex.create (); condition= Condition.create (); count= n }
+
+  let await t =
+    let finally () = Mutex.unlock t.mutex in
+    Mutex.lock t.mutex;
+    Fun.protect ~finally @@ fun () ->
+    while t.count > 0 do
+      Condition.wait t.condition t.mutex
+    done
+
+  let count_down t =
+    let finally () = Mutex.unlock t.mutex in
+    Mutex.lock t.mutex;
+    Fun.protect ~finally @@ fun () ->
+    t.count <- t.count - 1;
+    Condition.broadcast t.condition
+end
+
 module Pool = struct
   let one_task_for ~domain pool =
     let exception Yes in
@@ -654,35 +685,31 @@ module Pool = struct
     try
       while true do
         Mutex.lock pool.mutex;
-        Logs.debug (fun m ->
-            m "[%a] nothing to do? %b" Domain_uid.pp domain.uid
-              (nothing_to_do pool domain));
-        while nothing_to_do pool domain && not pool.stop do
+        while nothing_to_do pool domain && not !(pool.stop) do
           Condition.wait pool.condition_pending_work pool.mutex
         done;
-        if pool.stop then raise_notrace Exit;
+        if !(pool.stop) then raise_notrace Exit;
         transfer_all_tasks pool domain;
-        pool.working_counter <- pool.working_counter + 1;
+        incr pool.working_counter;
         Mutex.unlock pool.mutex;
-        Logs.debug (fun m -> m "[%a] wake-up" Domain_uid.pp domain.uid);
         Domain.run pool domain;
         Mutex.lock pool.mutex;
-        pool.working_counter <- pool.working_counter - 1;
-        if (not pool.stop) && Int.equal pool.working_counter 0 then
+        decr pool.working_counter;
+        if (not !(pool.stop)) && Int.equal !(pool.working_counter) 0 then
           Condition.signal pool.condition_all_idle;
         Mutex.unlock pool.mutex
       done
     with
     | Exit ->
         Logs.debug (fun m -> m "[%a] exits" Domain_uid.pp domain.uid);
-        pool.domains_counter <- pool.domains_counter - 1;
+        decr pool.domains_counter;
         Condition.signal pool.condition_all_idle;
         Mutex.unlock pool.mutex
     | exn ->
         Mutex.lock pool.mutex;
-        pool.stop <- true;
-        pool.fail <- true;
-        pool.domains_counter <- pool.domains_counter - 1;
+        pool.stop := true;
+        pool.fail := true;
+        decr pool.domains_counter;
         Condition.broadcast pool.condition_pending_work;
         Condition.signal pool.condition_all_idle;
         Mutex.unlock pool.mutex;
@@ -692,8 +719,10 @@ module Pool = struct
     let exception Exit in
     Mutex.lock pool.mutex;
     try
-      let working_domains () = pool.working_counter > 0 && not pool.stop in
-      let all_domains () = pool.stop && pool.domains_counter > 0 in
+      let working_domains () =
+        !(pool.working_counter) > 0 && not !(pool.stop)
+      in
+      let all_domains () = !(pool.stop) && !(pool.domains_counter) > 0 in
       while true do
         if working_domains () || all_domains () then
           Condition.wait pool.condition_all_idle pool.mutex
@@ -703,7 +732,8 @@ module Pool = struct
 
   let kill pool =
     Mutex.lock pool.mutex;
-    pool.stop <- true;
+    pool.stop := true;
+    Logs.debug (fun m -> m "[%a] kills domain(s)" Domain_uid.pp pool.dom0.uid);
     Condition.broadcast pool.condition_pending_work;
     Mutex.unlock pool.mutex;
     wait pool
@@ -711,34 +741,39 @@ module Pool = struct
   let number_of_domains () =
     max 0 (Stdlib.Domain.recommended_domain_count () - 1)
 
-  let create ?(quanta = 1) ~dom0 ?(domains = number_of_domains ()) ~events () =
-    let domains =
-      List.init domains @@ fun _ ->
-      Domain.create ~quanta ~events dom0.g (Domain_uid.gen ())
-    in
+  let create ?(quanta = 1) ~dom0
+      ?domains:(domains_counter = number_of_domains ()) ~events () =
     let pool =
       {
         tasks= Sequence.create ()
       ; mutex= Mutex.create ()
       ; condition_pending_work= Condition.create ()
       ; condition_all_idle= Condition.create ()
-      ; stop= false
-      ; fail= false
-      ; working_counter= 0
-      ; domains_counter= List.length domains
-      ; domains
+      ; stop= ref false
+      ; fail= ref false
+      ; working_counter= ref 0
+      ; domains_counter= ref domains_counter
+      ; domains= []
       ; dom0
       ; to_dom0= Queue.create ()
       }
     in
-    let spawn domain =
+    let clatch = Clatch.create domains_counter in
+    let domains = Queue.create () in
+    let spawn () =
       Stdlib.Domain.spawn @@ fun () ->
       let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
-      assert (Domain_uid.equal runner domain.uid);
+      let domain = Domain.create ~quanta ~events dom0.g runner in
+      Queue.enqueue domains domain;
       Logs.debug (fun m -> m "spawn the domain [%a]" Domain_uid.pp runner);
-      worker pool domain
+      Clatch.count_down clatch;
+      Clatch.await clatch;
+      worker { pool with domains= Queue.to_list domains } domain
     in
-    (pool, List.map spawn domains)
+    let vs = List.init domains_counter (Fun.const ()) in
+    let vs = List.map spawn vs in
+    Clatch.await clatch;
+    ({ pool with domains= Queue.to_list domains }, vs)
 end
 
 let call_cc ?orphans fn =
@@ -786,6 +821,7 @@ let await prm = await prm |> Result.map_error fst
 let await_one prms =
   if prms = [] then invalid_arg "Miou.await_one";
   let (Pack self) = Effect.perform Self in
+  let g = Effect.perform Random in
   let some (Pack parent) = Promise_uid.equal self.uid parent.uid in
   let is_a_child prm = Option.fold ~none:false ~some prm.parent in
   if not (List.for_all is_a_child prms) then raise_notrace Not_a_child;
@@ -793,28 +829,37 @@ let await_one prms =
   let choose =
     Computation.try_capture c @@ fun () ->
     let t = Trigger.create () in
-    let rec find_first_and_detach_rest = function
-      | [] -> assert false
-      | prm :: prms ->
-          if Computation.is_running prm.state then (
-            Computation.detach prm.state t;
-            find_first_and_detach_rest prms)
-          else (
-            List.iter (fun prm -> Computation.detach prm.state t) prms;
-            let result = Computation.await prm.state in
-            clean_children ~self prm; result)
-    and try_attach_all attached = function
+    let take_one_and_detach_rest unattached attached =
+      List.iter (fun prm -> Computation.detach prm.state t) attached;
+      let _, terminated =
+        List.partition Promise.is_running (attached @ unattached)
+      in
+      let filter prm =
+        if Result.is_ok (Option.get (Computation.peek prm.state)) then
+          Either.Left prm
+        else Either.Right prm
+      in
+      let result, prm =
+        match List.partition_map filter terminated with
+        | [], prms | prms, _ ->
+            let n = Random.State.int g (List.length prms) in
+            let prm = List.nth prms n in
+            (Computation.await prm.state, prm)
+      in
+      clean_children ~self prm; result
+    in
+    let rec try_attach_all attached = function
       | prm :: prms ->
           let attached = prm :: attached in
           if Computation.try_attach prm.state t then
             try_attach_all attached prms
-          else find_first_and_detach_rest attached
+          else take_one_and_detach_rest prms attached
       | [] -> (
           match Trigger.await t with
           | Some (exn, bt) ->
               List.iter (fun prm -> Computation.detach prm.state t) attached;
               Error (exn, bt)
-          | None -> find_first_and_detach_rest prms)
+          | None -> take_one_and_detach_rest [] prms)
     in
     try_attach_all [] prms
   in
@@ -832,6 +877,7 @@ let cancel ~self ~backtrace:bt prm =
 let await_first prms =
   if prms = [] then invalid_arg "Miou.await_first";
   let (Pack self) = Effect.perform Self in
+  let g = Effect.perform Random in
   let some (Pack parent) = Promise_uid.equal self.uid parent.uid in
   let is_a_child prm = Option.fold ~none:false ~some prm.parent in
   let bt = Printexc.get_callstack max_int in
@@ -840,32 +886,52 @@ let await_first prms =
   let choose =
     Computation.try_capture c @@ fun () ->
     let t = Trigger.create () in
-    let rec find_first_and_cancel_rest = function
-      | [] -> assert false
-      | prm :: prms ->
-          if Computation.is_running prm.state then (
-            Computation.detach prm.state t;
-            cancel ~self ~backtrace:bt prm;
-            find_first_and_cancel_rest prms)
-          else (
-            List.iter (fun prm -> Computation.detach prm.state t) prms;
-            List.iter (cancel ~self ~backtrace:bt) prms;
-            let result = Computation.await prm.state in
-            clean_children ~self prm; result)
-    and try_attach_all attached = function
+    let take_one_and_cancel_rest unattached attached =
+      List.iter (fun prm -> Computation.detach prm.state t) attached;
+      let in_progress, terminated =
+        List.partition Promise.is_running (attached @ unattached)
+      in
+      List.iter (cancel ~self ~backtrace:bt) in_progress;
+      let filter prm =
+        if Result.is_ok (Option.get (Computation.peek prm.state)) then
+          Either.Left prm
+        else Either.Right prm
+      in
+      let result, prm =
+        match List.partition_map filter terminated with
+        | [], prms ->
+            Logs.debug (fun m ->
+                m "[%a] only cancelled tasks are done" Domain_uid.pp self.runner);
+            let n = Random.State.int g (List.length prms) in
+            let prm = List.nth prms n in
+            (Computation.await prm.state, prm)
+        | prms, _ ->
+            Logs.debug (fun m ->
+                m "[%a] few tasks are completed" Domain_uid.pp self.runner);
+            let n = Random.State.int g (List.length prms) in
+            let prm = List.nth prms n in
+            (Computation.await prm.state, prm)
+      in
+      let exclude (prm' : _ t) =
+        if Promise_uid.equal prm.uid prm'.uid = false then
+          cancel ~self ~backtrace:bt prm'
+      in
+      List.iter exclude terminated;
+      clean_children ~self prm;
+      result
+    in
+    let rec try_attach_all attached = function
       | prm :: prms ->
           let attached = prm :: attached in
           if Computation.try_attach prm.state t then
             try_attach_all attached prms
-          else
-            let () = List.iter (cancel ~self ~backtrace:bt) prms in
-            find_first_and_cancel_rest attached
+          else take_one_and_cancel_rest prms attached
       | [] -> (
           match Trigger.await t with
           | Some (exn, bt) ->
               List.iter (fun prm -> Computation.detach prm.state t) attached;
               Error (exn, bt)
-          | None -> find_first_and_cancel_rest prms)
+          | None -> take_one_and_cancel_rest [] prms)
     in
     try_attach_all [] prms
   in
@@ -1015,10 +1081,10 @@ let run ?(quanta = quanta) ?(g = Random.State.make_self_init ())
   let pool, domains = Pool.create ~quanta ~dom0 ~domains ~events () in
   let result =
     try
-      while Computation.is_running prm0.state && pool.fail = false do
+      while Computation.is_running prm0.state && !(pool.fail) = false do
         transfer_dom0_tasks pool; Domain.run pool dom0
       done;
-      if not pool.fail then Option.get (Computation.peek prm0.state)
+      if not !(pool.fail) then Option.get (Computation.peek prm0.state)
       else Error (Failure "A domain failed", Printexc.get_callstack max_int)
     with exn ->
       let bt = Printexc.get_raw_backtrace () in
@@ -1130,6 +1196,18 @@ module Mutex = struct
     let (Pack prm) = Effect.perform Self in
     Atomic.get t == Unlocked
     || Atomic.compare_and_set t Unlocked (Locked { prm; head= []; tail= [] })
+
+  let protect t fn =
+    let (Pack self) = Effect.perform Self in
+    lock_as t self Backoff.default;
+    match fn () with
+    | value ->
+      unlock_as t self Backoff.default;
+      value
+    | exception exn ->
+      let bt = Printexc.get_raw_backtrace () in
+      unlock_as t self Backoff.default;
+      Printexc.raise_with_backtrace exn bt
 
   let succumb t fn =
     let (Pack prm) = Effect.perform Self in

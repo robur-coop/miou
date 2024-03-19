@@ -1,7 +1,7 @@
 (library
  (name test)
  (modules test)
- (libraries miou unix))
+ (libraries fmt miou unix))
 
 (executable
  (name test_core)
@@ -19,13 +19,7 @@
 (rule
  (alias runtest)
  (action
-  (setenv
-   MIOU_DEBUG
-   1
-   (setenv
-    MIOU_DOMAINS
-    3
-    (run ./test_core.exe)))))
+  (run ./test_core.exe)))
 
 (rule
  (alias runtest)

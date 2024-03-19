@@ -1,0 +1,32 @@
+(library
+ (name happy)
+ (modules happy)
+ (libraries
+  miou.unix
+  mtime.clock.os
+  ipaddr.unix
+  cstruct
+  dns
+  dns-client
+  happy-eyeballs
+  mirage-crypto-rng)
+ (foreign_stubs
+  (language c)
+  (names happy)
+  (flags (:standard))))
+
+(library
+ (name mdns)
+ (modules mdns)
+ (libraries happy))
+
+(executable
+ (name main)
+ (modules main)
+ (libraries
+  mirage-crypto-rng.unix
+  logs.fmt
+  logs.threaded
+  fmt.tty
+  duration
+  mdns))

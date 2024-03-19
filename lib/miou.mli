@@ -3,6 +3,7 @@ module Logs = Logs
 module Fmt = Fmt
 module Trigger = Sync.Trigger
 module Computation = Sync.Computation
+module Queue = Queue
 
 module Domain : sig
   module Uid : sig
@@ -11,13 +12,24 @@ module Domain : sig
     val of_int : int -> t
     val equal : t -> t -> bool
     val pp : Format.formatter -> t -> unit
-    val gen : unit -> t
   end
 
   val self : unit -> Uid.t
 end
 
 type 'a t
+
+module Promise : sig
+  type nonrec 'a t = 'a t
+
+  module Uid : sig
+    type t [@@immediate]
+
+    val pp : Format.formatter -> t -> unit
+  end
+
+  val uid : 'a t -> Uid.t
+end
 
 exception Cancelled
 exception No_domain_available
@@ -81,6 +93,14 @@ module Mutex : sig
   val unlock : t -> unit
   val lock : t -> unit
   val try_lock : t -> bool
+
+  val protect : t -> (unit -> 'a) -> 'a
+  (** [protect t fn] runs [fn] in a critical section where [t] is locked
+      ({i atomically}); it then takes care of releasing [t] whether [fn]
+      returned a value or raised an exception.
+
+      The unlocking operation is guaranteed to always takes place, even in the
+      event a cancellation is ordered by the parent. *)
 end
 
 module Condition : sig
