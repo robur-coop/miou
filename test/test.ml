@@ -66,10 +66,11 @@ let run { directory } { title; fn; _ } =
   in
   Format.eprintf "*** %s ***\n%!" title;
   try Fun.protect ~finally fn
-  with _exn ->
+  with exn ->
     let ic = open_in (Filename.concat directory (Fmt.str "%s.stderr" title)) in
     let ln = in_channel_length ic in
     let rs = Bytes.create ln in
     really_input ic rs 0 ln;
+    Format.printf "Terminated with: %S\n%!" (Printexc.to_string exn);
     Format.printf "%s\n%!" (Bytes.unsafe_to_string rs);
     exit 1

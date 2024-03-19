@@ -643,10 +643,12 @@ let test32 =
   match Miou.Trigger.await trigger with
   | None -> Test.check true
   | Some (exn, _) ->
-      Format.eprintf "Got an unexpected exception: %S\n%!" (Printexc.to_string exn);
+      Format.eprintf "Got an unexpected exception: %S\n%!"
+        (Printexc.to_string exn);
       Test.check false
   | exception exn ->
-      Format.eprintf "Got an unexpected exception: %S\n%!" (Printexc.to_string exn);
+      Format.eprintf "Got an unexpected exception: %S\n%!"
+        (Printexc.to_string exn);
       Test.check false
 
 let test33 =
