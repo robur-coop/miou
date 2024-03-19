@@ -268,8 +268,7 @@ let await_actions t he () =
   Log.debug (fun m -> m "got %d user's action(s)" (List.length user's_actions));
   to_actions t he user's_actions
 
-let await_actions t he () =
-  Miou.Mutex.protect t.mutex (await_actions t he)
+let await_actions t he () = Miou.Mutex.protect t.mutex (await_actions t he)
 
 let rec get_events t he ~prms actions =
   match Option.map (handle t) (Option.join (Miou.care prms)) |> Option.join with
@@ -326,7 +325,8 @@ let connect_ip t ips =
 let connect_ip t ips =
   try connect_ip t ips
   with exn ->
-    Log.err (fun m -> m "Got an unexpected exception: %S" (Printexc.to_string exn));
+    Log.err (fun m ->
+        m "Got an unexpected exception: %S" (Printexc.to_string exn));
     raise exn
 
 let to_pairs lst =
@@ -336,7 +336,9 @@ let he_wait_interval = Duration.(to_f (of_ms 10))
 
 let rec wait value =
   match Atomic.get value with
-  | In_progress -> Miou_unix.sleep he_wait_interval; wait value
+  | In_progress ->
+      Miou_unix.sleep he_wait_interval;
+      wait value
   | Connected (addr, fd) -> (addr, fd)
   | Failed msg -> failwith msg
 
@@ -381,8 +383,12 @@ let connect t =
       try
         let _addr, fd = connect_to_nameservers t.stack t.nameservers in
         Ok (`Tcp, (t.timeout, fd))
-      with Failure msg -> Error (`Msg msg)
-      | exn -> Log.err (fun m -> m "Got unexpected exception: %S" (Printexc.to_string exn)); raise exn)
+      with
+      | Failure msg -> Error (`Msg msg)
+      | exn ->
+          Log.err (fun m ->
+              m "Got unexpected exception: %S" (Printexc.to_string exn));
+          raise exn)
   | `Udp -> error_msgf "Invalid protocol"
 
 let rec read_loop ?(linger = Cstruct.empty) ~id proto fd =
@@ -474,7 +480,8 @@ let connect_ip t ips =
 
 let connect_host t host ports =
   let waiter = Atomic.make In_progress in
-  let () = Miou.Mutex.protect t.mutex @@ fun () ->
+  let () =
+    Miou.Mutex.protect t.mutex @@ fun () ->
     Miou.Queue.enqueue t.queue (`Connect (waiter, host, ports));
     Miou.Condition.signal t.condition;
     Log.debug (fun m -> m "the daemon was signaled about another user's action")
