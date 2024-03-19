@@ -18,6 +18,23 @@ module Domain_uid = Gen.Make ()
 module Resource_uid = Gen.Make ()
 module Syscall_uid = Gen.Make ()
 
+let miou_assert = Sys.getenv_opt "MIOU_ASSERT"
+
+let miou_assert : bool -> 'a =
+  match miou_assert with
+  | None -> fun value -> assert value
+  | Some _ ->
+      fun value ->
+        if not value then begin
+          let bt = Printexc.get_callstack max_int in
+          Logs.err (fun m ->
+              m "[%d] bad assertion at: %s"
+                (Stdlib.Domain.self () :> int)
+                (Printexc.raw_backtrace_to_string bt));
+          assert false
+        end
+        else assert true
+
 exception Cancelled
 exception Still_has_children
 exception Not_a_child
@@ -96,7 +113,7 @@ exception Clean_children of pack Sequence.node
 *)
 let clean_children ~self (child : _ t) =
   let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
-  assert (Domain_uid.equal self.runner runner);
+  miou_assert (Domain_uid.equal self.runner runner);
   Logs.debug (fun m ->
       m "[%a] clean %a into %a" Domain_uid.pp runner Promise.pp child Promise.pp
         self);
@@ -289,7 +306,7 @@ module Domain = struct
 
   let add_into_domain domain elt =
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
-    assert (Domain_uid.equal runner domain.uid);
+    miou_assert (Domain_uid.equal runner domain.uid);
     Heapq.add domain.tasks elt
 
   let add_into_pool pool elt =
@@ -311,18 +328,18 @@ module Domain = struct
        impossible for a promise belonging to [dom0] to be executed by another
        domain ([domain.uid <> 0]). We put an [assert false] about such case. *)
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
-    assert (Domain_uid.equal domain.uid runner);
+    miou_assert (Domain_uid.equal domain.uid runner);
     Logs.debug (fun m ->
         m "[%a] signals to cancel %a" Domain_uid.pp domain.uid Promise.pp prm);
     match (Domain_uid.to_int prm.runner, Domain_uid.to_int runner) with
     | 0, 0 -> add_into_domain domain (Domain_cancel (prm, bt))
-    | 0, _ -> assert false
+    | 0, _ -> miou_assert false
     | _ -> add_into_pool pool (Pool_cancel (prm, bt))
 
   let handle pool domain prm state =
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
-    assert (Domain_uid.equal runner domain.uid);
-    assert (Domain_uid.equal prm.runner domain.uid);
+    miou_assert (Domain_uid.equal runner domain.uid);
+    miou_assert (Domain_uid.equal prm.runner domain.uid);
     match state with
     | (State.Suspended _ | State.Unhandled _) as state ->
         add_into_domain domain (Domain_task (prm, state))
@@ -330,7 +347,7 @@ module Domain = struct
         let f (Pack prm) = cancel pool domain ~backtrace:bt prm in
         Sequence.iter ~f prm.children;
         ignore (Computation.try_cancel prm.state (exn, bt));
-        assert (Option.is_some (Computation.cancelled prm.state))
+        miou_assert (Option.is_some (Computation.cancelled prm.state))
     | State.Finished (Ok value) ->
         if Promise.children_terminated prm = false then
           raise_notrace Still_has_children;
@@ -348,7 +365,7 @@ module Domain = struct
         ignore (Computation.try_cancel child.state (exn, bt));
         match (Domain_uid.to_int child.runner, Domain_uid.to_int runner) with
         | 0, 0 -> add_into_domain pool.dom0 (Domain_cancel (child, bt))
-        | 0, _ -> assert false
+        | 0, _ -> miou_assert false
         | _ ->
             (* [propagate_cancellation] can be called by the [child] or its
                parent ([possibly_cancelled]). Promises can exist in 2 different
@@ -364,9 +381,10 @@ module Domain = struct
 
   let canceller pool ~self (child : _ t) =
     let trigger = Trigger.create () in
-    assert (Trigger.on_signal trigger (pool, self) child propagate_cancellation);
-    assert (Computation.try_attach self.state trigger);
-    assert (Computation.try_attach child.state trigger)
+    miou_assert
+      (Trigger.on_signal trigger (pool, self) child propagate_cancellation);
+    miou_assert (Computation.try_attach self.state trigger);
+    miou_assert (Computation.try_attach child.state trigger)
 
   let perform : pool -> domain -> 'x t -> State.perform =
    fun pool domain prm ->
@@ -432,8 +450,8 @@ module Domain = struct
      cancellation. *)
   let await pool domain prm trigger k =
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
-    assert (Domain_uid.equal runner domain.uid);
-    assert (Domain_uid.equal prm.runner domain.uid);
+    miou_assert (Domain_uid.equal runner domain.uid);
+    miou_assert (Domain_uid.equal prm.runner domain.uid);
     let waiter = { pool; domain; prm } in
     match Promise.has_forbidden prm with
     | true ->
@@ -491,12 +509,12 @@ module Domain = struct
     | None -> ()
     | Some (Pack parent) -> (
         let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
-        assert (Domain_uid.equal prm.runner runner);
-        assert (Domain_uid.equal domain.uid runner);
+        miou_assert (Domain_uid.equal prm.runner runner);
+        miou_assert (Domain_uid.equal domain.uid runner);
         match (Domain_uid.to_int parent.runner, Domain_uid.to_int runner) with
         | 0, 0 -> add_into_domain domain (Domain_clean (parent, prm))
         | 0, _ -> add_into_dom0 pool (Dom0_clean (parent, prm))
-        | _, 0 -> assert false
+        | _, 0 -> miou_assert false
         | _ -> add_into_pool pool (Pool_clean (parent, prm)))
 
   let once pool domain = function
@@ -546,13 +564,13 @@ module Domain = struct
           match get_elt_into_domain domain ~uid:prm.uid with
           | Some (Domain_tick _) -> .
           | Some (Domain_create (_, prm', _)) ->
-              assert (Promise_uid.equal prm.uid prm'.uid);
-              assert (Domain_uid.equal prm.runner domain.uid);
+              miou_assert (Promise_uid.equal prm.uid prm'.uid);
+              miou_assert (Domain_uid.equal prm.runner domain.uid);
               let state = State.pure (Error (Cancelled, bt)) in
               handle pool domain prm state
           | Some (Domain_task (prm', state)) ->
-              assert (Promise_uid.equal prm.uid prm'.uid);
-              assert (Domain_uid.equal prm.runner domain.uid);
+              miou_assert (Promise_uid.equal prm.uid prm'.uid);
+              miou_assert (Domain_uid.equal prm.runner domain.uid);
               let state = State.fail ~backtrace:bt ~exn:Cancelled state in
               handle pool domain prm' state
           | Some (Domain_cancel _) | Some (Domain_clean _) | None -> ()
@@ -569,8 +587,8 @@ module Domain = struct
 
   let signal_system_events domain (Signal (trigger, prm)) =
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
-    assert (Domain_uid.equal runner domain.uid);
-    assert (Domain_uid.equal runner prm.runner);
+    miou_assert (Domain_uid.equal runner domain.uid);
+    miou_assert (Domain_uid.equal runner prm.runner);
     Logs.debug (fun m ->
         m "[%a] signals syscall into %a" Domain_uid.pp runner Promise.pp prm);
     try Trigger.signal trigger
@@ -864,7 +882,7 @@ let await_one prms =
     try_attach_all [] prms
   in
   let prm = call_cc choose in
-  assert (await_exn prm);
+  miou_assert (await_exn prm);
   match Computation.await_exn c with
   | Ok value -> Ok value
   | Error (exn, _bt) -> Error exn
@@ -936,7 +954,7 @@ let await_first prms =
     try_attach_all [] prms
   in
   let prm = call_cc choose in
-  assert (await_exn prm);
+  miou_assert (await_exn prm);
   match Computation.await_exn c with
   | Ok value -> Ok value
   | Error (exn, _bt) -> Error exn
@@ -988,8 +1006,8 @@ let syscall () =
   let (Pack self) = Effect.perform Self in
   let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
   let domain = Effect.perform Self_domain in
-  assert (Domain_uid.equal runner domain.uid);
-  assert (Domain_uid.equal runner self.runner);
+  miou_assert (Domain_uid.equal runner domain.uid);
+  miou_assert (Domain_uid.equal runner self.runner);
   Syscall (uid, trigger, self)
 
 let suspend (Syscall (uid, trigger, prm)) =
@@ -998,7 +1016,7 @@ let suspend (Syscall (uid, trigger, prm)) =
   if Promise_uid.equal self.uid prm.uid = false then
     invalid_arg "This syscall does not belong to the current promise";
   let runner' = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
-  assert (Domain_uid.equal domain.uid runner');
+  miou_assert (Domain_uid.equal domain.uid runner');
   if Domain_uid.equal prm.runner runner' = false then
     invalid_arg "This syscall does not belong to the current domain";
   Atomic.incr domain.syscalls;
@@ -1014,7 +1032,7 @@ let suspend (Syscall (uid, trigger, prm)) =
       m "[%a] suspends syscall [%a] (%a)" Domain_uid.pp runner' Syscall_uid.pp
         uid Promise.pp self);
   match Trigger.await trigger with
-  | None -> assert (Trigger.is_signaled trigger)
+  | None -> miou_assert (Trigger.is_signaled trigger)
   | Some (exn, bt) ->
       Queue.enqueue domain.cancelled_syscalls uid;
       Printexc.raise_with_backtrace exn bt
@@ -1202,12 +1220,12 @@ module Mutex = struct
     lock_as t self Backoff.default;
     match fn () with
     | value ->
-      unlock_as t self Backoff.default;
-      value
+        unlock_as t self Backoff.default;
+        value
     | exception exn ->
-      let bt = Printexc.get_raw_backtrace () in
-      unlock_as t self Backoff.default;
-      Printexc.raise_with_backtrace exn bt
+        let bt = Printexc.get_raw_backtrace () in
+        unlock_as t self Backoff.default;
+        Printexc.raise_with_backtrace exn bt
 
   let succumb t fn =
     let (Pack prm) = Effect.perform Self in
