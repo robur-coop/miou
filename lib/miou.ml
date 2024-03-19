@@ -1105,6 +1105,9 @@ let run ?(quanta = quanta) ?(g = Random.State.make_self_init ())
       if not !(pool.fail) then Option.get (Computation.peek prm0.state)
       else Error (Failure "A domain failed", Printexc.get_callstack max_int)
     with exn ->
+      Logs.err (fun m ->
+          m "[%a] failed with %S" Domain_uid.pp dom0.uid
+            (Printexc.to_string exn));
       let bt = Printexc.get_raw_backtrace () in
       Error (exn, bt)
   in
