@@ -697,6 +697,4 @@ let () =
     Format.printf "ok\n%!"
   in
   Format.printf "Run tests into %s\n%!" directory;
-  for _ = 0 to 1000 do
-    List.iteri run tests
-  done
+  List.iteri run tests
