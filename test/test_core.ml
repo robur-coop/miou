@@ -1,3 +1,5 @@
+let () = Printexc.record_backtrace true
+
 let test01 =
   let description =
     {text|A simple test to show up the order in which tasks are performed.|text}
@@ -695,4 +697,6 @@ let () =
     Format.printf "ok\n%!"
   in
   Format.printf "Run tests into %s\n%!" directory;
-  List.iteri run tests
+  for _ = 0 to 1000 do
+    List.iteri run tests
+  done
