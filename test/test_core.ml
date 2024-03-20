@@ -685,13 +685,72 @@ let test34 =
   let prm = Miou.call infinite in
   Miou.cancel prm; Test.check true
 
+let test35 =
+  let description = {text|Basic example of ownerships.|text} in
+  Test.test ~title:"test35" ~description @@ fun () ->
+  let buf = Buffer.create 0x100 in
+  let print () = Buffer.add_string buf "Resource released" in
+  let prgm () =
+    Miou.run @@ fun () ->
+    let p =
+      Miou.call_cc @@ fun () ->
+      let t = Miou.Ownership.create ~finally:print () in
+      Miou.Ownership.own t; failwith "p"
+    in
+    Miou.await_exn p
+  in
+  match prgm () with
+  | () -> failwith "t35"
+  | exception Failure p ->
+      Test.check (p = "p");
+      Test.check (Buffer.contents buf = "Resource released")
+  | exception _ -> Test.check false
+
+let test36 =
+  let description = {text|Check if Miou releases resources.|text} in
+  Test.test ~title:"test36" ~description @@ fun () ->
+  let buf = Buffer.create 0x100 in
+  let print () = Buffer.add_string buf "Resource released" in
+  let prgm () =
+    Miou.run @@ fun () ->
+    let p =
+      Miou.call_cc @@ fun () ->
+      let t = Miou.Ownership.create ~finally:print () in
+      Miou.Ownership.own t
+    in
+    Miou.await_exn p
+  in
+  match prgm () with
+  | () -> failwith "t36"
+  | exception exn ->
+      Test.check (Printexc.to_string exn = "Miou.Resource_leaked");
+      Test.check (Buffer.contents buf = "Resource released")
+
+let test37 =
+  let description = {text|Basic usage of Miou.Ownership.disown.|text} in
+  Test.test ~title:"test37" ~description @@ fun () ->
+  let buf = Buffer.create 0x100 in
+  let print () = Buffer.add_string buf "Resource released" in
+  let prgm () =
+    Miou.run @@ fun () ->
+    let p =
+      Miou.call_cc @@ fun () ->
+      let t = Miou.Ownership.create ~finally:print () in
+      Miou.Ownership.own t; Miou.Ownership.disown t
+    in
+    Miou.await_exn p
+  in
+  prgm ();
+  Test.check (Buffer.contents buf = "")
+
 let () =
   let tests =
     [
       test01; test02; test03; test04; test05; test06; test07; test08; test09
     ; test10; test11; test12; test13; test14; test15; test16; test17; test18
     ; test19; test20; test21; test22; test23; test24; test25; test26; test27
-    ; test28; test29; test30; test31; test32; test33; test34
+    ; test28; test29; test30; test31; test32; test33; test34; test35; test36
+    ; test37
     ]
   in
   let ({ Test.directory } as runner) =
