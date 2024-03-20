@@ -371,8 +371,21 @@ module Domain = struct
         ignore (Computation.try_cancel prm.state (exn, bt));
         miou_assert (Option.is_some (Computation.cancelled prm.state))
     | State.Finished (Ok value) ->
-        if Sequence.is_empty prm.resources = false then
-          raise_notrace Resource_leaked;
+        if Sequence.is_empty prm.resources = false then begin
+          let f (Resource { uid; value; finaliser }) =
+            try finaliser value
+            with exn ->
+              Logs.err (fun m ->
+                  m
+                    "[%a] unexpected exception from the finaliser of [%a](%a): \
+                     %s"
+                    Domain_uid.pp domain.uid Resource_uid.pp uid Promise.pp prm
+                    (Printexc.to_string exn))
+          in
+          Sequence.iter ~f prm.resources;
+          Sequence.drop prm.resources;
+          raise_notrace Resource_leaked
+        end;
         if Promise.children_terminated prm = false then
           raise_notrace Still_has_children;
         Logs.debug (fun m ->
