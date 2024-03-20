@@ -164,7 +164,10 @@
       # Miou.run @@ fun () ->
         let rec pr str n =
           if n >= 0 then
-          begin Miou.yield (); print_endline str; pr str (pred n) end in
+          begin Miou.yield (); (* cooperation *)
+                print_endline str;
+                pr str (pred n)
+          end in
         let prm0 = Miou.call_cc @@ fun () -> pr "Hello" 1 in
         let prm1 = Miou.call_cc @@ fun () -> pr "World" 1 in
         Miou.await_exn prm0;
@@ -273,7 +276,7 @@
       let global = Hashtbl.create 0x100
 
       let miou_read fd buf off len =
-        let syscall = Miou.make (Fun.const ()) in
+        let syscall = Miou.syscall () in
         Hashtbl.add global fd syscall;
         Miou.suspend syscall;
         Unix.read fd buf off len
@@ -295,12 +298,13 @@
       let select ~poll:_ _cancelled_points =
         let fds = Hashtbl.to_seq_keys global |> List.of_seq in
         match Unix.select fds [] [] 0.1 with
-        | fds ->
-          let continuations = List.map (fun fd ->
-            let syscall = Hashtbl.find global fd in
-            Miou.continue_with syscall (fun () -> Hashtbl.remove global fd))
+        | fds, _, _ ->
+          let signals = List.map (fun fd ->
+              let syscall = Hashtbl.find global fd in
+              let signal = Miou.signal syscall in
+              Hashtbl.remove global fd; signal)
             fds in
-          continuations
+          signals
 
       let run fn =
         let events _domain =
@@ -351,8 +355,8 @@
 
     Task relationship clarifies what is involved in managing tasks and what they
     should transmit to each other. To answer this question, users will have to
-    find their own mechanisms ({i mutex}, {i condition}, {i ipc}, etc.) to share
-    results between tasks that are not directly related.
+    find their own mechanisms ({!module:Mutex}, {!module:Condition}, {i ipc},
+    etc.) to share results between tasks that are not directly related.
     
     {4 Rule 3, a task can only be awaited or cancelled.}
     
@@ -398,18 +402,18 @@
     However, you can involve [dom0] in the calculations with {!val:call_cc}.
 
     {[
-      let () = Miou.run @@ fun () ->
+      let () = Miou.run ~domains:3 @@ fun () ->
         let prm = Miou.call_cc server in
-        Miou.parallel server (List.init (Miou.Domain.count ()) (Fun.const ()))
+        Miou.parallel server (List.init 3 (Fun.const ()))
         |> List.iter (function Ok () -> () | Error exn -> raise exn);
         Miou.await_exn prm
     ]}
 
     The above rule also limits the use of {!val:call} if you only have (or want)
-    less than 3 domains. In fact, if you only have one domain, {!val:call}
-    cannot launch tasks in parallel. In the event that you only have 2 domains,
-    it is possible to launch a task in parallel from [dom0] but it is impossible
-    to launch a task in parallel from this [dom1].
+    less than 2 domains. In fact, if you only have one domain, {!val:call}
+    cannot launch tasks in parallel. In the situation where you only have 1
+    domains, it is possible to launch a task in parallel from [dom0] but it is
+    impossible to launch a task in parallel from this [dom1].
 
     In both cases and in such a situation, an exception is thrown:
     {!exception:No_domain_available}.
@@ -417,21 +421,8 @@
     {4 Rule 7, suspension points are local to the domain.}
 
     A suspension point is local to the domain. This means that only the domain
-    in which it was created can unlock it. The Event value is created for each
-    domain created by Miou. The unique identifier is also local to the domain.
-
-    {[
-      # Miou.run @@ fun () ->
-        let fn () = let s = Miou.make (Fun.const ()) in Miou.uid s in
-        let uids = Miou.parallel fn (List.init 2 (Fun.const ())) in
-        let[@warning "-8"] [ a; b ] = List.map Result.get_ok uids in
-        assert (a = b)
-      ;;
-      - : unit = ()
-    ]}
-
-    This code shows that two suspension points are created in two different
-    domains and their unique ids are the same.
+    in which it was created can unlock it. The {!type:event} value is created
+    for each domain created by Miou.
 
     The advantage of making suspension points local to domains is that the
     domain is solely responsible for these points and there are no inter-domain
@@ -448,7 +439,7 @@
         get, set
 
       let miou_read fd buf off len =
-        let syscall = Miou.make (Fun.const ()) in
+        let syscall = Miou.syscall () in
         let tbl = get () in
         Hashtbl.add tbl fd syscall;
         set tbl;
@@ -490,7 +481,6 @@ module Promise : sig
   val uid : 'a t -> Uid.t
 end
 
-exception Cancelled
 exception No_domain_available
 
 (** {1: ...} *)
@@ -510,19 +500,27 @@ module Ownership : sig
       promise is terminated, Miou will check that all the resources have been
       released (using {!val:disown}). If this is not the case, Miou will call
       the "finaliser" specified by the user and fail with an "uncatchable"
-      exception: [Resource_leak].
+      exception: [Resource_leaked].
 
       Note that the user must release these resources {b and} {!val:disown}. In
       fact, {!val:disown} does {b not} call the finaliser (which is only
-      executed in an abnormal situation: when the task has raised an exception
-      or when a resource has not been released).
+      executed in an abnormal situation: when the task has raised an exception,
+      when the task has been cancelled or when a resource has not been
+      released).
+
+      The aim of this module is to ensure that when a task is completed, all
+      resources have been released.
   *)
 
   type t
   (** The type of ownerships. *)
 
   val create : finally:('a -> unit) -> 'a -> t
+
   val check : t -> unit
+  (** [check t] verifies that the given resource [t] is owned by the current
+      task. If a task tries to use a resource that does not belong to it,
+      {!val:check} will raise an {i uncatchable} exception [Not_owner]. *)
 
   val own : t -> unit
   (** [own ~finally value] associates the value and this finaliser with the
@@ -530,7 +528,7 @@ module Ownership : sig
       finally function will be called.
 
       {[
-        # let show () = print_endline "Resource released"
+        # let show () = print_endline "Resource released!"
         # Miou.run @@ fun () ->
           let p = Miou.call_cc @@ fun () ->
             let t = Miou.Ownership.create ~finally:show () in
@@ -542,7 +540,7 @@ module Ownership : sig
       ]}
 
       {b NOTE}: Finaliser can not perform OCaml's effects. This is because it is
-      not "ordered" like a usual task. Using Miou functions (such as
+      not "ordered" like an usual task. Using Miou functions (such as
       {!val:await} or {!val:cancel}) in the finaliser will raise an exception:
       {!exception:Effect.Unhandled}.
 
@@ -557,11 +555,11 @@ module Ownership : sig
       Miou raises the uncatchable exception: [Resource_leaked]
 
       {[
-        # let show () = print_endline "Resource released" ;;
+        # let show () = print_endline "Resource released!" ;;
         # Miou.run @@ fun () ->
           let p = Miou.call_cc @@ fun () ->
-            let _ = Miou.Ownership.own ~finally:show () in
-            () in
+            let t = Miou.Ownership.create ~finally:show () in
+            Miou.Ownership.own t in
           await_exn p ;;
         Resource released!
         Exception: Miou.Resource_leak.
@@ -572,32 +570,314 @@ module Ownership : sig
   val transfer : t -> unit
 end
 
-(** {1: ...} *)
+(** {2:orphans Daemon and orphan tasks.}
+
+    The prerogative of absolutely awaiting all of its direct children limits the
+    user to considering certain anti-patterns. The best known is the
+    {i background} task: it consists of running a task that we would like to
+    {i detach} from the main task so that it can continue its life in autonomy.
+    For OCaml/[lwt] aficionados, this corresponds to [Lwt.async]:
+
+    {[
+      val detach : (unit -> unit t) -> unit
+    ]}
+
+    Not that we want to impose an authoritarian family approach between parent
+    and children, but the fact remains that these {i orphaned} tasks have
+    resources that we need to manage and free-up (even in an abnormal
+    situation). We consider detachment to be an {i anti-pattern}, since it
+    requires the developer to take particular care (compared to other promises)
+    not to 'forget' resources that could lead to memory leaks.
+
+    Instead of letting the developer commit to using a function that might be
+    problematic, Miou offers a completely different interface that consists of
+    assisting the developer in a coherent (and consistent) approach to
+    responding to a particular design that is not all that systematic.
+
+    So a promise can be associated with an {!type:orphans}. The latter will then
+    collect the results of the associated promise tasks and give you back the
+    promises (via {!val:care}) in a 'non-blocking' mode: applying {!val:await}
+    to them will give you the results directly.
+
+    In this way, by creating promises associated with this {!type:orphans}
+    value, we can at the same time "clean up" these {i background} tasks, as
+    this code shows:
+
+    {[
+      let rec clean_up orphans =
+        match Miou.care orphans with
+        | None | Some None -> ()
+        | Some (Some prm) -> Miou.await_exn prm; clean_up orphans
+
+      let rec server orphans =
+        clean_up orphans;
+        ignore (Miou.call ~orphans handler);
+        server orphans
+
+      let () = Miou.run @@ fun () -> server (Miou.orphans ())
+    ]}
+
+    There is a step-by-step {{!page:echo}tutorial} on how to create an echo
+    server and how to create a {i daemon} with Miou. *)
 
 type 'a orphans
+(** The type of orphan collectors. *)
 
 val orphans : unit -> 'a orphans
-val care : 'a orphans -> 'a t option option
+(** [orphans ()] makes a new orphan collectors which can used by {!val:call}
+    and {!val:call_cc}. *)
 
-(** {1: ...} *)
+val care : 'a orphans -> 'a t option option
+(** [care orphans] returns a {i ready-to-await} promise or [Some None]. The user
+    must {i consume} the result of the promise with {!val:await}. Otherwise,
+    Miou will raises the uncatchable [Still_has_children] exception. If [care]
+    returns [None], no children left behind, you can forget the {!type:orphans}
+    value safely. *)
+
+(** {2 Launch a promise.} *)
 
 val call_cc :
   ?give:Ownership.t list -> ?orphans:'a orphans -> (unit -> 'a) -> 'a t
+(** [call_cc fn] (for Call with Current Continuation) returns a promise
+    {!type:t} representing the state of the task given as an argument. The task
+    will be executed {b concurrently} with the other tasks in the current
+    domain. *)
 
 val call : ?give:Ownership.t list -> ?orphans:'a orphans -> (unit -> 'a) -> 'a t
+(** [call fn] returns a promise {!type:t} representing the state of the task
+    given as an argument. The task will be run in parallel: the domain used to
+    run the task is different from the domain with the promise. This assertion
+    is always true:
+
+    {[
+      let () = Miou.run @@ fun () ->
+        let p = Miou.call @@ fun () ->
+          let u = Miou.Domain.self () in
+          let q = Miou.call @@ fun () -> Miou.Domain.self () in
+          (u, Miou.await_exn q) in
+        let u, v = Miou.await_exn p in
+        assert (v <> u) ;;
+    ]}
+
+    Sequential calls to {!val:call} do not guarantee that different domains are
+    always chosen. This code {b may} be true.
+
+    {[
+      let () = Miou.run @@ fun () ->
+        let p = Miou.call @@ fun () -> Miou.Domain.self () in
+        let q = Miou.call @@ fun () -> Miou.Domain.self () in
+        let u = Miou.await_exn p in
+        let v = Miou.await_exn q in
+        assert (u = v);
+    ]}
+
+    To ensure that tasks are properly allocated to all domains, you need to use
+    {!val:parallel}.
+
+    {b NOTE}: {!val:call} will never run a task on {i dom0} (the main domain).
+    Only the other domains can manage tasks in parallel.
+
+    @raise No_domain_available if no domain is available to execute the task in
+    parallel or if the function is executed by the only domain available in
+    parallel (it is impossible to assign a task to [dom0] from the other
+    domains). *)
+
 val parallel : ('a -> 'b) -> 'a list -> ('b, exn) result list
+(** [parallel fn lst] is the {i fork-join} model: it is a way of setting up and
+    executing parallel tasks, such that execution branches off in parallel at
+    designated points in the program, to "join" (merge) at a subsequent point
+    and resume sequential execution.
+
+    Let's take the example of a sequential merge-sort:
+
+    {[
+      let sort ~compare (arr, lo, hi) =
+        if hi - lo >= 2 then begin
+          let mi = (lo + hi) / 2 in
+          sort ~compare (arr, lo, mi);
+          sort ~compare (arr, mi, hi);
+          merge ~compare arr lo mi hi
+        end
+    ]}
+
+    The 2 recursions work on 2 different spaces (from [lo] to [mi] and from [mi]
+    to [hi]). We could parallelise their work such that:
+
+    {[
+      let sort ~compare (arr, lo, hi) =
+        if hi - lo >= 2 then begin
+          let mi = (lo + hi) / 2 in
+          ignore (Miou.parallel (sort ~compare)
+            [ (arr, lo, mi); (arr, mi, hi) ]);
+          merge ~compare arr lo mi hi
+        end
+    ]}
+
+    Note that {!val:parallel} launches tasks ({i fork}) and awaits for them
+    ({i join}). Conceptually, this corresponds to a {!val:call} on each elements
+    of the given list and a {!val:await_all} on all of them, with tasks
+    allocated equally to the domains.
+
+    {b NOTE}: This function will never assign a task to {i dom0} - only the
+    other domains can run tasks in parallel. To involve [dom0], it simply has to
+    be the one that launches the parallelisation and performs the same task
+    concurrently.
+
+    {[
+      val server : unit -> unit
+
+      let () = Miou.run ~domains:3 @@ fun () ->
+        let p = Miou.call_cc server in
+        Miou.parallel server (List.init 3 (Fun.const ()))
+        |> List.iter (function Ok () -> () | Error exn -> raise exn);
+        Miou.await_exn p
+    ]} *)
 
 (** {1: ...} *)
 
 val await : 'a t -> ('a, exn) result
-val await_exn : 'a t -> 'a
-val await_one : 'a t list -> ('a, exn) result
-val await_first : 'a t list -> ('a, exn) result
-val await_all : 'a t list -> ('a, exn) result list
+(** [await prm] awaits for the task associated with the promise to finish. You
+    can assume that after {!val:await}, the task has ended with an exception
+    with the [Error] case or normally with the [Ok] case. In the case of an
+    abnormal termination (the raising of an exception), the children of the
+    promise are cancelled. For instance, this code is valid:
 
-(** {1: ...} *)
+    {[
+      # Miou_unix.run @@ fun () ->
+        let p = Miou.call_cc @@ fun () ->
+          let child_of_p = Miou.call_cc @@ fun () -> Miou_unix.sleep 10. in
+          failwith "p";
+          Miou.await_exn child_of_p in
+        Miou.await p ;;
+      - (unit, exn) result = Error (Failure "p")
+      # (* [child_of_p] was cancelled and you don't sleep 10s. *)
+    ]}
+
+    Note that you should {b always} await for your children (it's illegal to
+    forget your children), as in the example above (even if an exception
+    occurs). If a task does not await for its children, an {i uncatchable}
+    exception is raised by Miou:
+
+    {[
+      # Miou.run @@ fun () ->
+        ignore (Miou.call_cc (Fun.const ())) ;;
+      Exception: Miou.Still_has_children.
+    ]} *)
+
+val await_exn : 'a t -> 'a
+(** [await_exn prm] is an alias for {!val:await} which reraises the exception in
+    the [Error] case. *)
+
+val await_one : 'a t list -> ('a, exn) result
+(** [await_one prms] awaits for a task to finish (by exception or normally).
+    Despite {!val:await_first}, {!val:await_one} does {b not} cancel all the
+    others. The user must {!val:await} them then, otherwise Miou will assume
+    they're still active and will raise [Still_has_children].
+
+    {[
+      # Miou.run @@ fun () ->
+        Miou.await_one
+          [ Miou.call_cc (Fun.const 1)
+          ; Miou.call_cc (Fun.const 2) ] ;;
+      Exception: Miou.Still_has_children
+    ]}
+
+    A valid code would be:
+
+    {[
+      # Miou.run @@ fun () ->
+        let p = Miou.call_cc (Fun.const 1) in
+        let q = Miou.call_cc (Fun.const 2) in
+        match Miou.await_one [ p; q ] with
+        | 1 -> Miou.await_exn q
+        | 2 -> Miou.await_exn p
+        | _ -> assert false ;;
+      - : int = 1
+    ]}
+
+    If several tasks finish "at the same time" (as is the case in our example 
+    above), we prioritise the tasks that finished well and choose one at random.
+
+    @raise Invalid_argument if the promise list is empty. *)
+
+val await_first : 'a t list -> ('a, exn) result
+(** [await_first prms] awaits for a task to finish (by exception or normally)
+    and cancels all the others. If several tasks finish "at the same time",
+    normally completed tasks are preferred to failed ones. This function can
+    be useful for timeouts:
+
+    {[
+      # exception Timeout ;;
+      # Miou_unix.run @@ fun () ->
+        let p0 = Miou.call_cc (Fun.const ()) in
+        let p1 = Miou.call_cc @@ fun () -> Miou_unix.sleep 2.; raise Timeout in
+        Miou.await_first [ p0; p1 ] ;;
+      - : (unit, exn) result = Ok ()
+    ]}
+
+    @raise Invalid_argument if the promise list is empty. *)
+
+val await_all : 'a t list -> ('a, exn) result list
+(** [await_all prms] awaits for all the tasks linked to the promises given. If
+    one of the tasks raises an {i uncatchable} exception, {!val:await_all}
+    reraises the said exception. All tasks are awaited for, regardless of
+    whether any fail. *)
+
+(** {2 Cancellation.} *)
+
+exception Cancelled
+(** Used when a task is cancelled by {!val:cancel}. *)
 
 val cancel : 'a t -> unit
+(** [cancel prm] {i asynchronously} cancels the given promise [prm]. Miou
+    allows the forgetting of a cancelled promise and the forgetting of its
+    children. For instance, this code is valid (despite the second one):
+
+    {[
+      # Miou.run @@ fun () ->
+        ignore (Miou.cancel (Miou.call (Fun.const ()))) ;;
+      - : unit = ()
+      # Miou.run @@ fun () ->
+        ignore (Miou.call (Fun.const ())) ;;
+      Exception: Miou.Still_has_children
+    ]}
+
+    Cancellation terminates all the children. After the cancellation, the
+    promise and its children all stopped. Resolved children are also cancelled
+    (their results are erased). Canceling a task that has already been solved
+    changes the state of the task to abnormal termination [Error Cancelled].
+
+    {[
+      # Miou.run @@ fun () ->
+        let p = Miou.call_cc (Fun.const ()) in
+        Miou.await_exn p;
+        Miou.cancel p;
+        Miou.await_exn p ;;
+      Exception: Miou.Cancelled.
+    ]}
+
+    This case shows that, even if the task has been resolved internally, the
+    cancellation also applies.
+
+    {[
+      # Miou.run @@ fun () ->
+        let p = Miou.call_cc @@ fun () -> print_endline "Resolved!" in
+        Miou.yield ();
+        Miou.cancel p;
+        Miou.await_exn p ;;
+      Resolved!
+      Exception: Miou.Cancelled.
+    ]}
+
+    Only the creator of a task can {!val:cancel} it (the relationship also
+    applies to cancellation, otherwise Miou raises the exception [Not_a_child]).
+
+    {b NOTE}: Cancellation {i asynchronicity} means that other concurrent tasks
+    can run while the cancellation is in progress. In fact, in the case of an
+    cancellation of a parallel task (see {!val:call}), the cancellation may take
+    a certain amount of time (the time it takes for the domains to synchronise)
+    which should not affect the opportunity for other concurrent tasks to run.
+*)
 
 (** {1: ...} *)
 
@@ -640,7 +920,7 @@ module Mutex : sig
       returned a value or raised an exception.
 
       The unlocking operation is guaranteed to always takes place, even in the
-      event a cancellation is ordered by the parent. *)
+      event a cancellation is ordered by the parent task. *)
 end
 
 module Condition : sig

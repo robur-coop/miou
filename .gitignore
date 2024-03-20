@@ -2,3 +2,4 @@ _build
 _tests
 _b0
 *.install
+book/book
