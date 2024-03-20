@@ -3,7 +3,7 @@
 #require "topkg"
 open Topkg
 
-let miou_opam = Pkg.opam_file "opam"
+let miou_opam = Pkg.opam_file "miou.opam"
 
 let () =
   Pkg.describe ~opams:[ miou_opam ] "miou" @@ fun c ->
