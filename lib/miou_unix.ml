@@ -179,6 +179,68 @@ let sleep until =
   Miou.Heapq.add domain.sleepers elt;
   Miou.suspend syscall
 
+module Ownership = struct
+  type old = file_descr
+
+  type file_descr = {
+      fd: Unix.file_descr
+    ; non_blocking: bool
+    ; resource: Miou.Ownership.t
+  }
+
+  let bind_and_listen ?backlog { fd; non_blocking; resource } sockaddr =
+    Miou.Ownership.check resource;
+    bind_and_listen ?backlog { fd; non_blocking } sockaddr
+
+  let read { fd; non_blocking; resource } buf off len =
+    Miou.Ownership.check resource;
+    read { fd; non_blocking } buf off len
+
+  let write { fd; non_blocking; resource } str off len =
+    Miou.Ownership.check resource;
+    write { fd; non_blocking } str off len
+
+  let accept ?cloexec { fd; non_blocking; resource } =
+    Miou.Ownership.check resource;
+    let ({ fd; non_blocking } : old), sockaddr =
+      accept ?cloexec { fd; non_blocking }
+    in
+    let resource = Miou.Ownership.create ~finally:Unix.close fd in
+    Miou.Ownership.own resource;
+    ({ fd; non_blocking; resource }, sockaddr)
+
+  let connect { fd; non_blocking; resource } sockaddr =
+    Miou.Ownership.check resource;
+    connect { fd; non_blocking } sockaddr
+
+  let close { fd; resource; _ } =
+    Miou.Ownership.disown resource;
+    Unix.close fd
+
+  let of_file_descr ?(non_blocking = true) fd =
+    let resource = Miou.Ownership.create ~finally:Unix.close fd in
+    if non_blocking then Unix.set_nonblock fd else Unix.clear_nonblock fd;
+    Miou.Ownership.own resource;
+    { fd; non_blocking; resource }
+
+  let to_file_descr { fd; _ } = fd
+  let resource { resource; _ } = resource
+
+  let tcpv4 () =
+    let fd = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+    let resource = Miou.Ownership.create ~finally:Unix.close fd in
+    Unix.set_nonblock fd;
+    Miou.Ownership.own resource;
+    { fd; non_blocking= true; resource }
+
+  let tcpv6 () =
+    let fd = Unix.socket Unix.PF_INET6 Unix.SOCK_STREAM 0 in
+    let resource = Miou.Ownership.create ~finally:Unix.close fd in
+    Unix.set_nonblock fd;
+    Miou.Ownership.own resource;
+    { fd; non_blocking= true; resource }
+end
+
 let rec sleeper domain =
   match Miou.Heapq.minimum domain.sleepers with
   | exception Miou.Heapq.Empty -> None

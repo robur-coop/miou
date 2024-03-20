@@ -40,6 +40,8 @@ val length : 'a t -> int
 (** Returns the number of elements in the given sequence. This is a [O(n)]
     operation where [n] is the number of elements in the sequence. *)
 
+val exists : ('a -> bool) -> 'a t -> bool
+
 val iter : f:('a -> unit) -> 'a t -> unit
 (** [iter ~f s] applies [f] on all elements of [s] starting from left. *)
 

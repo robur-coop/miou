@@ -36,6 +36,18 @@ exception No_domain_available
 
 (** {1: ...} *)
 
+module Ownership : sig
+  type t
+
+  val create : finally:('a -> unit) -> 'a -> t
+  val check : t -> unit
+  val own : t -> unit
+  val disown : t -> unit
+  val transfer : t -> unit
+end
+
+(** {1: ...} *)
+
 type 'a orphans
 
 val orphans : unit -> 'a orphans
@@ -43,8 +55,10 @@ val care : 'a orphans -> 'a t option option
 
 (** {1: ...} *)
 
-val call_cc : ?orphans:'a orphans -> (unit -> 'a) -> 'a t
-val call : ?orphans:'a orphans -> (unit -> 'a) -> 'a t
+val call_cc :
+  ?give:Ownership.t list -> ?orphans:'a orphans -> (unit -> 'a) -> 'a t
+
+val call : ?give:Ownership.t list -> ?orphans:'a orphans -> (unit -> 'a) -> 'a t
 val parallel : ('a -> 'b) -> 'a list -> ('b, exn) result list
 
 (** {1: ...} *)

@@ -74,6 +74,14 @@ let drop t =
     ignore (take_l t)
   done
 
+let exists f t =
+  let rec go cur =
+    if cur == t then false
+    else if f (node_of_t cur).data then true
+    else go cur.next
+  in
+  go t.next
+
 let iter ~f t =
   let rec go cur =
     if cur != t then (

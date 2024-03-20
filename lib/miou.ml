@@ -1,5 +1,3 @@
-[@@@warning "-37"]
-
 type impossible = |
 
 external reraise : exn -> 'a = "%reraise"
@@ -39,6 +37,8 @@ exception Cancelled
 exception Still_has_children
 exception Not_a_child
 exception No_domain_available
+exception Not_owner
+exception Resource_leaked
 
 type 'a r = { uid: Resource_uid.t; value: 'a; finaliser: 'a -> unit }
 type resource = Resource : 'a r -> resource [@@unboxed]
@@ -60,7 +60,9 @@ and pack = Pack : 'a t -> pack [@@unboxed]
 module Promise = struct
   module Uid = Promise_uid
 
-  let create ?parent ~forbid runner =
+  let create ?parent ~forbid ?resources:(ress = []) runner =
+    let resources = Sequence.create () in
+    List.iter Sequence.(add Left resources) ress;
     {
       uid= Promise_uid.gen ()
     ; runner
@@ -68,7 +70,7 @@ module Promise = struct
     ; state= Computation.create ()
     ; parent= Option.map (fun prm -> Pack prm) parent
     ; children= Sequence.create ()
-    ; resources= Sequence.create ()
+    ; resources
     ; cancelled= None
     ; cleaned= Atomic.make false
     }
@@ -133,7 +135,8 @@ type select = block:bool -> uid list -> signal list
 type events = { select: select; interrupt: unit -> unit }
 
 type domain_elt =
-  | Domain_create : resource list * 'a t * (unit -> 'a) -> domain_elt
+  | Domain_transfer : _ t * resource * Trigger.t -> domain_elt
+  | Domain_create : 'a t * (unit -> 'a) -> domain_elt
   | Domain_cancel : _ t * Printexc.raw_backtrace -> domain_elt
   | Domain_clean : _ t * _ t -> domain_elt
   | Domain_task : 'a t * 'a State.t -> domain_elt
@@ -141,10 +144,11 @@ type domain_elt =
 
 let promise_of_domain_elt = function
   | Domain_tick _ -> .
-  | Domain_create (_, prm, _) -> Pack prm
+  | Domain_create (prm, _) -> Pack prm
   | Domain_cancel (prm, _) -> Pack prm
   | Domain_clean (prm, _) -> Pack prm
   | Domain_task (prm, _) -> Pack prm
+  | Domain_transfer (prm, _, _) -> Pack prm
 
 type domain = {
     uid: Domain_uid.t
@@ -159,7 +163,7 @@ type domain = {
 type 'r continuation = (State.error option, 'r) State.continuation
 
 type pool_elt =
-  | Pool_create : resource list * 'a t * (unit -> 'a) -> pool_elt
+  | Pool_create : 'a t * (unit -> 'a) -> pool_elt
   | Pool_cancel : _ t * Printexc.raw_backtrace -> pool_elt
   | Pool_clean : _ t * _ t -> pool_elt
   | Pool_continue : {
@@ -168,12 +172,14 @@ type pool_elt =
       ; k: 'r continuation
     }
       -> pool_elt
+  | Pool_transfer : _ t * resource * Trigger.t -> pool_elt
 
 let promise_of_pool_elt = function
-  | Pool_create (_, prm, _) -> Pack prm
+  | Pool_create (prm, _) -> Pack prm
   | Pool_cancel (prm, _) -> Pack prm
   | Pool_clean (prm, _) -> Pack prm
   | Pool_continue { prm; _ } -> Pack prm
+  | Pool_transfer (prm, _, _) -> Pack prm
 
 type dom0_elt =
   | Dom0_continue : {
@@ -183,6 +189,7 @@ type dom0_elt =
     }
       -> dom0_elt
   | Dom0_clean : _ t * _ t -> dom0_elt
+  | Dom0_transfer : _ t * resource * Trigger.t -> dom0_elt
 
 type pool = {
     tasks: pool_elt Sequence.t
@@ -204,11 +211,12 @@ type pool = {
 let get_domain_from_uid pool ~uid =
   List.find (fun domain -> Domain_uid.equal domain.uid uid) pool.domains
 
-[@@@warning "-38"]
-
 type ty = Concurrent | Parallel of Domain_uid.t
 type 'r waiter = { pool: pool; domain: domain; prm: 'r t }
-type _ Effect.t += Spawn : ty * bool * (unit -> 'a) -> 'a t Effect.t
+
+type _ Effect.t +=
+  | Spawn : ty * bool * resource list * (unit -> 'a) -> 'a t Effect.t
+
 type _ Effect.t += Self : pack Effect.t
 type _ Effect.t += Self_domain : domain Effect.t
 type _ Effect.t += Get : 'a -> 'a Effect.t
@@ -218,6 +226,7 @@ type _ Effect.t += Await_cancellation : _ t -> unit Effect.t
 type _ Effect.t += Cancel : Printexc.raw_backtrace * 'a t -> unit Effect.t
 type _ Effect.t += Yield : unit Effect.t
 type _ Effect.t += Stats : unit Effect.t
+type _ Effect.t += Transfer : resource -> Trigger.t Effect.t
 
 let pp_effect : type a. a Effect.t Fmt.t =
  fun ppf -> function
@@ -236,7 +245,7 @@ let pp_effect : type a. a Effect.t Fmt.t =
   | _ -> Fmt.string ppf "#effect"
 
 let pp_domain_elt ppf = function
-  | Domain_create (_ress, prm, _fn) ->
+  | Domain_create (prm, _fn) ->
       Fmt.pf ppf "@[<1>(Domain_create@ %a)@]" Promise.pp prm
   | Domain_cancel (prm, _) ->
       Fmt.pf ppf "@[<1>(Domain_cancel@ %a)@]" Promise.pp prm
@@ -250,6 +259,9 @@ let pp_domain_elt ppf = function
         eff
   | Domain_task (prm, State.Unhandled _) ->
       Fmt.pf ppf "@[<1>(Domain_task@ %a:unhandled)@]" Promise.pp prm
+  | Domain_transfer (prm, Resource { uid; _ }, _) ->
+      Fmt.pf ppf "@[<1>(Domain_transfer@ %a:%a)@]" Promise.pp prm
+        Resource_uid.pp uid
   | Domain_tick _ -> .
 
 module Domain = struct
@@ -344,11 +356,23 @@ module Domain = struct
     | (State.Suspended _ | State.Unhandled _) as state ->
         add_into_domain domain (Domain_task (prm, state))
     | State.Finished (Error (exn, bt)) ->
+        let f (Resource { uid; value; finaliser }) =
+          try finaliser value
+          with exn ->
+            Logs.err (fun m ->
+                m "[%a] unexpected exception from the finaliser of [%a](%a): %s"
+                  Domain_uid.pp domain.uid Resource_uid.pp uid Promise.pp prm
+                  (Printexc.to_string exn))
+        in
+        Sequence.iter ~f prm.resources;
+        Sequence.drop prm.resources;
         let f (Pack prm) = cancel pool domain ~backtrace:bt prm in
         Sequence.iter ~f prm.children;
         ignore (Computation.try_cancel prm.state (exn, bt));
         miou_assert (Option.is_some (Computation.cancelled prm.state))
     | State.Finished (Ok value) ->
+        if Sequence.is_empty prm.resources = false then
+          raise_notrace Resource_leaked;
         if Promise.children_terminated prm = false then
           raise_notrace Still_has_children;
         Logs.debug (fun m ->
@@ -386,6 +410,18 @@ module Domain = struct
     miou_assert (Computation.try_attach self.state trigger);
     miou_assert (Computation.try_attach child.state trigger)
 
+  let clean_resources prm resources =
+    let to_delete = ref [] in
+    let f ({ Sequence.data= Resource { uid; _ }; _ } as node) =
+      if
+        List.exists
+          (fun (Resource { uid= uid'; _ }) -> Resource_uid.equal uid uid')
+          resources
+      then to_delete := node :: !to_delete
+    in
+    Sequence.iter_node ~f prm.resources;
+    List.iter Sequence.remove !to_delete
+
   let perform : pool -> domain -> 'x t -> State.perform =
    fun pool domain prm ->
     let open State in
@@ -399,17 +435,19 @@ module Domain = struct
       | Domains ->
           let domains = List.map (fun { uid; _ } -> uid) pool.domains in
           k (Operation.return domains)
-      | Spawn (Concurrent, forbid, fn) ->
-          let prm' = Promise.create ~parent:prm ~forbid domain.uid in
+      | Spawn (Concurrent, forbid, resources, fn) ->
+          clean_resources prm resources;
+          let prm' = Promise.create ~parent:prm ~forbid ~resources domain.uid in
           canceller pool ~self:prm prm';
           Sequence.(add Left) prm.children (Pack prm');
-          add_into_domain domain (Domain_create ([], prm', fn));
+          add_into_domain domain (Domain_create (prm', fn));
           k (Operation.return prm')
-      | Spawn (Parallel runner, forbid, fn) ->
-          let prm' = Promise.create ~parent:prm ~forbid runner in
+      | Spawn (Parallel runner, forbid, resources, fn) ->
+          clean_resources prm resources;
+          let prm' = Promise.create ~parent:prm ~forbid ~resources runner in
           canceller pool ~self:prm prm';
           Sequence.(add Left) prm.children (Pack prm');
-          add_into_pool pool (Pool_create ([], prm', fn));
+          add_into_pool pool (Pool_create (prm', fn));
           k (Operation.return prm')
       | Cancel (backtrace, child) ->
           cancel pool domain ~backtrace child;
@@ -421,6 +459,13 @@ module Domain = struct
             && Atomic.get child.cleaned
           then k (Operation.return (clean_children ~self:prm child))
           else k (Operation.continue await)
+      | Transfer res ->
+          let (Pack parent) = Option.get prm.parent in
+          let trigger = Trigger.create () in
+          if Domain_uid.to_int parent.runner = 0 then
+            add_into_dom0 pool (Dom0_transfer (parent, res, trigger))
+          else add_into_pool pool (Pool_transfer (parent, res, trigger));
+          k (Operation.return trigger)
       | Trigger.Await _ -> k Operation.interrupt
       | Yield -> k Operation.yield
       | Stats -> k (Operation.return ())
@@ -519,10 +564,9 @@ module Domain = struct
 
   let once pool domain = function
     | Domain_tick _ -> .
-    | Domain_create (resources, prm, fn) -> (
+    | Domain_create (prm, fn) -> (
         match Computation.cancelled prm.state with
         | None ->
-            List.iter Sequence.(add Left prm.resources) resources;
             let state = State.make fn () in
             handle pool domain prm state
         | Some (exn, bt) ->
@@ -552,6 +596,9 @@ module Domain = struct
             Atomic.set prm.cleaned true;
             handle pool domain prm state)
     | Domain_clean (prm, child) -> clean_children ~self:prm child
+    | Domain_transfer (prm, res, trigger) ->
+        Sequence.(add Left) prm.resources res;
+        Trigger.signal trigger
     | Domain_cancel (prm, bt) as cancellation ->
         Logs.debug (fun m ->
             m "[%a] cancels computation %a" Domain_uid.pp domain.uid Promise.pp
@@ -563,7 +610,7 @@ module Domain = struct
         let () =
           match get_elt_into_domain domain ~uid:prm.uid with
           | Some (Domain_tick _) -> .
-          | Some (Domain_create (_, prm', _)) ->
+          | Some (Domain_create (prm', _)) ->
               miou_assert (Promise_uid.equal prm.uid prm'.uid);
               miou_assert (Domain_uid.equal prm.runner domain.uid);
               let state = State.pure (Error (Cancelled, bt)) in
@@ -573,7 +620,11 @@ module Domain = struct
               miou_assert (Domain_uid.equal prm.runner domain.uid);
               let state = State.fail ~backtrace:bt ~exn:Cancelled state in
               handle pool domain prm' state
-          | Some (Domain_cancel _) | Some (Domain_clean _) | None -> ()
+          | Some (Domain_cancel _)
+          | Some (Domain_clean _)
+          | Some (Domain_transfer _)
+          | None ->
+              ()
         in
         Atomic.set prm.cleaned true;
         Logs.debug (fun m ->
@@ -687,9 +738,10 @@ module Pool = struct
     let f ({ Sequence.data; _ } as node) =
       Sequence.remove node;
       match data with
-      | Pool_create (ress, prm, fn) -> Domain_create (ress, prm, fn)
+      | Pool_create (prm, fn) -> Domain_create (prm, fn)
       | Pool_cancel (prm, bt) -> Domain_cancel (prm, bt)
       | Pool_clean (prm, child) -> Domain_clean (prm, child)
+      | Pool_transfer (prm, res, trigger) -> Domain_transfer (prm, res, trigger)
       | Pool_continue { prm; result; k } ->
           let state = State.suspended_with k (Get result) in
           Domain_task (prm, state)
@@ -794,12 +846,75 @@ module Pool = struct
     ({ pool with domains= Queue.to_list domains }, vs)
 end
 
-let call_cc ?orphans fn =
-  let prm = Effect.perform (Spawn (Concurrent, false, fn)) in
+module Ownership = struct
+  type t = resource
+
+  let create ~finally:finaliser value =
+    Resource { uid= Resource_uid.gen (); value; finaliser }
+
+  let check (Resource { uid; _ }) =
+    let (Pack self) = Effect.perform Self in
+    Logs.debug (fun m ->
+        m "[%a] checks if [%a] is owned by %a" Domain_uid.pp self.runner
+          Resource_uid.pp uid Promise.pp self);
+    let equal (Resource { uid= uid'; _ }) = Resource_uid.equal uid uid' in
+    if Sequence.exists equal self.resources = false then raise Not_owner
+
+  let own (Resource { uid; _ } as res) =
+    let (Pack self) = Effect.perform Self in
+    Logs.debug (fun m ->
+        m "[%a] adds [%a] into %a" Domain_uid.pp self.runner Resource_uid.pp uid
+          Promise.pp self);
+    let equal (Resource { uid= uid'; _ }) = Resource_uid.equal uid uid' in
+    if Sequence.exists equal self.resources then
+      invalid_arg "The current promise already holds the resource given"
+    else Sequence.(add Left) self.resources res
+
+  exception Found_resource of resource Sequence.node
+
+  let disown (Resource { uid; _ }) =
+    let (Pack self) = Effect.perform Self in
+    let equal (Resource { uid= uid'; _ }) = Resource_uid.equal uid uid' in
+    try
+      let f ({ Sequence.data; _ } as node) =
+        if equal data then raise_notrace (Found_resource node)
+      in
+      Sequence.iter_node ~f self.resources;
+      raise Not_owner
+    with Found_resource node -> Sequence.remove node
+
+  let transfer (Resource { uid; _ } as res) =
+    let (Pack self) = Effect.perform Self in
+    if Option.is_none self.parent then
+      invalid_arg
+        "The current promise has no parent, so it is impossible to transfer a \
+         resource";
+    let equal (Resource { uid= uid'; _ }) = Resource_uid.equal uid uid' in
+    try
+      let f ({ Sequence.data; _ } as node) =
+        if equal data then raise_notrace (Found_resource node)
+      in
+      Sequence.iter_node ~f self.resources;
+      raise Not_owner
+    with Found_resource node -> (
+      let (Pack parent) = Option.get self.parent in
+      if Domain_uid.equal self.runner parent.runner then
+        let () = Sequence.(add Left) parent.resources res in
+        Sequence.remove node
+      else
+        let trigger = Effect.perform (Transfer res) in
+        match Trigger.await trigger with
+        | None -> Sequence.remove node
+        | Some (exn, bt) -> Printexc.raise_with_backtrace exn bt
+        | exception _ -> Sequence.remove node)
+end
+
+let call_cc ?(give = []) ?orphans fn =
+  let prm = Effect.perform (Spawn (Concurrent, false, give, fn)) in
   Option.iter (fun s -> Sequence.(add Left) s prm) orphans;
   prm
 
-let call ?orphans fn =
+let call ?(give = []) ?orphans fn =
   let domains = Effect.perform Domains in
   if domains = [] then raise No_domain_available;
   let (Pack self) = Effect.perform Self in
@@ -809,7 +924,7 @@ let call ?orphans fn =
     | [] -> raise No_domain_available
     | lst -> List.nth lst (Random.State.int g (List.length lst))
   in
-  let prm = Effect.perform (Spawn (Parallel runner, false, fn)) in
+  let prm = Effect.perform (Spawn (Parallel runner, false, give, fn)) in
   Option.iter (fun s -> Sequence.(add Left) s prm) orphans;
   prm
 
@@ -981,7 +1096,7 @@ let parallel fn tasks =
   let domains = List.filter (Fun.negate (Domain_uid.equal runner)) domains in
   let spawn runner fn v =
     let fn () = fn v in
-    Effect.perform (Spawn (Parallel runner, false, fn))
+    Effect.perform (Spawn (Parallel runner, false, [], fn))
   in
   if domains = [] then raise No_domain_available;
   let rec go rr prms tasks =
@@ -1084,6 +1199,7 @@ let transfer_dom0_tasks pool =
           let state = State.suspended_with k (Get result) in
           Domain_task (prm, state)
       | Dom0_clean (prm, child) -> Domain_clean (prm, child)
+      | Dom0_transfer (prm, res, trigger) -> Domain_transfer (prm, res, trigger)
     in
     List.iter (Domain.add_into_domain pool.dom0) (List.map f elts)
 
@@ -1095,7 +1211,7 @@ let run ?(quanta = quanta) ?(g = Random.State.make_self_init ())
   let dom0 = Domain_uid.of_int 0 in
   let dom0 = Domain.create ~quanta ~events g dom0 in
   let prm0 = Promise.create ~forbid:false dom0.uid in
-  Domain.add_into_domain dom0 (Domain_create ([], prm0, fn));
+  Domain.add_into_domain dom0 (Domain_create (prm0, fn));
   let pool, domains = Pool.create ~quanta ~dom0 ~domains ~events () in
   let result =
     try
