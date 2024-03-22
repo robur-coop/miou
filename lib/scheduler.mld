@@ -1,0 +1,309 @@
+{1 A simple scheduler with OCaml 5.}
+
+This short tutorial shows you how to create a simple scheduler in OCaml with
+effects. We'd like to warn the reader that certain choices have been made to
+suit our purposes: in other words, as opposed to Tatcher, there {b are}
+alternatives in implementing a scheduler. This tutorial is not {i absolutist} in
+what it explains.
+
+We therefore advise our readers to take a critical look at what we present.
+
+A scheduler can be seen as a program that attempts to run another program (just
+as your system attempts to run your software). Thus, there is an interaction
+between the program to be executed and the scheduler: basically, the creation
+and awaiting of tasks.
+
+With the advent of effects in OCaml, we now have the ability to "suspend" a
+function. In other words, we can have a state (which we can manipulate) that
+corresponds to a function that has not yet finished. When it comes to
+implementing a scheduler, it may be useful to keep this suspension in order to
+prioritize the execution of other suspended functions.
+
+In other words, we schedule the execution of these functions.
+
+{2 Effects.}
+
+The simplest explanation of what an effect is, based on known OCaml elements, is
+the exception. The exception, in OCaml, allows you to break the execution flow
+and "fall" into an exception handler.
+
+{[
+exception World
+
+let my_function () =
+  print_endline "Hello";
+  raise World
+  
+let my_program () =
+  try my_function ()
+  with World ->
+    print_endline "World"
+]}
+
+So there are 3 elements to identify:
++ exception definition ([exception])
++ raising the exception ([raise])
++ installing an exception handler (with [try ... with ...])
+
+Effects do the same thing. An effects handler exists, and if the user "performs"
+an effect, the execution flow is broken in order to "fall" into the handler.
+
+{[
+open Effect.Deep
+
+type _ Effect.t += World : unit Effect.t
+
+let handler =
+  let retc x = x
+  and exnc = raise
+  and effc
+    : type c. c Effect.t -> ((c, 'a) continuation -> 'a) option
+    = function
+    | World ->
+      print_endline "World";
+      Some (fun k -> continue k ())
+    | _ -> None in
+  { retc; exnc; effc; }
+
+let my_function () =
+  print_endline "Hello";
+  Effect.perform World
+
+let my_program () =
+  match_with my_function () handler
+]}
+
+It does, however, add an extra element to the effects. As far as exceptions are
+concerned, we can't go back to the place where the exception was raised. For
+effects, on the other hand, we are given a "continuation" (our [k] value) which
+allows us to continue immediately after the effect has been raised.
+
+For the example, this code would have no equivalence with exceptions, as we want
+to continue.
+
+{[
+open Effect.Deep
+
+type _ Effect.t += Hello : unit Effect.t
+
+let handler =
+  let retc x = x
+  and exnc = raise
+  and effc
+    : type c. c Effect.t -> ((c, 'a) continuation -> 'a) option
+    = function
+    | Hello ->
+      print_endline "Hello";
+      Some (fun k -> continue k ())
+    | _ -> None in
+  { retc; exnc; effc; }
+
+let my_function () =
+  Effect.perform Hello;
+  print_endline "World"
+
+let my_program () =
+  match_with my_function () handler
+]}
+
+{3 Suspension.}
+
+The most important thing to understand in terms of effects is {b suspension}.
+After an effect has been performed, OCaml gives us a value that corresponds to a
+suspended state of the function that performed the effect.
+
+From this value, we can:
+- continue as in the example
+- discontinue with an exception
+
+But what can become interesting in the context of a scheduler is to {b keep}
+this suspension! We could consider that the effect should produce a result, but
+that this result is not yet available. In this case, it would be:
++ keep our suspension
++ give other functions the opportunity to run (and help us get our first result)
++ "continue" our suspension afterwards if we have obtained the expected result
+  after our rescheduling.
+
+{3 Shallow & Deep.}
+
+There's one final detail to note about the effects. The existence of 2 modules:
+Deep & Shallow. At this stage, and with the aim of implementing a simple
+scheduler, the choice of one or the other is not very interesting. However, we
+must clarify the difference.
+
+The difference lies in how the handler is installed. In the case of Shallow,
+installation allows you to manage a single effect. Once you've managed it,
+you'll need to re-install a handler. In a way, this constraint "forces" you not
+to continue directly with a suspension (which could launch a new effect!) but to
+have an intermediate suspension handling step in which you could (and should)
+re-install a handler.
+
+In Deep's case, a single installation is sufficient. The function could launch
+several effects, but these would always be overtaken by the initially installed
+handler. This makes it possible to "just continue" for certain "basic" effects,
+without really worrying about the suspension and how it's continued - you'll
+still be using the same handler.
+
+For the purposes of this tutorial, we prefer to use Shallow. These constraints
+allow us to dissociate the suspension from the operation associated with the
+effect that produced the suspension.
+
+{2 A task.}
+
+As we mentioned earlier, a task (which our scheduler should handle) is the
+smallest sequence of programmed instructions: it's an OCaml function.
+
+Now we need to define a state for this function:
++ The function hasn't run yet, but it should
++ The function has finished and we have its result
++ The function has been suspended at a point (by an effect) that can be
+  continued.
+
+{[
+type 'a t =
+  | Launch : (unit -> 'a) -> 'a t
+  | Finished of 'a
+  | Suspended : ('a, 'b) Effect.Shallow.continuation * 'a Effect.t -> 'b t
+]}
+
+Now we need to describe our effect handler, which should produce this state.
+It's actually quite simple, as it only involves producing the final state (the
+function has terminated) or the suspended state. The [Launch] state will be
+created by a "spawn" function.
+
+{[
+let handler =
+  let open Effect.Shallow in
+  let retc v = Finished v in
+  let exnc = raise in
+  let effc
+    : type c. c Effect.t -> ((c, 'a) Effect.Shallow.continuation -> 'b) option
+    = fun effect -> Some (fun k -> Suspended (k, effect)) in
+  { Effect.Shallow.retc; exnc; effc }
+]}
+
+All we have to do is install this handler systematically each time we want to
+{i continue} with our task. Note that ALL effects are suspended. The aim is to
+differentiate the suspension mechanism from the handling of the effect and its
+associated operation.
+
+{2 A promise.}
+
+We still need to define a few last elements for our scheduler so that the user
+can interact with it:
+- of course, there's the effect that will create a task
+- but also a promise as a {i witness} to the task's progress
+- from this promise, we can have a last interation, awaiting task completion
+
+Finally, a last type allows us to manipulate tasks independently of the type of
+their results.
+
+{[
+type _ Effect.t += Spawn : (unit -> 'a) -> 'a promise Effect.t
+and 'a promise = 'a option ref
+and _ Effect.t += Await : 'a promise -> 'a Effect.t
+and elt = Elt : 'a t -> task
+]}
+
+The promise is a cell that can be updated once the task has been completed. The
+wait will then consist of observing this value and returning the result if
+available.
+
+{2 The scheduler.}
+
+All that remains is to implement the operations associated with our effects and
+to implement our {i main loop}, which will consist of trying to do all our tasks
+until there are none left.
+
+This gives us a to-do list that we can complete with [Spawn]. Adding a task will
+consist of:
++ creating the promise
++ updating the promise at the end of our task
+
+Finally, [Await] will simply observe the promise, and if it hasn't yet been
+{i fulfilled}, it will give the other tasks another chance ({i yield}) to run so
+that, perhaps, we can resolve the promise later.
+
+{[
+let perform
+  : type c. elt list ref -> c Effect.t -> [ `Continue of c | `Yield ]
+  = fun todo -> function
+  | Spawn fn ->
+    let value = ref None in
+    let task = Launch (fun () -> value := Some (fn ())) in
+    todo := !todo @ [ Task task ] ;
+    `Continue value
+  | Await value ->
+    begin match !value with
+    | Some value -> `Continue value
+    | None -> `Yield end
+  | _ -> invalid_arg "Invalid effect"
+]}
+
+Finally, the main loop will simply do the tasks one after the other, step by
+step. These steps are defined by the production of effects. In our case, we fall
+back on one of Miou's rules: effect yield.
+
+{[
+let step todo = function
+  | Launch fn ->
+    Effect.Shallow.(continue_with (fiber fn) () handler)
+  | Finished v -> Finished v
+  | Suspended (k, effect) ->
+    match perform todo effect with
+    | `Continue v -> Effect.Shallow.(continue_with k v handler)
+    | `Yield -> Suspended (k, effect)
+
+let run fn v =
+  let result = ref None in
+  let rec go = function
+    | [] -> Option.get !result
+    | Task task :: rest ->
+      let todo = ref rest in
+      match step todo task with
+      | Finished _ -> go !todo
+      | (Launch _ | Suspended _) as task -> go (!todo @ [ Task task ]) in
+  let task = Launch (fun () -> result := Some (fn v)) in
+  go [ Task task ]
+]}
+
+{2 The result!}
+
+In the end, all we need to do is propose a nice API for this scheduler,
+consisting of 3 functions:
++ task creation
++ waiting for task completion
++ our effects installer
+
+{[
+let spawn fn = Effet.perform (Spawn fn)
+let await prm = Effet.perform (Await prm)
+
+let my_function =
+  let prm = spawn @@ fun () -> print_endline "Hello" in
+  print_endline "World";
+  await prm
+
+let () = run my_function ()
+]}
+
+In this small example, it's clear that our first task didn't run directly! It
+was added to our todo list, but it was only the [Await] and its rescheduling
+that gave our first task the opportunity to run.
+
+{2 Conclusion.}
+
+Admittedly, this code is quite simple and doesn't really define concepts that
+are important for a scheduler such as this:
+- cancellation
+- system event management
+- parallelism
+
+It's basically a short introduction to how to make a scheduler in OCaml with
+effects, but it's certainly necessary to go further. Well, Miou exists!
+
+Nevertheless, it provides a practical mental model for understanding how Miou
+can organize these tasks. One particular point, better documented in Miou's
+introduction, concerns the priority of tasks: could we prioritize the display of
+["Hello"] in our example? To this question, Miou doesn't prioritize any tasks
+like this example. We simply "add" suspended tasks to the end of our todo list.

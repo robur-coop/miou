@@ -1,8 +1,5 @@
 _build
 _tests
-*.native
-*.byte
-*.so
-*.tar.gz
-*.merlin
+_b0
 *.install
+book/book

@@ -1,0 +1,8 @@
+description = "simple scheduler for OCaml 5"
+version = "%%VERSION_NUM%%"
+requires = ""
+archive(byte) = "miou.cma"
+archive(native) = "miou.cmxa"
+plugin(byte) = "miou.cma"
+plugin(native) = "miou.cmxs"
+exists_if = "miou.cma miou.cmxa"
