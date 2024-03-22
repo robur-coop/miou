@@ -1,9 +1,0 @@
-(executable
- (name main_p)
- (modules main_p)
- (libraries miou fmt digestif))
-
-(executable
- (name main_s)
- (modules main_s)
- (libraries fmt digestif))

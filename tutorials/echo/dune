@@ -1,7 +1,0 @@
-(documentation
- (package miou)
- (mld_files echo))
-
-(executable
- (name main)
- (libraries logs fmt logs.fmt fmt.tty logs.threaded miou.unix))
