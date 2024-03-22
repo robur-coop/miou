@@ -1,0 +1,18 @@
+(documentation
+ (package miou)
+ (mld_files sleepers))
+
+(executable
+ (name t01)
+ (modules t01)
+ (libraries miou unix))
+
+(executable
+ (name t02)
+ (modules t02)
+ (libraries miou unix))
+
+(executable
+ (name t03)
+ (modules t03)
+ (libraries miou unix))

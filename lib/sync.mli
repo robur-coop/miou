@@ -64,7 +64,7 @@ module Trigger : sig
 
       @raise Invalid_argument if the trigger was in the awaiting state, which
       means that either the owner or creator of the trigger made concurrent
-      calls to {!await} or the handler called [on_signal] more than once. *)
+      calls to {!val:await} or the handler called [on_signal] more than once. *)
 end
 
 module Computation : sig

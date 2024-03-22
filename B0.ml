@@ -1,5 +1,6 @@
 open B0_kit.V000
 
+let ( ~/ ) x = Fpath.v x
 let unix = B0_ocaml.libname "unix"
 let miou = B0_ocaml.libname "miou"
 let miou_unix = B0_ocaml.libname "miou.unix"
@@ -38,4 +39,4 @@ let miou_unix_lib =
   B0_ocaml.lib miou_unix ~doc:"The Miou unix library" ~srcs ~requires
 
 let default =
-  B0_pack.make "miou" ~doc:"The Miou package" ~locked:true @@ B0_unit.list ()
+  B0_pack.v "miou" ~doc:"The Miou package" ~locked:true @@ B0_unit.list ()

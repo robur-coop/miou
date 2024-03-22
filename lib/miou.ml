@@ -225,7 +225,6 @@ type _ Effect.t += Domains : Domain_uid.t list Effect.t
 type _ Effect.t += Await_cancellation : _ t -> unit Effect.t
 type _ Effect.t += Cancel : Printexc.raw_backtrace * 'a t -> unit Effect.t
 type _ Effect.t += Yield : unit Effect.t
-type _ Effect.t += Stats : unit Effect.t
 type _ Effect.t += Transfer : resource -> Trigger.t Effect.t
 
 let pp_effect : type a. a Effect.t Fmt.t =
@@ -240,7 +239,6 @@ let pp_effect : type a. a Effect.t Fmt.t =
       Fmt.pf ppf "@[<1>(Await_cancellation@ %a)@]" Promise.pp prm
   | Cancel (_, prm) -> Fmt.pf ppf "@[<1>(Cancel@ %a)@]" Promise.pp prm
   | Yield -> Fmt.string ppf "Yield"
-  | Stats -> Fmt.string ppf "Stats"
   | Trigger.Await _ -> Fmt.string ppf "Await"
   | _ -> Fmt.string ppf "#effect"
 
@@ -481,7 +479,6 @@ module Domain = struct
           k (Operation.return trigger)
       | Trigger.Await _ -> k Operation.interrupt
       | Yield -> k Operation.yield
-      | Stats -> k (Operation.return ())
       | effect -> k (Operation.perform effect)
     in
     { perform }
@@ -1126,7 +1123,6 @@ let parallel fn tasks =
   go domains [] tasks
 
 let yield () = Effect.perform Yield
-let stats () = Effect.perform Stats
 
 let syscall () =
   let uid = Syscall_uid.gen () in

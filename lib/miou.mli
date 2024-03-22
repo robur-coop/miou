@@ -421,7 +421,7 @@
     {4 Rule 7, suspension points are local to the domain.}
 
     A suspension point is local to the domain. This means that only the domain
-    in which it was created can unlock it. The {!type:event} value is created
+    in which it was created can unlock it. The {!type:events} value is created
     for each domain created by Miou.
 
     The advantage of making suspension points local to domains is that the
@@ -482,8 +482,8 @@ module Promise : sig
 end
 
 exception No_domain_available
-
-(** {1: ...} *)
+(** An exception which can be raised by {!val:call} if no domain is available to
+    execute the task in parallel. *)
 
 module Ownership : sig
   (** {2 Ownership of resources.}
@@ -733,8 +733,6 @@ val parallel : ('a -> 'b) -> 'a list -> ('b, exn) result list
         Miou.await_exn p
     ]} *)
 
-(** {1: ...} *)
-
 val await : 'a t -> ('a, exn) result
 (** [await prm] awaits for the task associated with the promise to finish. You
     can assume that after {!val:await}, the task has ended with an exception
@@ -879,21 +877,120 @@ val cancel : 'a t -> unit
     which should not affect the opportunity for other concurrent tasks to run.
 *)
 
-(** {1: ...} *)
-
 val yield : unit -> unit
-val stats : unit -> unit
+(** [yield ()] reschedules tasks and give an opportunity to carry out the tasks
+    that have been on hold the longest. For intance:
 
-(** {1: ...} *)
+    {[
+      # Miou.run @@ fun () ->
+        let p = Miou.call_cc @@ fun () -> print_endline "Hello" in
+        print_endline "World";
+        Miou.await_exn p ;;
+      World
+      Hello
+      - : unit = ()
+      # Miou.run @@ fun () ->
+        let p = Miou.call_cc @@ fun () -> print_endline "Hello" in
+        Miou.yield ();
+        print_endline "World";
+        Miou.await_exn p
+      Hello
+      World
+      - : unit = ()
+    ]} *)
+
+(** {2:system System events.}
+
+    Miou does not monitor system events. We arbitrarily leave this event
+    monitoring to the user (so that Miou only requires OCaml to run). The
+    advantage is that you can inject an event monitor from a specific system
+    (such as a unikernel) if you want. However, {!module:Miou_unix} is available
+    if you want to do input/output.
+
+    To facilitate the integration of an event monitor, Miou offers an API for
+    creating "suspension points" (see {!val:suspend}). In other words, points
+    where execution will be blocked for as long as you wish. These points can be
+    unblocked as soon as the monitor gives Miou a "signal" to these points with
+    {!val:signal}.
+
+    The user must specify a {!type:select} function (via the {!val:run} function
+    and the {!type:events} type), which must correspond to system event
+    monitoring (probably using [Unix.select]). From these events, the monitor
+    can decide which suspension point (thanks to its {!type:uid}) should be
+    released. Miou will then call this function for each {i quanta} consumed.
+    This gives Miou a high degree of availability to consume and process system
+    events.
+
+    {3 Domains, suspension and monitoring.}
+
+    Each domain has its own monitor so that the suspension and its continuation
+    given by the monitor is always local to the domain (the domain managing the
+    suspension is the only one allowed to execute the continuation). One
+    {!type:events} is allocated per domain - it is given on which domain the
+    [event] value is assigned. In this way, the values (such as a table of
+    active file-descriptors) required to monitor system events need {b not} be
+    {i domain-safe}.
+
+    {3 Sleep state.}
+
+    Sometimes, Miou only has suspension points. In other words, only system
+    events are required to execute tasks (typically waiting for a TCP/IP
+    connection). We say we're in a sleep state. In this case, Miou informs the
+    monitor [select] that it can wait indefinitely (with [block:true]).
+
+    {3 Cancellation.}
+
+    It can happen that a task executed by one domain is cancelled by another
+    domain (if the first was created by {!val:call}). This cancellation of a
+    task can also mean the cancellation of existing suspension points into the
+    task. Miou must therefore be able to {i interrupt} a domain (especially if
+    the latter is in a sleep state).
+
+    Thus, the user must have a mechanism for stopping event monitoring, which
+    must be given to Miou via the [interrupt] field (see {!type:events}).
+
+    Finally, Miou informs the monitor of any points that have been cancelled, so
+    that the associated events can no longer be monitored (this could involve
+    cleaning up the table of active file-descritpors).
+
+    {3 Tutorial.}
+
+    To help you understand all these related elements, the distribution offers a
+    short tutorial on how to implement functions that can block a given time
+    (such as [Unix.sleep]): {!page:sleepers}. *)
 
 type syscall
+(** The type of {i syscalls}.
+
+    A syscall is an unique ID and function executed as soon as the suspension
+    point is released. This suspension point is created using the {!val:suspend}
+    function. *)
+
 type signal
+(** The type of signals.
+
+    A signal is a syscall that has been suspended (with {!val:suspend}) that we
+    would like to resume. This is a value that must be given to Miou (via
+    [select]) in order to {i unblock} the previously created suspend point. *)
+
 type uid = private int [@@immediate]
+(** The type of unique IDs of {!type:syscall}s. *)
 
 val syscall : unit -> syscall
+(** [syscall ()] creates a {i syscall} which permits the user to create a new
+    suspension point via {!val:suspend}. *)
+
 val suspend : syscall -> unit
+(** [suspend syscall] creates an user's defined suspension point. Miou will
+    keep it internally and only the user is able to {i resume} it via
+    {!type:events} (and the [select] field) and a {!type:signal}. *)
+
 val signal : syscall -> signal
+(** [signal syscall] creates a {!type:signal} value which can be used by Miou to
+    unblock the suspension point associated with the given syscall. *)
+
 val uid : syscall -> uid
+(** [uid syscall] returns the unique ID of the syscall. *)
 
 type select = block:bool -> uid list -> signal list
 type events = { select: select; interrupt: unit -> unit }

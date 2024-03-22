@@ -20,3 +20,7 @@
  (public_name miou.unix)
  (modules miou_unix)
  (libraries unix miou))
+
+(documentation
+ (package miou)
+ (mld_files scheduler))
