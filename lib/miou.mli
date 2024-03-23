@@ -516,6 +516,8 @@ module Ownership : sig
   (** The type of ownerships. *)
 
   val create : finally:('a -> unit) -> 'a -> t
+  (** [create ~finally v] associates a value [v] and a [finaliser] to return a
+      {i resource}. *)
 
   val check : t -> unit
   (** [check t] verifies that the given resource [t] is owned by the current
@@ -523,9 +525,9 @@ module Ownership : sig
       {!val:check} will raise an {i uncatchable} exception [Not_owner]. *)
 
   val own : t -> unit
-  (** [own ~finally value] associates the value and this finaliser with the
-      current promise. This way, if the current promise fails abnormally, the
-      finally function will be called.
+  (** [own t] associates the given resource [t] to the current task. This way,
+      if the current task fails abnormally, the [finally] function will be
+      called.
 
       {[
         # let show () = print_endline "Resource released!"
@@ -551,7 +553,7 @@ module Ownership : sig
 
   val disown : t -> unit
   (** [disown t] informs Miou that you have properly released the resource. If
-      the current promise ends well and the user has not [disown] the resource,
+      the current task ends well and the user has not [disown] the resource,
       Miou raises the uncatchable exception: [Resource_leaked]
 
       {[
@@ -568,6 +570,24 @@ module Ownership : sig
       Note that even in this situation, Miou calls the finaliser. *)
 
   val transfer : t -> unit
+  (** [transfer t] transfers the ownership of a resource to the parent task. It
+      is useful when a sub-task operates to the resource owned by its parent and
+      would like to retransfer it at the end:
+
+      {[
+        exception Timeout
+
+        let with_timeout ~give sec fn =
+          Miou.await_first
+            [ Miou.call_cc @@ fun () -> Miou_unix.sleep sec; raise Timeout
+            ; Miou.call_cc ~give fn ] ;;
+
+        let connect socket sockaddr =
+          let t = Miou_unix.Ownership.resource socket in
+          with_timeout ~give:[ t ] 1.0 @@ fun () ->
+          Miou_unix.Ownership.connect socket sockaddr;
+          Miou.Ownership.transfer t
+      ]} *)
 end
 
 (** {2:orphans Daemon and orphan tasks.}
