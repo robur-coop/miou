@@ -22,6 +22,8 @@ type 'a t = private
   | Suspended : ('a, 'b) continuation * 'a Effect.t -> 'b t
   | Unhandled : ('a, 'b) continuation * 'a -> 'b t
 
+val pp : 'a t Fmt.t
+
 module Operation : sig
   type 'a t
 

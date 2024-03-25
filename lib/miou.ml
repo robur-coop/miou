@@ -4,7 +4,7 @@ external reraise : exn -> 'a = "%reraise"
 
 module Queue = Queue
 module State = State
-module Heapq = Heapq
+module Pqueue = Pqueue
 module Logs = Logs
 module Fmt = Fmt
 module Gen = Gen
@@ -142,6 +142,16 @@ type domain_elt =
   | Domain_task : 'a t * 'a State.t -> domain_elt
   | Domain_tick : impossible -> domain_elt
 
+module Domain_elt = struct
+  type t = int * domain_elt
+
+  let _to_int = function Domain_clean _ -> 1 | Domain_cancel _ -> 2 | _ -> 3
+  let compare (t0, _a) (t1, _b) = Int.compare t0 t1
+  let dummy = (0, Domain_tick (Obj.magic ()))
+end
+
+module Heapq = Pqueue.Make (Domain_elt)
+
 let promise_of_domain_elt = function
   | Domain_tick _ -> .
   | Domain_create (prm, _) -> Pack prm
@@ -152,7 +162,8 @@ let promise_of_domain_elt = function
 
 type domain = {
     uid: Domain_uid.t
-  ; tasks: domain_elt Heapq.t
+  ; tasks: Heapq.t
+  ; tick: int Atomic.t
   ; quanta: int
   ; g: Random.State.t
   ; events: events
@@ -242,7 +253,7 @@ let pp_effect : type a. a Effect.t Fmt.t =
   | Trigger.Await _ -> Fmt.string ppf "Await"
   | _ -> Fmt.string ppf "#effect"
 
-let pp_domain_elt ppf = function
+let _pp_domain_elt ppf = function
   | Domain_create (prm, _fn) ->
       Fmt.pf ppf "@[<1>(Domain_create@ %a)@]" Promise.pp prm
   | Domain_cancel (prm, _) ->
@@ -265,21 +276,12 @@ let pp_domain_elt ppf = function
 module Domain = struct
   module Uid = Domain_uid
 
-  let domain_elt_to_int = function
-    | Domain_clean _ -> 1
-    | Domain_cancel _ -> 2
-    | _ -> 3
-
-  let domain_elt_compare a b = domain_elt_to_int a - domain_elt_to_int b
-  let domain_elt_dummy = Domain_tick (Obj.magic ())
-
   let create ?(quanta = 1) ~events g uid =
-    let tasks =
-      Heapq.create ~compare:domain_elt_compare ~dummy:domain_elt_dummy 0x100
-    in
+    let tasks = Heapq.create () in
     {
       uid
     ; tasks
+    ; tick= Atomic.make 0
     ; quanta
     ; g
     ; events= events uid
@@ -317,7 +319,8 @@ module Domain = struct
   let add_into_domain domain elt =
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
     miou_assert (Domain_uid.equal runner domain.uid);
-    Heapq.add domain.tasks elt
+    let tick = Atomic.fetch_and_add domain.tick 1 in
+    Heapq.insert (tick, elt) domain.tasks
 
   let add_into_pool pool elt =
     Mutex.lock pool.mutex;
@@ -347,6 +350,9 @@ module Domain = struct
     | _ -> add_into_pool pool (Pool_cancel (prm, bt))
 
   let handle pool domain prm state =
+    Logs.debug (fun m ->
+        m "[%a] handles %a and its continuation %a" Domain_uid.pp domain.uid
+          Promise.pp prm State.pp state);
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
     miou_assert (Domain_uid.equal runner domain.uid);
     miou_assert (Domain_uid.equal prm.runner domain.uid);
@@ -547,9 +553,9 @@ module Domain = struct
   let get_elt_into_domain ~uid (domain : domain) =
     let elts = ref [] in
     let f = function
-      | Domain_tick _ -> .
-      | Domain_cancel _ | Domain_clean _ -> ()
-      | elt ->
+      | _, Domain_tick _ -> .
+      | _, Domain_cancel _ | _, Domain_clean _ -> ()
+      | _, elt ->
           let (Pack prm) = promise_of_domain_elt elt in
           if Promise_uid.equal prm.uid uid then elts := elt :: !elts
     in
@@ -661,7 +667,7 @@ module Domain = struct
       add_into_domain domain (Domain_cancel (prm, bt))
 
   let unblock_awaits_with_system_events (domain : domain) =
-    let block = Heapq.length domain.tasks = 0 in
+    let block = Heapq.size domain.tasks = 0 in
     let cancelled = Queue.(to_list (transfer domain.cancelled_syscalls)) in
     let syscalls = domain.events.select ~block cancelled in
     List.iter (signal_system_events domain) syscalls
@@ -669,14 +675,11 @@ module Domain = struct
   let system_events_suspended domain = Atomic.get domain.syscalls > 0
 
   let run pool (domain : domain) =
-    match Heapq.pop_minimum domain.tasks with
+    match Heapq.extract_min_exn domain.tasks with
     | exception Heapq.Empty ->
         if system_events_suspended domain then
           unblock_awaits_with_system_events domain
-    | elt ->
-        Logs.debug (fun m ->
-            m "[%a] does %a (%dw)" Domain_uid.pp domain.uid pp_domain_elt elt
-              Obj.(reachable_words (repr elt)));
+    | _, elt ->
         once pool domain elt;
         if system_events_suspended domain then
           unblock_awaits_with_system_events domain
@@ -720,19 +723,6 @@ module Pool = struct
       false
     with Yes -> true
 
-  let _pp_stats ppf ((pool : pool), (domain : domain)) =
-    Fmt.pf ppf
-      "[pool:%dw, tasks:%dw, to_dom0:%dw, domain:%dw, tasks:%dw:%de, \
-       cancelled_syscalls:%dw, live-words:%dw]"
-      Obj.(reachable_words (repr pool))
-      Obj.(reachable_words (repr pool.tasks))
-      Obj.(reachable_words (repr pool.to_dom0))
-      Obj.(reachable_words (repr domain))
-      Obj.(reachable_words (repr domain.tasks))
-      (Heapq.length domain.tasks)
-      Obj.(reachable_words (repr domain.cancelled_syscalls))
-      Gc.((quick_stat ()).live_words)
-
   let nothing_to_do (pool : pool) (domain : domain) =
     Heapq.is_empty domain.tasks
     && one_task_for ~domain pool = false
@@ -757,7 +747,6 @@ module Pool = struct
           Domain_task (prm, state)
     in
     let elts = List.map f !nodes in
-    let elts = List.sort Domain.domain_elt_compare elts in
     List.iter (Domain.add_into_domain domain) elts
 
   let worker pool domain =
@@ -921,6 +910,7 @@ end
 
 let call_cc ?(give = []) ?orphans fn =
   let prm = Effect.perform (Spawn (Concurrent, false, give, fn)) in
+  Logs.debug (fun m -> m "%a spawned" Promise.pp prm);
   Option.iter (fun s -> Sequence.(add Left) s prm) orphans;
   prm
 
@@ -940,6 +930,7 @@ let call ?(give = []) ?orphans fn =
 
 let await prm =
   let (Pack self) = Effect.perform Self in
+  Logs.debug (fun m -> m "%a await %a" Promise.pp self Promise.pp prm);
   let some (Pack parent) = Promise_uid.equal self.uid parent.uid in
   if not (Option.fold ~none:false ~some prm.parent) then
     raise_notrace Not_a_child;
@@ -1173,6 +1164,7 @@ let uid (Syscall (uid, _, _)) = uid
 type 'a orphans = 'a t Sequence.t
 
 let orphans () = Sequence.create ()
+let length = Sequence.length
 
 let care : type a. a orphans -> a t option option =
  fun orphans ->

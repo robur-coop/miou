@@ -307,12 +307,18 @@ module Miouc = struct
   let tick = Atomic.make 0
 
   type elt = { syscall: Miou.syscall; time: int; mutable cancelled: bool }
-  type domain = elt Miou.Heapq.t
+
+  module Heapq = Miou.Pqueue.Make (struct
+    type t = elt
+
+    let dummy = { time= 0; syscall= Obj.magic (); cancelled= false }
+    let compare { time= a; _ } { time= b; _ } = Int.compare a b
+  end)
+
+  type domain = Heapq.t
 
   let domain =
-    let compare { time= t0; _ } { time= t1; _ } = Int.compare t0 t1 in
-    let dummy = { time= 0; syscall= Obj.magic (); cancelled= false } in
-    let make () = Miou.Heapq.create ~compare ~dummy 0x100 in
+    let make () = Heapq.create () in
     let domain = Stdlib.Domain.DLS.new_key make in
     fun () -> Stdlib.Domain.DLS.get domain
 
@@ -320,7 +326,7 @@ module Miouc = struct
     let syscall = Miou.syscall () in
     let time = Atomic.get tick + v in
     let sleeper = { time; syscall; cancelled= false } in
-    Miou.Heapq.add (domain ()) sleeper;
+    Heapq.insert sleeper (domain ());
     Logs.debug (fun m -> m "sleeps until %dc (now: %dc)" time (Atomic.get tick));
     Miou.suspend syscall
 
@@ -328,12 +334,12 @@ module Miouc = struct
 
   let rec collect signals =
     let heapq = domain () in
-    match Miou.Heapq.minimum heapq with
-    | exception Miou.Heapq.Empty -> signals
-    | { cancelled= true; _ } -> Miou.Heapq.remove heapq; collect signals
+    match Heapq.find_min_exn heapq with
+    | exception Heapq.Empty -> signals
+    | { cancelled= true; _ } -> Heapq.delete_min_exn heapq; collect signals
     | { time; syscall; _ } when in_the_past time ->
         Logs.debug (fun m -> m "signals [%d]" (Miou.uid syscall :> int));
-        Miou.Heapq.remove heapq;
+        Heapq.delete_min_exn heapq;
         collect (Miou.signal syscall :: signals)
     | _ -> signals
 
@@ -344,13 +350,13 @@ module Miouc = struct
     let f ({ syscall; _ } as elt) =
       if List.exists (equal (Miou.uid syscall)) uids then elt.cancelled <- true
     in
-    Miou.Heapq.iter f (domain ())
+    Heapq.iter f (domain ())
 
   let rec next () =
     let heapq = domain () in
-    match Miou.Heapq.minimum heapq with
-    | exception Miou.Heapq.Empty -> None
-    | { cancelled= true; _ } -> Miou.Heapq.remove heapq; next ()
+    match Heapq.find_min_exn heapq with
+    | exception Heapq.Empty -> None
+    | { cancelled= true; _ } -> Heapq.delete_min_exn heapq; next ()
     | { time; _ } -> Some time
 
   let consume_intr fd =
@@ -387,8 +393,8 @@ module Miouc = struct
   let reset () =
     let heapq = domain () in
     let rec go () =
-      match Miou.Heapq.pop_minimum heapq with
-      | exception Miou.Heapq.Empty -> ()
+      match Heapq.extract_min_exn heapq with
+      | exception Heapq.Empty -> ()
       | _ -> go ()
     in
     go (); Atomic.set tick 0

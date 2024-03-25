@@ -448,7 +448,7 @@
     ]}
 *)
 
-module Heapq = Heapq
+module Pqueue = Pqueue
 module Logs = Logs
 module Fmt = Fmt
 module Trigger = Sync.Trigger
@@ -513,7 +513,7 @@ module Ownership : sig
   *)
 
   type t
-  (** The type of ownerships. *)
+  (** The type of resources. *)
 
   val create : finally:('a -> unit) -> 'a -> t
   (** [create ~finally v] associates a value [v] and a [finaliser] to return a
@@ -653,6 +653,9 @@ val care : 'a orphans -> 'a t option option
     Miou will raises the uncatchable [Still_has_children] exception. If [care]
     returns [None], no children left behind, you can forget the {!type:orphans}
     value safely. *)
+
+val length : _ orphans -> int
+(** [length orphans] returns the number of remaining tasks. *)
 
 (** {2 Launch a promise.} *)
 

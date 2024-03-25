@@ -31,14 +31,21 @@ module File_descrs = Hashtbl.Make (struct
   let hash v = Obj.magic v land max_int
 end)
 
+type elt = { time: float; syscall: Miou.syscall; mutable cancelled: bool }
+
+module Heapq = Miou.Pqueue.Make (struct
+  type t = elt
+
+  let dummy = { time= 0.0; syscall= Obj.magic (); cancelled= false }
+  let compare { time= a; _ } { time= b; _ } = Float.compare a b
+end)
+
 type domain = {
     readers: Miou.syscall list File_descrs.t
   ; writers: Miou.syscall list File_descrs.t
-  ; sleepers: elt Miou.Heapq.t
+  ; sleepers: Heapq.t
   ; revert: (Miou.uid, Unix.file_descr) Hashtbl.t
 }
-
-and elt = { time: float; syscall: Miou.syscall; mutable cancelled: bool }
 
 let clean domain uids =
   let clean uid' (fd : Unix.file_descr) tbl =
@@ -61,16 +68,14 @@ let clean domain uids =
   let clean ({ syscall; _ } as elt) =
     if List.exists (( = ) (Miou.uid syscall)) uids then elt.cancelled <- true
   in
-  Miou.Heapq.iter clean domain.sleepers
+  Heapq.iter clean domain.sleepers
 
 let domain =
   let make () =
-    let dummy = { time= 0.0; syscall= Obj.magic (); cancelled= false } in
-    let compare { time= a; _ } { time= b; _ } = Float.compare a b in
     {
       readers= File_descrs.create 0x100
     ; writers= File_descrs.create 0x100
-    ; sleepers= Miou.Heapq.create ~compare ~dummy 0x100
+    ; sleepers= Heapq.create ()
     ; revert= Hashtbl.create 0x100
     }
   in
@@ -176,7 +181,7 @@ let sleep until =
   let elt =
     { time= Unix.gettimeofday () +. until; syscall; cancelled= false }
   in
-  Miou.Heapq.add domain.sleepers elt;
+  Heapq.insert elt domain.sleepers;
   Miou.suspend syscall
 
 module Ownership = struct
@@ -242,23 +247,23 @@ module Ownership = struct
 end
 
 let rec sleeper domain =
-  match Miou.Heapq.minimum domain.sleepers with
-  | exception Miou.Heapq.Empty -> None
+  match Heapq.find_min_exn domain.sleepers with
+  | exception Heapq.Empty -> None
   | { cancelled= true; _ } ->
-      Miou.Heapq.remove domain.sleepers;
+      Heapq.delete_min_exn domain.sleepers;
       sleeper domain
   | { time; _ } -> Some time
 
 let in_the_past t = t = 0. || t <= Unix.gettimeofday ()
 
 let rec collect domain signals =
-  match Miou.Heapq.minimum domain.sleepers with
-  | exception Miou.Heapq.Empty -> signals
+  match Heapq.find_min_exn domain.sleepers with
+  | exception Heapq.Empty -> signals
   | { cancelled= true; _ } ->
-      Miou.Heapq.remove domain.sleepers;
+      Heapq.delete_min_exn domain.sleepers;
       collect domain signals
   | { time; syscall; _ } when in_the_past time ->
-      Miou.Heapq.remove domain.sleepers;
+      Heapq.delete_min_exn domain.sleepers;
       collect domain (Miou.signal syscall :: signals)
   | _ -> signals
 
@@ -294,16 +299,13 @@ let select uid interrupt ~block cancelled_syscalls =
   clean domain cancelled_syscalls;
   let rds = file_descrs domain.readers in
   let wrs = file_descrs domain.writers in
-  let now = Unix.gettimeofday () in
   let timeout =
-    match sleeper domain with
-    | None when block -> -1.0
-    | None -> 0.0
-    | Some value ->
-        let value = value -. now in
-        let value = Float.min value 0.01 in
-        let value = Float.max value 0.0 in
-        value
+    match (sleeper domain, block) with
+    | None, true -> -1.0
+    | (None | Some _), false -> 0.0
+    | Some value, true ->
+        let value = value -. Unix.gettimeofday () in
+        Float.max value 0.0
   in
   Logs.debug (fun m ->
       m "[%a] [readers:%dw, writers:%dw, sleepers:%dw, revert:%dw]"
@@ -312,6 +314,7 @@ let select uid interrupt ~block cancelled_syscalls =
         Obj.(reachable_words (repr domain.writers))
         Obj.(reachable_words (repr domain.sleepers))
         Obj.(reachable_words (repr domain.revert)));
+  Logs.debug (fun m -> m "select(%f)" timeout);
   match Unix.select (interrupt :: rds) wrs [] timeout with
   | exception Unix.(Unix_error (EINTR, _, _)) -> []
   | [], [], _ -> collect domain []

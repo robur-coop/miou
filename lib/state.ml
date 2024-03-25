@@ -6,6 +6,12 @@ type 'a t =
   | Suspended : ('a, 'b) continuation * 'a Effect.t -> 'b t
   | Unhandled : ('a, 'b) continuation * 'a -> 'b t
 
+let pp ppf = function
+  | Finished (Ok _) -> Fmt.string ppf "<resolved>"
+  | Finished (Error _) -> Fmt.string ppf "<errored>"
+  | Suspended _ -> Fmt.string ppf "<suspended>"
+  | Unhandled _ -> Fmt.string ppf "<unhandled>"
+
 let retc value = Finished (Ok value)
 
 let exnc exn =
@@ -126,6 +132,9 @@ let run : type a. quanta:int -> perform:perform -> a t -> a t =
   with
   | Break -> !state
   | Yield state -> state
+  | exn ->
+      Logs.err (fun m -> m "Unexpected exception: %S" (Printexc.to_string exn));
+      raise exn
 
 [@@@warning "+8"]
 

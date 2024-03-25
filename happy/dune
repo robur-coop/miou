@@ -9,15 +9,17 @@
   dns
   dns-client
   happy-eyeballs
-  mirage-crypto-rng)
+  mirage-crypto-rng
+  hxd.string
+  hxd.core)
  (foreign_stubs
   (language c)
   (names happy)
   (flags (:standard))))
 
 (library
- (name mdns)
- (modules mdns)
+ (name dns_miou)
+ (modules dns_miou)
  (libraries happy))
 
 (executable
@@ -29,4 +31,4 @@
   logs.threaded
   fmt.tty
   duration
-  mdns))
+  dns_miou))

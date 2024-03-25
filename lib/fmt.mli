@@ -23,6 +23,7 @@ val str : ('a, Format.formatter, unit, string) format4 -> 'a
 val kstr : (string -> 'a) -> ('b, Format.formatter, unit, 'a) format4 -> 'b
 val concat : ?sep:unit t -> 'a t list -> 'a t
 val fmt : ('a, Format.formatter, unit) Stdlib.format -> Format.formatter -> 'a
+val any : (unit, Format.formatter, unit) Stdlib.format -> 'a t
 
 (**/**)
 

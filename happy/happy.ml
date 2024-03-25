@@ -1,6 +1,10 @@
-let src = Logs.Src.create "happy"
+let src_daemon = Logs.Src.create "happy-daemon"
 
-module Log = (val Logs.src_log src : Logs.LOG)
+module Logd = (val Logs.src_log src_daemon : Logs.LOG)
+
+let src_client = Logs.Src.create "happy"
+
+module Logc = (val Logs.src_log src_client : Logs.LOG)
 
 let error_msgf fmt = Format.kasprintf (fun msg -> Error (`Msg msg)) fmt
 
@@ -13,7 +17,6 @@ let to_sockaddr (ipaddr, port) =
   Unix.ADDR_INET (Ipaddr_unix.to_inet_addr ipaddr, port)
 
 let clock = Mtime_clock.elapsed_ns
-let he_timer_interval = Duration.(to_f (of_ms 50))
 
 type state =
   | In_progress
@@ -23,14 +26,18 @@ type state =
 type entry = Happy_eyeballs.id * attempt * [ `host ] Domain_name.t * addr
 and attempt = int
 and addr = Ipaddr.t * int
-and cancel = attempt * [ `Connection of Miou_unix.file_descr ] Miou.t
 
-and action =
+type cancel = attempt * unit Miou.t
+
+type action =
   [ `Connect_ip of state Atomic.t * addr list
   | `Connect of state Atomic.t * [ `host ] Domain_name.t * int list ]
 
-and value =
-  [ `Connection of Miou_unix.file_descr
+type connected = [ `Connected of entry * Miou_unix.file_descr ]
+
+type event =
+  [ connected
+  | `Connection_failed of entry * string
   | `Resolution_v4 of
     [ `host ] Domain_name.t * (Ipaddr.V4.Set.t, [ `Msg of string ]) result
   | `Resolution_v6 of
@@ -54,8 +61,7 @@ type stack = {
   ; mutable waiters: state Atomic.t Happy_eyeballs.Waiter_map.t
   ; condition: Miou.Condition.t
   ; mutex: Miou.Mutex.t
-  ; queue: action Miou.Queue.t
-  ; connections: (Miou.Promise.Uid.t, entry) Hashtbl.t
+  ; queue: [ action | event ] Miou.Queue.t
   ; mutable getaddrinfo: getaddrinfo
 }
 
@@ -66,12 +72,14 @@ let create_stack () =
   ; condition= Miou.Condition.create ()
   ; mutex= Miou.Mutex.create ()
   ; queue= Miou.Queue.create ()
-  ; connections= Hashtbl.create 0x100
   ; getaddrinfo= dummy
   }
 
-let try_connect addr () =
+let try_connect t ~meta addr () =
+  let id, attempt, _, _ = meta in
   let addr = to_sockaddr addr in
+  Logd.debug (fun m ->
+      m "connect to %a (%d:%d)" pp_sockaddr addr (Obj.magic id) attempt);
   let socket =
     match Unix.domain_of_sockaddr addr with
     | Unix.PF_UNIX -> Fmt.invalid_arg "Invalid address: %a" pp_sockaddr addr
@@ -79,38 +87,43 @@ let try_connect addr () =
     | Unix.PF_INET6 -> Miou_unix.tcpv6 ()
   in
   try
-    Log.debug (fun m -> m "connect to %a" pp_sockaddr addr);
     Miou_unix.connect socket addr;
-    `Connection socket
+    Logd.debug (fun m ->
+        m "connected to %a (%d:%d)" pp_sockaddr addr (Obj.magic id) attempt);
+    Miou.Mutex.protect t.mutex @@ fun () ->
+    Miou.Queue.enqueue t.queue (`Connected (meta, socket));
+    Miou.Condition.signal t.condition
   with Unix.Unix_error (err, _, _) ->
-    Miou_unix.close socket;
-    Log.err (fun m ->
+    Logd.err (fun m ->
         m "error connecting to %a: %s" pp_sockaddr addr (Unix.error_message err));
-    Fmt.failwith "error connecting to %a: %s" pp_sockaddr addr
-      (Unix.error_message err)
+    Miou_unix.close socket;
+    let msg =
+      Fmt.str "error connecting to %a: %s" pp_sockaddr addr
+        (Unix.error_message err)
+    in
+    Miou.Mutex.protect t.mutex @@ fun () ->
+    Miou.Queue.enqueue t.queue (`Connection_failed (meta, msg));
+    Miou.Condition.signal t.condition
 
 let getpeername fd = try Some (Unix.getpeername fd) with _exn -> None
 
-external to_cancel :
-  value Miou.t -> [ `Connection of Miou_unix.file_descr ] Miou.t = "%identity"
-
 let connect t ~prms:orphans host id attempt addr =
-  let connection : value Miou.t = Miou.call ~orphans (try_connect addr) in
-  Hashtbl.add t.connections
-    (Miou.Promise.uid connection)
-    (id, attempt, host, addr);
-  let entry = ((attempt, to_cancel connection) :> cancel) in
+  let meta = (id, attempt, host, addr) in
+  Logd.debug (fun m ->
+      m "connect to %a (%d:%d)" Domain_name.pp host (Obj.magic id) attempt);
+  let prm : unit Miou.t = Miou.call_cc ~orphans (try_connect t ~meta addr) in
+  let entry = (attempt, prm) in
   t.cancel_connecting <-
     Happy_eyeballs.Waiter_map.update id
       (function None -> Some [ entry ] | Some cs -> Some (entry :: cs))
       t.cancel_connecting
 
-let handle_one_action t ~prms = function
+let handle_one_action t ~prms action =
+  match action with
   | Happy_eyeballs.Connect (host, id, attempt, addr) ->
-      Log.debug (fun m -> m "connect to %a" Domain_name.pp host);
       connect t ~prms host id attempt addr
   | Happy_eyeballs.Connect_failed (host, id, reason) ->
-      Log.warn (fun m ->
+      Logd.warn (fun m ->
           m "connection to %a failed: %s" Domain_name.pp host reason);
       let cancel_connecting, others =
         Happy_eyeballs.Waiter_map.find_and_remove id t.cancel_connecting
@@ -134,7 +147,7 @@ let handle_one_action t ~prms = function
           | Connected (_, fd) ->
               let sockaddr = getpeername fd in
               let fd = Miou_unix.of_file_descr fd in
-              Log.warn (fun m ->
+              Logd.warn (fun m ->
                   m "close the file-descriptor of %a (%a): %s" Domain_name.pp
                     host
                     Fmt.(option ~none:(const string "<none>") pp_sockaddr)
@@ -149,33 +162,32 @@ let handle_one_action t ~prms = function
   | Happy_eyeballs.Resolve_a host ->
       let _ =
         Miou.call_cc ~orphans:prms @@ fun () ->
-        Log.debug (fun m -> m "getaddrinfo4(%a)" Domain_name.pp host);
-        match t.getaddrinfo.getaddrinfo Dns.Rr_map.A host with
-        | Ok (_ttl, res) -> `Resolution_v4 (host, Ok res)
-        | Error _ as err -> `Resolution_v4 (host, err)
+        let result =
+          match t.getaddrinfo.getaddrinfo Dns.Rr_map.A host with
+          | Ok (_ttl, res) -> Ok res
+          | Error _ as err -> err
+        in
+        Miou.Mutex.protect t.mutex @@ fun () ->
+        Miou.Queue.enqueue t.queue (`Resolution_v4 (host, result));
+        Miou.Condition.signal t.condition
       in
       ()
   | Happy_eyeballs.Resolve_aaaa host ->
       let _ =
         Miou.call_cc ~orphans:prms @@ fun () ->
-        Log.debug (fun m -> m "getaddrinfo6(%a)" Domain_name.pp host);
-        match t.getaddrinfo.getaddrinfo Dns.Rr_map.Aaaa host with
-        | Ok (_ttl, res) -> `Resolution_v6 (host, Ok res)
-        | Error _ as err -> `Resolution_v6 (host, err)
+        let result =
+          match t.getaddrinfo.getaddrinfo Dns.Rr_map.Aaaa host with
+          | Ok (_ttl, res) -> Ok res
+          | Error _ as err -> err
+        in
+        Miou.Mutex.protect t.mutex @@ fun () ->
+        Miou.Queue.enqueue t.queue (`Resolution_v6 (host, result));
+        Miou.Condition.signal t.condition
       in
       ()
 
-let handle t prm =
-  let entry = Hashtbl.find_opt t.connections (Miou.Promise.uid prm) in
-  match (Miou.await prm, entry) with
-  | Error exn, Some (id, attempt, host, addr) ->
-      Hashtbl.remove t.connections (Miou.Promise.uid prm);
-      let msg =
-        match exn with
-        | Invalid_argument str | Failure str -> str
-        | Miou.Cancelled -> "cancelled"
-        | exn -> Printexc.to_string exn
-      in
+let to_event t = function
+  | `Connection_failed ((id, attempt, host, addr), msg) ->
       let fold = function
         | None -> None
         | Some cs -> (
@@ -185,55 +197,54 @@ let handle t prm =
       in
       t.cancel_connecting <-
         Happy_eyeballs.Waiter_map.update id fold t.cancel_connecting;
-      Some (Happy_eyeballs.Connection_failed (host, id, addr, msg))
-  | Ok (`Connection fd), Some (id, attempt, host, addr) ->
-      Hashtbl.remove t.connections (Miou.Promise.uid prm);
+      Happy_eyeballs.Connection_failed (host, id, addr, msg)
+  | `Connected ((id, attempt, host, addr), fd) as event ->
       let cancel_connecting, others =
         Happy_eyeballs.Waiter_map.find_and_remove id t.cancel_connecting
       in
       t.cancel_connecting <- cancel_connecting;
       List.iter
-        (fun (att, prm) -> if att <> attempt then Miou.cancel prm)
+        (fun (att, prm) ->
+          if att <> attempt then begin
+            Logd.debug (fun m -> m "cancel (%d:%d)" (Obj.magic id) attempt);
+            Miou.cancel prm
+          end)
         (Option.value ~default:[] others);
       let waiters, waiter =
         Happy_eyeballs.Waiter_map.find_and_remove id t.waiters
       in
       t.waiters <- waiters;
-      let transition waiter =
-        let connected = Connected (addr, Miou_unix.to_file_descr fd) in
-        let set = Atomic.compare_and_set waiter In_progress connected in
-        Log.debug (fun m ->
-            m "transfer the file-descriptor for %a" Domain_name.pp host);
-        if not set then (
-          Log.warn (fun m ->
-              m "close the file-descriptor of %a" Domain_name.pp host);
-          Miou_unix.close fd)
+      let () =
+        match waiter with
+        | None ->
+            Format.eprintf ">>> not wait!!!!\n%!";
+            Miou.Mutex.protect t.mutex @@ fun () ->
+            Miou.Queue.enqueue t.queue event;
+            Miou.Condition.signal t.condition
+        | Some waiter ->
+            let connected = Connected (addr, Miou_unix.to_file_descr fd) in
+            let set = Atomic.compare_and_set waiter In_progress connected in
+            Logd.debug (fun m -> m "file-descr transmitted? %b" set);
+            if not set then Miou_unix.close fd
       in
-      Option.iter transition waiter;
-      Some (Happy_eyeballs.Connected (host, id, addr))
-  | Ok (`Connection fd), None ->
-      Hashtbl.remove t.connections (Miou.Promise.uid prm);
-      Miou_unix.close fd;
-      None
-  | Ok (`Resolution_v4 (host, Ok ips)), _ ->
-      Log.debug (fun m -> m "%a resolved" Domain_name.pp host);
-      Some (Happy_eyeballs.Resolved_a (host, ips))
-  | Ok (`Resolution_v4 (host, Error (`Msg msg))), _ ->
-      Log.warn (fun m ->
+      Logd.debug (fun m ->
+          m "connected to %a (%a) (%d:%d)" Domain_name.pp host pp_sockaddr
+            (to_sockaddr addr) (Obj.magic id) attempt);
+      Happy_eyeballs.Connected (host, id, addr)
+  | `Resolution_v4 (host, Ok ips) ->
+      Logd.debug (fun m -> m "%a resolved" Domain_name.pp host);
+      Happy_eyeballs.Resolved_a (host, ips)
+  | `Resolution_v4 (host, Error (`Msg msg)) ->
+      Logd.warn (fun m ->
           m "impossible to resolve %a: %s" Domain_name.pp host msg);
-      Some (Happy_eyeballs.Resolved_a_failed (host, msg))
-  | Ok (`Resolution_v6 (host, Ok ips)), _ ->
-      Log.debug (fun m -> m "%a resolved" Domain_name.pp host);
-      Some (Happy_eyeballs.Resolved_aaaa (host, ips))
-  | Ok (`Resolution_v6 (host, Error (`Msg msg))), _ ->
-      Log.warn (fun m ->
+      Happy_eyeballs.Resolved_a_failed (host, msg)
+  | `Resolution_v6 (host, Ok ips) ->
+      Logd.debug (fun m -> m "%a resolved" Domain_name.pp host);
+      Happy_eyeballs.Resolved_aaaa (host, ips)
+  | `Resolution_v6 (host, Error (`Msg msg)) ->
+      Logd.warn (fun m ->
           m "impossible to resolve %a: %s" Domain_name.pp host msg);
-      Some (Happy_eyeballs.Resolved_aaaa_failed (host, msg))
-  | Error exn, None ->
-      Log.err (fun m ->
-          m "got an unexpected error from a promise: %S"
-            (Printexc.to_string exn));
-      None
+      Happy_eyeballs.Resolved_aaaa_failed (host, msg)
 
 let to_actions t he user's_actions =
   let fold (he, actions) = function
@@ -241,8 +252,6 @@ let to_actions t he user's_actions =
         let waiters, id = Happy_eyeballs.Waiter_map.register waiter t.waiters in
         t.waiters <- waiters;
         let he, actions' = Happy_eyeballs.connect_ip he (clock ()) ~id addrs in
-        Log.debug (fun m ->
-            m "+%d action(s) for connect-ip" (List.length actions'));
         (he, actions @ actions')
     | `Connect (waiter, host, ports) ->
         let waiters, id = Happy_eyeballs.Waiter_map.register waiter t.waiters in
@@ -250,67 +259,88 @@ let to_actions t he user's_actions =
         let he, actions' =
           Happy_eyeballs.connect he (clock ()) ~id host ports
         in
-        Log.debug (fun m ->
-            m "+%d action(s) for connect" (List.length actions'));
         (he, actions @ actions')
   in
   List.fold_left fold (he, []) user's_actions
 
-let await_actions t he () =
-  let user's_actions =
-    while Miou.Queue.is_empty t.queue do
-      Log.debug (fun m ->
-          m "wait user's action (is empty: %b)" (Miou.Queue.is_empty t.queue));
-      Miou.Condition.wait t.condition t.mutex
-    done;
-    Miou.Queue.(to_list (transfer t.queue))
-  in
-  Log.debug (fun m -> m "got %d user's action(s)" (List.length user's_actions));
-  to_actions t he user's_actions
-
-let await_actions t he () = Miou.Mutex.protect t.mutex (await_actions t he)
-
-let rec get_events t he ~prms actions =
-  match Option.map (handle t) (Option.join (Miou.care prms)) |> Option.join with
-  | Some event ->
-      let he, actions' = Happy_eyeballs.event he (clock ()) event in
-      get_events t he ~prms (actions @ actions')
-  | None -> (he, actions)
+let await_actions_or_events t () =
+  Miou.Mutex.protect t.mutex @@ fun () ->
+  while Miou.Queue.is_empty t.queue do
+    Miou.Condition.wait t.condition t.mutex
+  done
 
 exception Timeout
 
-let with_timeout ~timeout fn =
-  let timeout () = Miou_unix.sleep timeout; raise Timeout in
-  Miou.await_first [ Miou.call_cc timeout; Miou.call_cc fn ]
+let with_timeout ~timeout:ts fn =
+  let timeout () = Miou_unix.sleep ts; raise Timeout in
+  let prm1 = Miou.call_cc timeout in
+  let prm0 = Miou.call_cc fn in
+  Miou.await_first [ prm0; prm1 ]
 
-let suspend t he ~prms =
-  match get_events t he ~prms [] with
-  | he, (_ :: _ as actions) -> (he, actions)
-  | he, [] -> (
-      match with_timeout ~timeout:he_timer_interval (await_actions t he) with
-      | Error Timeout -> (he, [])
-      | Error exn -> raise exn
-      | Ok (he, actions) -> (he, actions))
+let he_timer_interval = Duration.(to_f (of_ms 10))
+
+let suspend t _cont he =
+  let timeout = he_timer_interval in
+  match with_timeout ~timeout (await_actions_or_events t) with
+  | Error Timeout -> (he, [], [])
+  | Ok () ->
+      let user's_actions_and_events = Miou.Queue.(to_list (transfer t.queue)) in
+      Logd.debug (fun m ->
+          m "got %d actions or events" (List.length user's_actions_and_events));
+      let user's_actions, events =
+        List.partition_map
+          (function
+            | #action as action -> Either.Left action
+            | #event as event -> Either.Right event)
+          user's_actions_and_events
+      in
+      Logd.debug (fun m ->
+          m "got %d actions and %d events"
+            (List.length user's_actions)
+            (List.length events));
+      let he, actions = to_actions t he user's_actions in
+      (he, actions, events)
+  | Error exn ->
+      Logd.err (fun m ->
+          m "Got an unexpected exception (suspend): %s" (Printexc.to_string exn));
+      raise exn
+
+let rec clean_up prms =
+  match Miou.care prms with
+  | Some (Some prm) ->
+      let _ = Miou.await prm in
+      clean_up prms
+  | Some None | None -> Miou.yield ()
 
 let rec go t ~prms he () =
-  let he, _cont, actions = Happy_eyeballs.timer he (clock ()) in
-  Log.debug (fun m ->
-      m "handle %d action(s) by happy-eyeballs" (List.length actions));
+  Logd.debug (fun m -> m "daemon tick");
+  clean_up prms;
+  let he, cont, actions = Happy_eyeballs.timer he (clock ()) in
   List.iter (handle_one_action ~prms t) actions;
-  let he, actions = suspend t he ~prms in
-  Log.debug (fun m ->
-      m "handle %d action(s) by suspension" (List.length actions));
+  let he, actions, events = suspend t cont he in
+  Logd.debug (fun m ->
+      m "got %d action(s) and %d event(s)" (List.length actions)
+        (List.length events));
+  let he, actions =
+    List.fold_left
+      (fun (he, actions) event ->
+        let he, actions' =
+          Happy_eyeballs.event he (clock ()) (to_event t event)
+        in
+        (he, List.rev_append actions actions'))
+      (he, actions) events
+  in
+  Logd.debug (fun m -> m "daemon handles %d action(s)" (List.length actions));
   List.iter (handle_one_action ~prms t) actions;
   go t ~prms he ()
 
-let launch_stack ?aaaa_timeout ?connect_delay ?connect_timeout ?resolve_timeout
+let launch_daemon ?aaaa_timeout ?connect_delay ?connect_timeout ?resolve_timeout
     ?resolve_retries t () =
   let prms = Miou.orphans () in
   let he =
     Happy_eyeballs.create ?aaaa_timeout ?connect_delay ?connect_timeout
       ?resolve_timeout ?resolve_retries (clock ())
   in
-  Log.debug (fun m -> m "the daemon is launched");
   Miou.call (go t ~prms he)
 
 let _pp_addr ppf (ipaddr, port) = Fmt.pf ppf "%a:%d" Ipaddr.pp ipaddr port
@@ -325,7 +355,7 @@ let connect_ip t ips =
 let connect_ip t ips =
   try connect_ip t ips
   with exn ->
-    Log.err (fun m ->
+    Logc.err (fun m ->
         m "Got an unexpected exception: %S" (Printexc.to_string exn));
     raise exn
 
@@ -335,9 +365,11 @@ let to_pairs lst =
 let he_wait_interval = Duration.(to_f (of_ms 10))
 
 let rec wait value =
+  Logc.debug (fun m -> m "wait for a connected socket");
   match Atomic.get value with
   | In_progress ->
       Miou_unix.sleep he_wait_interval;
+      Miou.yield ();
       wait value
   | Connected (addr, fd) -> (addr, fd)
   | Failed msg -> failwith msg
@@ -345,7 +377,8 @@ let rec wait value =
 let connect_to_nameservers t nameservers =
   let nss = to_pairs nameservers in
   let waiter = connect_ip t nss in
-  let addr, fd = Miou.await_exn (Miou.call_cc (fun () -> wait waiter)) in
+  let prm = Miou.call_cc @@ fun () -> wait waiter in
+  let addr, fd = Miou.await_exn prm in
   (addr, Miou_unix.of_file_descr fd)
 
 type daemon = unit Miou.t
@@ -353,7 +386,7 @@ type daemon = unit Miou.t
 let stack ?aaaa_timeout ?connect_delay ?connect_timeout ?resolve_timeout
     ?resolve_retries () =
   let v = create_stack () in
-  ( launch_stack ?aaaa_timeout ?connect_delay ?connect_timeout ?resolve_timeout
+  ( launch_daemon ?aaaa_timeout ?connect_delay ?connect_timeout ?resolve_timeout
       ?resolve_retries v ()
   , v )
 
@@ -386,7 +419,7 @@ let connect t =
       with
       | Failure msg -> Error (`Msg msg)
       | exn ->
-          Log.err (fun m ->
+          Logc.err (fun m ->
               m "Got unexpected exception: %S" (Printexc.to_string exn));
           raise exn)
   | `Udp -> error_msgf "Invalid protocol"
@@ -415,7 +448,7 @@ let rec read_loop ?(linger = Cstruct.empty) ~id proto fd =
   | `Tcp ->
       let buf = Bytes.create 0x10 in
       let len = Miou_unix.read fd buf 0 (Bytes.length buf) in
-      Log.debug (fun m -> m "got %d byte(s) from the resolver" len);
+      Logc.debug (fun m -> m "got %d byte(s) from the resolver" len);
       if len > 0 then process (Cstruct.of_bytes ~off:0 ~len buf)
       else
         Fmt.failwith "End of file reading from resolver (linger: %d byte(s))"
@@ -430,26 +463,28 @@ let type_of_socket fd =
   happy_translate_so_type ty
 
 let send_recv (timeout, fd) ({ Cstruct.len; _ } as tx) =
+  Logc.debug (fun m ->
+      m "<=> @[<hov>%a@]" (Hxd_string.pp Hxd.default) (Cstruct.to_string tx));
   if len > 4 then begin
     match type_of_socket fd with
     | Unix.SOCK_STREAM -> (
         let fn () =
-          Log.debug (fun m -> m "send a packet to resolver");
+          Logc.debug (fun m -> m "sending a dns packet to resolver");
           Miou_unix.write fd (Cstruct.to_string tx) 0 len;
           let id = Cstruct.BE.get_uint16 tx 2 in
-          Log.debug (fun m -> m "recv a packet from resolver");
+          Logc.debug (fun m -> m "recving a dns packet from resolver");
           let packet = read_loop ~id `Tcp fd in
           (packet, fd)
         in
         match with_timeout ~timeout fn with
         | Ok (packet, _) ->
-            Log.debug (fun m -> m "got a DNS packet from the resolver");
+            Logc.debug (fun m -> m "got a DNS packet from the resolver");
             Ok packet
         | Error Timeout ->
-            Log.warn (fun m -> m "DNS request timeout");
+            Logc.warn (fun m -> m "DNS request timeout");
             error_msgf "DNS request timeout"
         | Error (Failure msg) ->
-            Log.warn (fun m -> m "Got a failure: %s" msg);
+            Logc.warn (fun m -> m "Got a failure: %s" msg);
             Error (`Msg msg)
         | Error exn ->
             error_msgf "Got an unexpected exception: %S"
@@ -473,7 +508,8 @@ external reraise : exn -> 'a = "%reraise"
 
 let connect_ip t ips =
   let waiter = connect_ip t ips in
-  match Miou.await (Miou.call_cc (fun () -> wait waiter)) with
+  let prm = Miou.call_cc @@ fun () -> wait waiter in
+  match Miou.await prm with
   | Ok (addr, fd) -> Ok (addr, Miou_unix.of_file_descr fd)
   | Error (Failure msg) -> Error (`Msg msg)
   | Error exn -> reraise exn
@@ -483,10 +519,10 @@ let connect_host t host ports =
   let () =
     Miou.Mutex.protect t.mutex @@ fun () ->
     Miou.Queue.enqueue t.queue (`Connect (waiter, host, ports));
-    Miou.Condition.signal t.condition;
-    Log.debug (fun m -> m "the daemon was signaled about another user's action")
+    Miou.Condition.signal t.condition
   in
-  match Miou.await (Miou.call_cc (fun () -> wait waiter)) with
+  let prm = Miou.call_cc @@ fun () -> wait waiter in
+  match Miou.await prm with
   | Ok (addr, fd) -> Ok (addr, Miou_unix.of_file_descr fd)
   | Error (Failure msg) -> Error (`Msg msg)
   | Error exn -> reraise exn
