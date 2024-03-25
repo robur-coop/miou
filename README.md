@@ -14,7 +14,8 @@ using precise and conservative rules to guide users in their development.
 The API documentation is available [here][documentation]. It describes (with
 examples) Miou's behaviour. The official repository is available
 [here][repository]. We also offer a mirror of this repository on
-[GitHub][github]. The project is being maintained by the robur.coop cooperative.
+[GitHub][github]. The project is being maintained by the [robur.coop][robur]
+cooperative.
 
 Miou is focusing on 2 objectives:
 - to provide a best-practice approach to the development of OCaml applications
@@ -77,7 +78,8 @@ Esxception: Miou.Not_a_child
 This rule dictates that passing values from one task to another requires
 (pragmatically) that a resource be allocated accordingly to represent such a
 transmission. It also reaffirms that such a passage of values must surely be
-protected by synchronisation mechanisms between the said tasks.
+protected by synchronisation mechanisms between the said tasks (with
+`Miou.Mutex` or `Miou.Condition`).
 
 The only valid relationship (and transmission of values) between 2 tasks offered
 by Miou is that between a child and its parent.
@@ -214,3 +216,4 @@ of its users), welcome!
 [sleepers]: https://robur-coop.github.io/miou/miou/sleepers.html
 [merkle-tree]: https://robur-coop.github.io/miou/miou/merkle.html
 [echo]: https://robur-coop.github.io/miou/miou/echo.html
+[robur]: https://robur.coop/

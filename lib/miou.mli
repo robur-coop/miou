@@ -1028,11 +1028,28 @@ val run :
 
 module Mutex : sig
   type t
+  (** The type of mutexes. *)
 
   val create : unit -> t
+  (** Return a new mutex. *)
+
   val unlock : t -> unit
+  (** Unlock the given mutex. Other tasks suspended trying to lock the mutex
+      will restart. The mutex must have been previously locked by the thread
+      that calls {!val:unlock}.
+
+      @raise Sysy_error was not raised when unlocking an unlocked mutex or when
+      unlocking a mutex from a different task. *)
+
   val lock : t -> unit
+  (** Lock the given mutex. Only one task can have the mutex locked at a time.
+      A task that attempts to lock a mutex already locked by another thread will
+      suspend until the other thread unlocks the mutex. *)
+
   val try_lock : t -> bool
+  (** Same as {!val:lock}, but does not suspend the calling thread if the mutex
+      is already locked: just return [false] immediately in that case. If the
+      mutex is unlocked, lock it and return [true]. *)
 
   val protect : t -> (unit -> 'a) -> 'a
   (** [protect t fn] runs [fn] in a critical section where [t] is locked
@@ -1045,9 +1062,36 @@ end
 
 module Condition : sig
   type t
+  (** The type of condition variables. *)
 
   val create : unit -> t
+  (** [create ()] creates and returns a new condition variable. This condition
+      variable should be associated (in the programmer's mind) with a certain
+      mutex [m] and with a certain property {i P} of the data structure that is
+      protected by the mutex [m]. *)
+
   val broadcast : t -> unit
+  (** [broadcast c] wakes up all threads waiting on the condition variable [c].
+      If there are none, this call has no effect.
+
+      It is recommended to call [broadcast c] inside a critical section, that
+      is, while the mutex [m] associated with [c] is locked. *)
+
   val signal : t -> unit
+  (** [signal c] wakes up one of the threads waiting on the condition variable
+      [c], if there is one. If there is none, this call has no effect.
+
+      It is recommended to call [signal c] inside a critical section, that is,
+      while the mutex [m] associated with [c] is locked. *)
+
   val wait : t -> Mutex.t -> unit
+  (** The call [wait c m] is permitted only if [m] is the mutex associated with
+      the condition variable [c], and only if [m] is currently locked. This call
+      atomically unlocks the mutex [m] and suspends he current thread on the
+      condition variable [c]. This thread can later be woken up after the
+      condition [c] has been signaled via {!val:signal} or {!val:broadcast};
+      however, it can also be woken up for no reason. The mutex [m] is locked
+      again before [wait] returns. One cannot assume that the property {i P}
+      associated with the condition variable [c] holds when [wait] returns; one
+      must explicitly test whether {i P} holds after calling [wait]. *)
 end
