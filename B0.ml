@@ -22,7 +22,8 @@ let[@ocamlformat "disable"] miou_lib =
     [
       `File ~/"lib/miou.mli"; `File ~/"lib/miou.ml"
     ; `File ~/"lib/logs.mli"; `File ~/"lib/logs.ml"
-    ; `File ~/"lib/heapq.mli"; `File ~/"lib/heapq.ml"
+    ; `File ~/"lib/pqueue.mli"; `File ~/"lib/pqueue.ml"
+    ; `File ~/"lib/vector.mli"; `File ~/"lib/vector.ml"
     ; `File ~/"lib/sequence.mli"; `File ~/"lib/sequence.ml"
     ; `File ~/"lib/queue.mli"; `File ~/"lib/queue.ml"
     ; `File ~/"lib/state.mli"; `File ~/"lib/state.ml"

@@ -1,8 +1,41 @@
 description = "simple scheduler for OCaml 5"
 version = "%%VERSION_NUM%%"
-requires = ""
+requires = "miou.backoff miou.sync"
 archive(byte) = "miou.cma"
 archive(native) = "miou.cmxa"
 plugin(byte) = "miou.cma"
 plugin(native) = "miou.cmxs"
 exists_if = "miou.cma miou.cmxa"
+
+package "backoff" (
+  directory = "sync"
+  version = "%%VERSION_NUM%%"
+  requires = ""
+  archive(byte) = "miou_backoff.cma"
+  archive(native) = "miou_backoff.cmxa"
+  plugin(byte) = "miou_backoff.cma"
+  plugin(native) = "miou_backoff.cmxs"
+  exists_if = "miou_backoff.cma miou_backoff.cmxa"
+)
+
+package "sync" (
+  directory = "sync"
+  version = "%%VERSION_NUM%%"
+  requires = "miou.backoff"
+  archive(byte) = "miou_sync.cma"
+  archive(native) = "miou_sync.cmxa"
+  plugin(byte) = "miou_sync.cma"
+  plugin(native) = "miou_sync.cmxs"
+  exists_if = "miou_sync.cma miou_sync.cmxa"
+)
+
+package "unix" (
+  directory = "unix"
+  version = "%%VERSION_NUM%%"
+  requires = "miou unix"
+  archive(byte) = "miou_unix.cma"
+  archive(native) = "miou_unix.cmxa"
+  plugin(byte) = "miou_unix.cma"
+  plugin(native) = "miou_unix.cmxs"
+  exists_if = "miou_unix.cma miou_unix.cmxa"
+)
