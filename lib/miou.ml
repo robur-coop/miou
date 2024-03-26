@@ -145,8 +145,12 @@ type domain_elt =
 module Domain_elt = struct
   type t = int * domain_elt
 
-  let _to_int = function Domain_clean _ -> 1 | Domain_cancel _ -> 2 | _ -> 3
-  let compare (t0, _a) (t1, _b) = Int.compare t0 t1
+  let to_int = function Domain_clean _ -> 1 | Domain_cancel _ -> 2 | _ -> 3
+
+  let compare (t0, a) (t1, b) =
+    let value = to_int a - to_int b in
+    if value = 0 then Int.compare t0 t1 else value
+
   let dummy = (0, Domain_tick (Obj.magic ()))
 end
 
@@ -680,6 +684,8 @@ module Domain = struct
         if system_events_suspended domain then
           unblock_awaits_with_system_events domain
     | _, elt ->
+        Logs.debug (fun m ->
+            m "[%a] does %a" Domain_uid.pp domain.uid _pp_domain_elt elt);
         once pool domain elt;
         if system_events_suspended domain then
           unblock_awaits_with_system_events domain
@@ -1151,7 +1157,8 @@ let suspend (Syscall (uid, trigger, prm)) =
   | Some (exn, bt) ->
       Queue.enqueue domain.cancelled_syscalls uid;
       Printexc.raise_with_backtrace exn bt
-  | exception _ -> ()
+  | exception _ ->
+      Queue.enqueue domain.cancelled_syscalls uid
 
 let signal (Syscall (_uid, trigger, prm)) =
   let runner' = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
