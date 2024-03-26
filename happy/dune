@@ -9,9 +9,7 @@
   dns
   dns-client
   happy-eyeballs
-  mirage-crypto-rng
-  hxd.string
-  hxd.core)
+  mirage-crypto-rng)
  (foreign_stubs
   (language c)
   (names happy)

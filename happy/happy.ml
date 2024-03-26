@@ -463,8 +463,6 @@ let type_of_socket fd =
   happy_translate_so_type ty
 
 let send_recv (timeout, fd) ({ Cstruct.len; _ } as tx) =
-  Logc.debug (fun m ->
-      m "<=> @[<hov>%a@]" (Hxd_string.pp Hxd.default) (Cstruct.to_string tx));
   if len > 4 then begin
     match type_of_socket fd with
     | Unix.SOCK_STREAM -> (
