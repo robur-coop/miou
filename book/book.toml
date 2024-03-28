@@ -1,0 +1,6 @@
+[book]
+authors = ["Calascibetta Romain"]
+language = "en"
+multilingual = false
+src = "src"
+title = "Miou, a simple scheduler for OCaml 5"
