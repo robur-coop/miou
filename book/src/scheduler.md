@@ -130,7 +130,7 @@ open Effect.Shallow
 
 type 'a state =
   | Initial of (unit -> 'a)
-  | Suspended : ('c, 'a) continuation * 'c Effect.t -> 'a task
+  | Suspended : ('c, 'a) continuation * 'c Effect.t -> 'a state
   | Resolved of 'a
 ```
 
