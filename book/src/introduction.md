@@ -78,8 +78,8 @@ simultaneously, there are also some use-cases where Miou is not a good fit:
 speeding up CPU-bound computations by running them in parallel on several
 domains. Miou is designed for IO-bound applications where each individual task
 spends most of its time waiting for IO. If the only thing your application
-does is run computations in parallel, you should be using [moonpool][moonpool].
-That said, it is still possible to "mix & match" if you need to do both.
+does is run computations in parallel, you should use [moonpool][moonpool]. That
+said, it is still possible to "mix & match" if you need to do both.
 
 [opam]: https://opam.ocaml.org
 [robur]: https://robur.coop

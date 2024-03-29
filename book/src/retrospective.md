@@ -9,44 +9,41 @@ explore in this chapter.
 
 ## A task as a resource
 
-If you recall from the example of our `echo` server, we wanted to handle client
-management in the background:
+Let's revisit our example with the `echo` server, where we aimed to handle
+client management in the background:
 ```ocaml
     ignore (spawn @@ fun () -> echo client)
 ```
 
-It's possible to do the same thing with `Miou.call_cc`. This function will more
-or less do the same thing as our `spawn`, namely: create a new task that will
-run on the same _thread_ using our scheduler. This type of task that coexists
-with others on the same thread is called a _fiber_. And, just like `spawn`,
-`Miou.call_cc` returns a promise to this task. In Miou, you're creating a child
-of your main task, a subtask.
+You can achieve the same thing with `Miou.call_cc`. This function essentially
+does will more what our `spawn` does: it creates a new task that will run on the
+same _thread_ using our scheduler. This type of task which coexists with others
+on the same thread is called a _[fiber][fiber]_. And, just like `spawn`,
+`Miou.call_cc` also returns a promise for this task. In Miou, you're creating a
+child of your task, a subtask.
 
-The fundamental difference with Miou is that you can't forget about its
-children!
+The key difference with Miou, though, is that you can't forget your children!
 ```ocaml
 let () = Miou.run @@ fun () ->
   ignore (Miou.call_cc @@ fun () -> print_endline "Hello World!")
 Exception: Miou.Still_has_children.
 ```
 
-We consider in Miou that a task is a resource. You allocate it (using
-`Miou.call_cc`) but you also have to free it with `Miou.await`. A fundamental
-rule governs a program made with Miou: all tasks must either be awaited or
-canceled. Forgetting a task will result in a fatal error.
+In Miou, we treat a task as a resource. You allocate it (using `Miou.call_cc`),
+but you also have to release it with `Miou.await`. A fundamental rule governs
+Miou programs: all tasks must either be awaited or canceled. Forgetting a task
+will result in a fatal error.
 
 ### Background tasks
 
-This raises another question: what to do with my subtasks that manage clients?
-In reality, if this rule exists, it's because these children can go wrong
-(probably an education problem). And you need to be notified of these abnormal
-situations. What interests you is not the existence of these tasks (because your
-goal is to put them in the background) but the result of these tasks to know if
-everything went well.
+This brings up another question: what should we do with our subtasks that manage
+clients? If this rule exists, it's because these children can misbehave. And you
+need to be notified of these abnormal situations. What matters isn't the
+existence of these tasks (since your goal is to put them in the background) but
+their results to ensure everything went well.
 
 In this regard, Miou offers a way to save your tasks somewhere and retrieve them
-if they have finished periodically. This is mainly thanks to the `orphans`
-value:
+once they're completed. This is mainly done using the `orphans` value:
 ```ocaml
 let rec clean_up orphans = match Miou.care orphans with
   | None | Some None -> ()
@@ -65,23 +62,124 @@ let server () =
   done
 ```
 
-The advantage of such an approach is to consider a task as a resource that must
-be freed at some point in your program. Our experience in implementing protocols
-at [Robur][robur] convinces us that one should not forget about their children.
-Developing system and network applications involves creating programs whose
-execution time is long (6 months, 1 year, etc.). A task is a resource that uses
-memory and possibly your processor. If you allow yourself to forget your tasks,
-they will continue to exist in memory, and an accumulation of this forgetfulness
-will inevitably result in a memory leak that will hinder the existence of your
-program in the long term (the system will kill your program with an [OOM][oom]).
+The advantage of this approach is that it treats a task as a resource that must
+be released at some point in your program's execution. Our experience in
+implementing protocols at [Robur][robur] has convinced us of the importance of
+not forgetting about our children. Developing system and network applications
+involves creating programs with long execution time (6 months, 1 year, etc.).
+Tasks consume memory and possibly processor resources. Forgetting tasks can lead
+to memory leaks, which can hinder your program's long-term viability (the
+system might terminate your program due to an [out-of-memory][oom] error).
+
+## Structured concurrency
+
+Managing tasks and their promises can be a real challenge when implementing a
+large application. Indeed, conceptualizing tasks running in the background
+leaves room for practices (like forgetting these tasks) that can lead to
+significant maintenance overhead in the long run. At Robur, through certain
+projects we maintain, we've encountered situations where the time to fix bugs
+becomes disproportionately large given our resources.
+
+Thus, when developing Miou, it was essential from the outset to establish rules
+to prevent repeating past mistakes. We've already introduced one rule: never
+forget your children.
+
+There's a second rule: only the **direct** parent can wait for or cancel its
+children. For instance, the following code is incorrect:
+```ocaml
+let () = Miou.run @@ fun () ->
+  let a = Miou.call_cc @@ fun () -> Miou.yield () in
+  let b = Miou.call_cc @@ fun () -> Miou.await_exn a in
+  Miou.await_exn a;
+  Miou.await_exn b
+Exception: Miou.Not_a_child.
+```
+
+The purpose of such a constraint is to maintain a simple mental model of the
+active tasks in your application: their affiliations form a tree with the root
+being your main task (the one launched with `Miou.run`). Therefore, if your main
+task terminates, it invariably means that all sub-tasks have also terminated.
+
+## Cancellation
+
+One aspect deliberately left out in the implementation of our small scheduler is
+cancellation. It can be useful to cancel a task that, for example, is taking too
+long. Miou provides this mechanism for all tasks using their promises.
+```ocaml
+let () = Miou.run @@ fun () ->
+  let prm = Miou.call_cc @@ fun () -> print_endline "Hello World" in
+  Miou.cancel prm
+```
+
+The rules of parentage explained earlier also apply to cancellation. You can
+only cancel your direct children:
+```ocaml
+let () = Miou.run @@ fun () ->
+  let a = Miou.call_cc @@ fun () -> Miou.yield () in
+  let b = Miou.call_cc @@ fun () -> Miou.cancel a in
+  Miou.await_exn a;
+  Miou.await_exn b
+Exception: Miou.Not_a_child.
+```
+
+Cancellation overrides any promise state. You can cancel a task that has already
+completed. In this case, we lose the result of the task, and it's considered
+canceled:
+```ocaml
+let () = Miou.run @@ fun () ->
+  let prm = Miou.call @@ fun () -> 1 + 1 in
+  let _ = Miou.await prm in
+  Miou.cancel prm;
+  match Miou.await prm with
+  | Ok _ -> assert false
+  | Error Miou.Cancelled -> assert true
+  | Error exn -> raise exn
+```
+
+Of course, to be consistent with our other rules, canceling a task implies
+canceling all its sub-tasks:
+```ocaml
+let rec infinite () = infinite (Miou.yield ())
+
+let () = Miou.run @@ fun () ->
+  let p = Miou.call_cc @@ fun () ->
+    let q = Miou.call infinite in
+    Miou.await_exn q in
+  Miou.cancel p
+```
+
+Lastly, let's delve into the behavior of `Miou.cancel`. It's said that this
+function is _asynchronous_ in the sense that cancellation (especially that of a
+task running in parallel) may take some time. Thus, Miou seizes the opportunity
+to execute other tasks during this cancellation. For example, note that `p0`
+runs despite the cancellation of `p1`:
+```ocaml
+let () = Miou.run @@ fun () ->
+  let p1 = Miou.call @@ fun () -> Miou.yield () in
+  let v = ref false in
+  let p0 = Miou.call_cc @@ fun () -> print_endline "Do p0" in
+  print_endline "Cancel p1";
+  Miou.cancel p1;
+  print_endline "p1 cancelled";
+  Miou.await_exn p0
+
+(* This program prints:
+   Cancel p1
+   Do p0
+   p1 cancelled
+*)
+```
+
+The advantage of this asynchronicity is to always be able to handle system
+events even if we attempt to cancel a task.
 
 ## Multiple domain runtime
 
 In the introduction, it was mentioned that it's possible to use multiple domains
-with Miou. Indeed, since OCaml 5, it has been possible to launch tasks in
-parallel. This parallelism has become possible only recently because these tasks
-have their own _minor heap_. Thus, synchronization between domains regarding
-allocation and garbage collection is less systematic.
+with Miou. Indeed, since OCaml 5, it has been possible to launch tasks functions
+in parallel. This parallelism has become possible only recently because these
+functions have their own _minor heap_. Thus, synchronization between domains
+regarding allocation and garbage collection is less systematic.
 
 To launch a task in parallel with Miou, it's sufficient to use:
 ```ocaml
@@ -129,8 +227,8 @@ let () = Miou.run @@ fun () ->
 
 It may happen then that we want to distribute a specific task to all our
 available domains. We cannot do this with `Miou.call`, which may, several times,
-assign the same domain for the task. However, Miou offers a way to distribute
-the workload evenly across all your domains:
+assign the same domain for a task. However, Miou offers a way to distribute the
+workload evenly across all your domains:
 ```ocaml
 let task () : int = (Stdlib.Domain.self () :> int)
 
@@ -145,7 +243,7 @@ Finally, one last rule exists regarding parallel tasks. There may be a situation
 called starvation. Indeed, like your number of cores, the number of domains is
 limited. It may happen that domains wait for each other, but it's certain that
 the main domain (the very first one that executes your code, known as `dom0`)
-will never be assigned a task.
+will never be assigned a task via `Miou.call`.
 
 This rule prevents a domain from waiting for another domain, which waits for
 another domain, which waits for `dom0`, which waits for your first domain - the
@@ -182,170 +280,7 @@ concerning `Miou.call` do not exist in the same domains. An internal mechanism
 helps the user not to worry about the synchronicity between the task's state and
 its promise, even though they exist in two spaces that run in parallel.
 
-## Interaction with the system
-
-You may not have noticed, but our example of implementing an asynchronous server
-has structured itself around two questions:
-1) the scheduler
-2) interactions with the system
-
-Miou maintains a clear separation between the scheduler (the `Miou` module) and
-interactions with the Unix system (the `Miou_unix` module). This choice, not so
-strange considering what [lwt][lwt] can offer, is intended for two reasons:
-1) to be able to use Miou with exotic systems such as a unikernel where the Unix
-   module (or the [POSIX][posix] interface) is unavailable.
-2) to delegate the complexity of system interactions to the user.
-
-Regarding our first argument, it naturally concerns the objectives that our
-cooperative has, namely developing and deploying unikernels as services (such as
-this website, which is a unikernel!).
-
-The second argument may seem ungrateful because it delegates the responsibility
-of implementing system interactions to our users. However, we believe that this
-issue is fundamentally complex, and it is futile to try to standardize anything
-at this level.
-
-To support our argument, one only needs [to ask][connect] about the behavior of
-the `connect()` function (to establish a connection with a server) on different
-systems like Linux or \*BSD. More generally, systems all have more or less
-different behaviors and are not necessarily well-documented. Users also may want
-to take advantage of certain specificities of their system (such as
-[io_uring][io_uring]), and we do not claim (nor have the resources) to know both
-all the subtleties between systems and your use cases.
-
-Our approach is therefore to let you take back these questions. Miou offers a
-way (as we've seen with our small scheduler) to suspend and resume functions:
-- Suspension is possible via `Miou.suspend`.
-- Notification to Miou that an event allows unblocking a task is done by
-  injecting a `Miou.event` value via the `Miou.run` function.
-
-We recommend reading our tutorial on sleepers to become more familiar with this
-interface. However, for those whose focus is not central, Miou offers the
-`Miou_unix` module, which implements some essential syscalls in the development
-of system and network applications.
-
-## Cancellation
-
-One aspect we intentionally omitted during the implementation of our scheduler
-is task cancellation. Why would we need to cancel a task? There are various 
-reasons why an event might not occur. For instance, consider trying to connect
-to a server that is unavailable. We wouldn't want to attempt this connection
-indefinitely and might want to cancel it after a certain time, like so:
-```ocaml
-exception Timeout
-
-let connect_or_fail address =
-  let socket = match address with
-    | Unix.ADDR_UNIX _ -> failwith "Invalid address"
-    | Unix.ADDR_INET (inet_addr, _) ->
-      if Unix.is_inet6_addr inet_addr
-      then Miou_unix.tcpv6 ()
-      else Miou_unix.tcpv4 () in
-  let sleep = Miou.call_cc @@ fun () -> Miou_unix.sleep 5.0; raise Timeout in
-  let prm = Miou.call_cc @@ fun () -> Miou_unix.connect socket address in
-  match Miou.await_first [ sleep; prm ] with
-  | Ok () -> Ok socket
-  | Error Timeout -> Miou_unix.close socket; Error `Timeout
-  | Error exn -> Miou_unix.close socket; raise exn
-```
-
-Here, `Miou.await_first` will provide the result of the first finished task.
-Then, it cancels all other tasks (with `Miou.cancel`). As mentioned, we cannot
-forget our children: we must either await them or cancel them. In this case,
-`Miou.await_first` awaits one and cancels all others - we continue to adhere to
-our rule.
-
-Cancellation becomes significantly more complex when domains are introduced. It
-requires strong synchronicity between tasks and their promises. Cancellation
-does not immediately terminate a task; this is especially true if the task runs
-in parallel, where a synchronization mechanism is necessary.
-
-Miou ensures that **after** a `Miou.cancel`, the task has indeed been canceled.
-During cancellation, the scheduler might still execute a portion of the task
-(again, particularly true if it runs in parallel). However, Miou tries its best
-to effectively cancel the requested tasks.
-
-Since canceling a task requires a mechanism that synchronizes the task and its
-promise's state, during this process, the scheduler might take the opportunity
-to execute other tasks. This is why we say cancellation is _asynchronous_ as
-well. For example, note that `p0` runs despite the cancellation of `p1`:
-```ocaml
-let () = Miou.run @@ fun () ->
-  let p1 = Miou.call @@ fun () -> Miou.yield () in
-  let v = ref false in
-  let p0 = Miou.call_cc @@ fun () -> print_endline "Do p0" in
-  print_endline "Cancel p1";
-  Miou.cancel p1;
-  print_endline "p1 cancelled";
-  Miou.await_exn p0
-
-(* This program prints:
-   Cancel p1
-   Do p0
-   p1 cancelled
-*)
-```
-
-We can also cancel a task that has finished. In this case, the cancellation
-takes precedence over resolution (thus, we lose the result of our task).
-```ocaml
-let () = Miou.run @@ fun () ->
-  let prm = Miou.call @@ fun () -> 1 + 1 in
-  let _ = Miou.await prm in
-  Miou.cancel prm;
-  match Miou.await prm with
-  | Ok _ -> assert false
-  | Error Miou.Cancelled -> assert true
-  | Error exn -> raise exn
-```
-
-Lastly, it's worth noting that cancellation affects not only a task but also all
-its children:
-```ocaml
-let rec infinite () = infinite (Miou.yield ())
-
-let () = Miou.run @@ fun () ->
-  let p = Miou.call_cc @@ fun () ->
-    let q = Miou.call infinite in
-    Miou.await_exn q in
-  Miou.cancel p
-```
-
-## Mutex & Condition
-
-After this detailed presentation of Miou, we can realize that the announced
-rules imply a rather strict usage of tasks and promises. However, when it comes
-to asynchronous and/or parallel programming, we need elements to transmit
-information between tasks.
-
-However, Miou only allows one type of transmission between tasks: between
-children and their direct parents. So, how can we share information between two
-parallel tasks that do not have this parent-child relationship?
-
-The real question here is the synchronicity between two tasks executing in
-parallel or that can run concurrently. Of course, there are myriad solutions
-(and research) available depending on the context and your objectives. Similar
-to system interaction, we do not claim to know everything about this broad
-domain. However, we know that several basic elements exist to assist you:
-- Atomic values (provided by OCaml)
-- Mutexes to obtain exclusive control over a resource
-- Conditions allowing suspension and continuation if a predicate related to a
-  resource is true
-
-One difference to note, however: Miou offers Mutexes and Conditions, but so does
-OCaml. Which ones should you use then? If you are using Miou, you should use our
-implementations. OCaml's Mutexes and Conditions will work (to some extent), but
-they will not suspend a particular task but your entire domain. These OCaml
-elements also lack awareness of cancellation (`Miou.cancel`).
-
-In other words, you should use `Miou.Mutex` and `Miou.Condition` if you are
-using Miou. However, the general behavior of these is almost equivalent to what
-OCaml offers (if we ignore cancellation).
 
 [robur]: https://robur.coop/
 [oom]: https://fr.wikipedia.org/wiki/Out_of_memory
 [starvation]: https://en.wikipedia.org/wiki/Starvation_(computer_science)
-[connect]: https://cr.yp.to/docs/connect.html
-[io_uring]: https://en.wikipedia.org/wiki/Io_uring
-[lwt]: https://github.com/ocsigen/lwt
-[posix]: https://en.wikipedia.org/wiki/POSIX

@@ -8,8 +8,8 @@ to then transform our synchronous server into an asynchronous one capable of
 handling billions of connections simultaneously.
 
 This tutorial presupposes that the reader is proficient in OCaml. While we aim
-to provide comprehensive explanations of each step and the data manipulation
-involved, we won't delve into basic OCaml concepts.
+to provide comprehensive explanations of each step but we won't delve into basic
+OCaml concepts.
 
 The goal of this tutorial is to implement an "echo" server. This server simply
 echoes back whatever the user sends to it. While this may seem straightforward,
@@ -93,15 +93,32 @@ val accept : file_descr -> file_descr * sockaddr
 
 This function will **block** until a new connection arrives. It returns a new
 file descriptor representing the client along with its address. To communicate
-with the client, we use this new file descriptor. Now, let's complete the
-implementation of our service.
+with the client, we use this new file descriptor.
+
+We're going to implement our client handler. Its goal is to read what the client
+sends us and then echo it back. Transmitting bytes via a socket is done using
+two functions:
+```ocaml
+val read : file_descr -> bytes -> int -> int -> int
+val write : file_descr -> bytes -> int -> int -> int
+```
+
+These functions are **blocking** as well. The aim here is to store the bytes
+received from the client to echo them back. We'll repeat this process as long as
+we receive bytes from the client. Finally, we'll need to release our file
+descriptor; we won't need it anymore. We'll use `Unix.close` to inform the
+system that it can free all resources associated with this file descriptor.
 ```ocaml
 let echo client =
   let buf = Bytes.create 0x100 in
   let len = Unix.read client buf 0 (Bytes.length buf) in
   if len = 0 then Unix.close client
   else let _ = Unix.write client buf 0 len in echo client
+```
 
+Now, let's complete the implementation of our service. This involves calling our
+`echo` function with the file descriptor of our client as soon as we receive it.
+```ocaml
 let server () =
   let socket = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
   let sockaddr = Unix.ADDR_INET (Unix.inet_addr_loopback, 3000) in
@@ -114,9 +131,6 @@ let server () =
 
 let () = server ()
 ```
-
-Now we're handling a client and calling our `echo` function, which reads what
-the client sends and echoes it back until the client stops transmitting.
 
 ### Compilation & usage
 
@@ -247,8 +261,8 @@ can't handle our second client until the first one is finished. In practice, our
 We're starting to see the fundamental problem of synchronicity in implementing a
 system and network application: the ability for our service to respond to all
 clients "at the same time." In our specific case, what we want is to be able to
-background our echo function so that our server can wait for a new connection
-again with accept. However, the concept of backgrounding a task is not so
+background our `echo` function so that our server can wait for a new connection
+again with `accept`. However, the concept of backgrounding a task is not so
 straightforward:
 * We know that we only have one _thread_ available, so we can strictly only do
   one thing. Which thread could execute our background task?
@@ -265,7 +279,7 @@ elements can help us:
 
 For the next chapter, we'll focus on effects and follow our second intuition.
 Namely, taking the opportunity to do something else as soon as we're waiting for
-an event such as the arrival of a connection with accept.
+an event such as the arrival of a connection with `accept`.
 
 [^file-descriptor]: It is a unique identifier used by your system to represent
 an input/output resource. In concrete terms, it's a non-negative integer that
