@@ -47,7 +47,7 @@ let () =
   let t0 = Unix.gettimeofday () in
   program ();
   let t1 = Unix.gettimeofday () in
-  assert (t1 -. t2 < 3.)
+  assert (t1 -. t0 < 3.)
 ```
 
 If we assume that tasks run "simultaneously," this program should execute in
@@ -134,20 +134,81 @@ our tasks or not.
 ```ocaml
 let in_the_past ts = ts = 0. || ts <= Unix.gettimeofday ()
 
-let remove_and_signal_older acc =
+let rec remove_and_signal_older sleepers acc =
   match Sleepers.find_min sleepers with
-  | None -> signals
-  | Some { time; syscall } when is_the_past time ->
+  | None -> acc
+  | Some { time; syscall } when in_the_past time ->
     Sleepers.delete_min_exn sleepers;
-    remove_and_signal_older (Miou.signal syscall :: acc)
+    remove_and_signal_older sleepers (Miou.signal syscall :: acc)
+  | Some _ -> acc
 
 let select ~block:_ _ =
   let ts = match Sleepers.find_min sleepers with
     | None -> 0.0
-    | Some ts -> ts in
-  Unix.sleep ts;
-  remove_and_signal_older []
+    | Some { time; _ } ->
+      let value = time -. Unix.gettimeofday () in
+      Float.max 0.0 value in
+  Unix.sleepf ts;
+  remove_and_signal_older sleepers []
 
 let event _ = { select; interrupt= ignore }
 let run fn = Miou.run ~events fn
 ```
+
+Comme on peut le constater, on fait une spécialisation de notre fonction `Miou.run`
+avec notre `events`. C'est pour cette raison que dès que vous utiliserez des fonctions
+de `Miou_unix` par exemple, vous devez utiliser `Miou_unix.run`. Essayons désormais notre
+code:
+```shell
+$ ocamlfind opt -linkpkg -package miou,unix -c chat.ml
+$ ocamlfind opt -linkpkg -package miou,unix chat.cmx main.ml
+$ ./a.out
+$ echo $?
+0
+```
+
+Et voilà! On vient de prouver que nos deux tâches s'exécutent en même temps. On notera
+l'utilisation de `Unix.sleepf` au lieu de `Unix.select`. On ne s'intéresse qu'à attendre
+ici plutôt qu'à observer nos file-descriptors.
+
+## Domains & system
+
+Comme il a été mentionné, Miou gère plusieurs domaines. Ainsi, si notre `select` utilise
+une variable global (tel que `sleepers`), nous aurons définitivement un problème d'accès
+à cette variable par les domaines. Il existe plusieurs solution dont une consiste à
+"protéger" notre global à l'aide d'une Mutex. Cependant, nous avons précisé que chaque
+domaine gèrent son `select`.
+
+Plus généralement, un `syscall` est toujours local à un domaine, il ne peut être géré
+par une autre domaine qui ne l'a pas suspendu. En ce sens, on peut considérer allouer
+un `sleepers` par domaines. Il existe un moyen en OCaml de considérer des valeurs
+qui existent et sont accessible pour chaque domaine, et ces derniers ont l'exclusivité
+dessus: c'est le [Thread Local Storage][tls].
+
+Ainsi, au lieu d'avoir une global pour notre `sleepers`, nous allons utiliser cette API:
+```ocaml
+let sleepers =
+  let key = Stdlib.Domain.DLS.new_key Sleepers.create in
+  fun () -> Stdlib.Domain.DLS.get key
+
+let sleep delay =
+  let sleepers = sleepers () in
+  let time = Unix.gettimeofday () +. delay in
+  let syscall = Miou.syscall () in
+  Sleepers.insert { time; syscall } sleepers;
+  Miou.suspend syscall
+
+let select ~block:_ _ =
+  let sleepers = sleepers () in
+  let ts = match Sleepers.find_min sleepers with
+    | None -> 0.0
+    | Some { time; _ } ->
+      let value = time -. Unix.gettimeofday () in
+      Float.max 0.0 value in
+  Unix.sleepf ts;
+  remove_and_signal_older sleepers []
+```
+
+On peut désormais remplacer nos `Miou.call_cc` par des `Miou.call` en toute
+sécurité. On sait que chacune des tâches aura son propre `sleepers` et qu'il
+n'y aura pas d'accès illégaux entre les domaines.
