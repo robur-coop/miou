@@ -109,13 +109,6 @@ type events = { select: select; interrupt: unit -> unit }
 val run : ?events:(Domain.Uid.t -> events) -> (unit -> 'a) -> 'a
 ```
 
-Au tout début, Miou tente d'allouer les domaines. Pour chaque domaine, il va
-demander une valeur `event` qui contient une fonction `select`. C'est cette
-fonction qu'on doit implémenter et proposer à Miou. Cette fonction sera appellé
-dès l'existence d'un syscall à chaque fois qu'on aura exécuté une partie de nos
-tâches et de manière périodique. Cette fonction dois retourner ce qu'on nomme
-des signaux permettant ensuite à Miou de relancer les fonctions qui ont été
-suspendu par nos syscalls.
 
 At the very beginning, Miou tries to allocate the domains. For each domain, it
 will ask for an `event` value that contains a `select` function. This is the
@@ -155,10 +148,9 @@ let event _ = { select; interrupt= ignore }
 let run fn = Miou.run ~events fn
 ```
 
-Comme on peut le constater, on fait une spécialisation de notre fonction `Miou.run`
-avec notre `events`. C'est pour cette raison que dès que vous utiliserez des fonctions
-de `Miou_unix` par exemple, vous devez utiliser `Miou_unix.run`. Essayons désormais notre
-code:
+As you can see, we are specializing our `Miou.run` function with our `events`.
+That's why whenever you use functions from `Miou_unix`, for example, you should
+use `Miou_unix.run`. Let's now try our code:
 ```shell
 $ ocamlfind opt -linkpkg -package miou,unix -c chat.ml
 $ ocamlfind opt -linkpkg -package miou,unix chat.cmx main.ml
@@ -167,25 +159,25 @@ $ echo $?
 0
 ```
 
-Et voilà! On vient de prouver que nos deux tâches s'exécutent en même temps. On notera
-l'utilisation de `Unix.sleepf` au lieu de `Unix.select`. On ne s'intéresse qu'à attendre
-ici plutôt qu'à observer nos file-descriptors.
+And there you go! We've just proven that our two tasks are running concurrently.
+Note the use of `Unix.sleepf` instead of `Unix.select`. Here, we are only
+interested in waiting rather than observing our file descriptors.
 
 ## Domains & system
 
-Comme il a été mentionné, Miou gère plusieurs domaines. Ainsi, si notre `select` utilise
-une variable global (tel que `sleepers`), nous aurons définitivement un problème d'accès
-à cette variable par les domaines. Il existe plusieurs solution dont une consiste à
-"protéger" notre global à l'aide d'une Mutex. Cependant, nous avons précisé que chaque
-domaine gèrent son `select`.
+As mentioned earlier, Miou manages multiple domains. Therefore, if our `select`
+function uses a global variable like `sleepers`, we will definitely encounter an
+access problem with this variable across domains. There are several solutions to
+this issue, one of which involves "protecting" our global variable using a
+Mutex. However, we have specified that each domain manages its own `select`.
 
-Plus généralement, un `syscall` est toujours local à un domaine, il ne peut être géré
-par une autre domaine qui ne l'a pas suspendu. En ce sens, on peut considérer allouer
-un `sleepers` par domaines. Il existe un moyen en OCaml de considérer des valeurs
-qui existent et sont accessible pour chaque domaine, et ces derniers ont l'exclusivité
-dessus: c'est le [Thread Local Storage][tls].
+In general, a syscall is always local to a domain; it cannot be managed by
+another domain that did not suspend it. In this sense, we can consider
+allocating a `sleepers` for each domain. In OCaml, there is a way to consider
+values that exist and are accessible to each domain, and these domains have
+exclusivity over them: it's called [Thread Local Storage][tls].
 
-Ainsi, au lieu d'avoir une global pour notre `sleepers`, nous allons utiliser cette API:
+So instead of having a global `sleepers`, we will use this API:
 ```ocaml
 let sleepers =
   let key = Stdlib.Domain.DLS.new_key Sleepers.create in
@@ -209,6 +201,8 @@ let select ~block:_ _ =
   remove_and_signal_older sleepers []
 ```
 
-On peut désormais remplacer nos `Miou.call_cc` par des `Miou.call` en toute
-sécurité. On sait que chacune des tâches aura son propre `sleepers` et qu'il
-n'y aura pas d'accès illégaux entre les domaines.
+We can now safely replace our `Miou.call_cc` with `Miou.call`. We know that each
+task will have its own `sleepers`, and there will be no illegal access between
+domains.
+
+[tls]: https://en.wikipedia.org/wiki/Thread-local_storage
