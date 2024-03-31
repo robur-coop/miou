@@ -12,9 +12,9 @@ let () =
 ```
 
 Here, `do_this_in_background` would be a function that takes a task and adds it
-to a kind of hidden TODO list. Instead of being literally synchronous and
+to a kind of hidden to-do list. Instead of being literally synchronous and
 waiting to display "World" before displaying "Hello", we could imagine directly
-displaying "Hello" and letting _something_ execute our fn function to display
+displaying "Hello" and letting _something_ execute our `fn` function to display
 "World".
 
 This "something" is what we call a **scheduler**. It holds our list of tasks to
@@ -42,7 +42,7 @@ on to another concept necessary for implementing our scheduler.
 
 ## Effects
 
-Since OCaml 5, it has been possible to utilize effects. An effect allows you to
+Since OCaml 5, it has been possible to utilise effects. An effect allows you to
 pause the execution of a function and enter a handler, which, depending on the
 effect, would execute a specific operation to resume the paused function with
 the result of that operation.
@@ -65,7 +65,7 @@ let () =
 In this scenario, our code will print "Hello" and then trigger an exception.
 Consequently, the subsequent line won't execute. Instead, this exception will be
 "caught" by our handler `with ...`. This mechanism attempts to identify the
-raised exception and, based on that, execute certain code—in our example,
+raised exception and, based on that, execute certain code — in our example,
 printing "My_exception".
 
 Raising exceptions or triggering an effect can be likened to a jump in our code.
@@ -163,9 +163,9 @@ essentially perform two operations:
 ## A promise
 
 This witness holds a term commonly found in asynchronous programming: a
-**promise**. Indeed, this witness is a _promise_ that our task will execute (but
-is not executed yet). Waiting for a task via its promise simply corresponds to
-obtaining the result of our task. In our example, this result is `() : unit`
+**promise**. Indeed, this witness is a _promise_ that our task will be executed
+(but is not executed yet). Waiting for a task via its promise simply corresponds
+to obtaining the result of our task. In our example, this result is `() : unit`
 because we are merely displaying text, but we could easily imagine a hefty
 computation (such as finding a prime number) that we would want to run in the
 background.
@@ -293,5 +293,5 @@ Now, it's time to address our initial problem: managing our clients while also
 accepting new connections. At this stage, you might think that simply "spawning"
 our `echo` function will make it work in the background. However, even though
 we've addressed the issue of synchronicity by offering an asynchronous library,
-we deliberately overlooked mentioning blocking functions! That's what we'll
+we deliberately overlooked mentioning **blocking** functions! That's what we'll
 explore in our next chapter.

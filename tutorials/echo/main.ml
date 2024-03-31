@@ -25,29 +25,63 @@ let handler fd () =
   in
   go (Bytes.create 0x100)
 
+let rec stop (m, c, v) =
+  let value =
+    Miou.Mutex.protect m @@ fun () ->
+    while !v = false do
+      Miou.Condition.wait c m
+    done;
+    !v
+  in
+  if not value then stop (m, c, v) else `Stop
+
+let accept_or_stop v fd =
+  let accept () =
+    let fd, sockaddr = Miou_unix.Ownership.accept fd in
+    Miou.Ownership.transfer (Miou_unix.Ownership.resource fd);
+    `Accept (fd, sockaddr)
+  in
+  Miou.await_first
+    [
+      Miou.call_cc (fun () -> stop v)
+    ; Miou.call_cc ~give:[ Miou_unix.Ownership.resource fd ] accept
+    ]
+  |> Result.get_ok
+
 let rec clean_up orphans =
   match Miou.care orphans with
   | None | Some None -> ()
   | Some (Some prm) -> Miou.await_exn prm; clean_up orphans
 
-let server sockaddr =
+let server (stop, sockaddr) =
   let rec go orphans fd =
     clean_up orphans;
-    let fd', _sockaddr = Miou_unix.Ownership.accept fd in
-    let _ =
-      Miou.call
-        ~give:[ Miou_unix.Ownership.resource fd' ]
-        ~orphans (handler fd')
-    in
-    go orphans fd
+    match accept_or_stop stop fd with
+    | `Stop -> ()
+    | `Accept (fd', _) ->
+        let _ =
+          Miou.call
+            ~give:[ Miou_unix.Ownership.resource fd' ]
+            ~orphans (handler fd')
+        in
+        go orphans fd
   in
   go (Miou.orphans ()) (listen sockaddr)
 
 let localhost_3000 = Unix.ADDR_INET (Unix.inet_addr_any, 3000)
 
+type stop = Miou.Mutex.t * Miou.Condition.t * bool ref
+
+let stop (m, c, v) _signal =
+  Miou.Mutex.protect m @@ fun () ->
+  v := true;
+  Miou.Condition.broadcast c
+
 let () =
   Miou_unix.run @@ fun () ->
-  let servers = List.init 3 (Fun.const localhost_3000) in
-  let prm = Miou.call_cc @@ fun () -> server localhost_3000 in
+  let v = (Miou.Mutex.create (), Miou.Condition.create (), ref false) in
+  Miou.set_signal Sys.sigint (Sys.Signal_handle (stop v));
+  let servers = List.init 3 (Fun.const (v, localhost_3000)) in
+  let prm = Miou.call_cc @@ fun () -> server (v, localhost_3000) in
   ignore (Miou.parallel server servers);
   Miou.await_exn prm

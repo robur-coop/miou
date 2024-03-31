@@ -140,12 +140,17 @@ type domain_elt =
   | Domain_cancel : _ t * Printexc.raw_backtrace -> domain_elt
   | Domain_clean : _ t * _ t -> domain_elt
   | Domain_task : 'a t * 'a State.t -> domain_elt
+  | Domain_signal : 'a t * int * unit State.t -> domain_elt
   | Domain_tick : impossible -> domain_elt
 
 module Domain_elt = struct
   type t = int * domain_elt
 
-  let to_int = function Domain_clean _ -> 1 | Domain_cancel _ -> 2 | _ -> 3
+  let to_int = function
+    | Domain_clean _ -> 1
+    | Domain_cancel _ -> 2
+    | Domain_signal _ -> 3
+    | _ -> 4
 
   let compare (t0, a) (t1, b) =
     let value = to_int a - to_int b in
@@ -163,6 +168,7 @@ let promise_of_domain_elt = function
   | Domain_clean (prm, _) -> Pack prm
   | Domain_task (prm, _) -> Pack prm
   | Domain_transfer (prm, _, _) -> Pack prm
+  | Domain_signal (prm, _, _) -> Pack prm
 
 type domain = {
     uid: Domain_uid.t
@@ -275,6 +281,8 @@ let _pp_domain_elt ppf = function
   | Domain_transfer (prm, Resource { uid; _ }, _) ->
       Fmt.pf ppf "@[<1>(Domain_transfer@ %a:%a)@]" Promise.pp prm
         Resource_uid.pp uid
+  | Domain_signal (prm, signal, _) ->
+      Fmt.pf ppf "@[<1>(Domain_signal@ %a:%d)@]" Promise.pp prm signal
   | Domain_tick _ -> .
 
 module Domain = struct
@@ -303,6 +311,11 @@ module Domain = struct
         (pool.dom0 :: pool.domains)
     in
     domain.events.interrupt ()
+
+  let interrupt_parent pool prm =
+    match prm.parent with
+    | None -> ()
+    | Some (Pack parent) -> interrupt pool ~domain:parent.runner
 
   (* These functions can be used to add items to be done to the various domains.
      There are 3 cases:
@@ -377,6 +390,7 @@ module Domain = struct
         let f (Pack prm) = cancel pool domain ~backtrace:bt prm in
         Sequence.iter ~f prm.children;
         ignore (Computation.try_cancel prm.state (exn, bt));
+        interrupt_parent pool prm;
         miou_assert (Option.is_some (Computation.cancelled prm.state))
     | State.Finished (Ok value) ->
         if Sequence.is_empty prm.resources = false then begin
@@ -399,6 +413,7 @@ module Domain = struct
         Logs.debug (fun m ->
             m "[%a] %a finished correctly" Domain_uid.pp domain.uid Promise.pp
               prm);
+        interrupt_parent pool prm;
         ignore (Computation.try_return prm.state value)
 
   let propagate_cancellation trigger (pool, possibly_cancelled) child =
@@ -558,7 +573,7 @@ module Domain = struct
     let elts = ref [] in
     let f = function
       | _, Domain_tick _ -> .
-      | _, Domain_cancel _ | _, Domain_clean _ -> ()
+      | _, Domain_cancel _ | _, Domain_clean _ | _, Domain_signal _ -> ()
       | _, elt ->
           let (Pack prm) = promise_of_domain_elt elt in
           if Promise_uid.equal prm.uid uid then elts := elt :: !elts
@@ -581,6 +596,19 @@ module Domain = struct
         | 0, _ -> add_into_dom0 pool (Dom0_clean (parent, prm))
         | _, 0 -> miou_assert false
         | _ -> add_into_pool pool (Pool_clean (parent, prm)))
+
+  let handle_signal ~signal domain prm state =
+    let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
+    miou_assert (Domain_uid.equal runner domain.uid);
+    miou_assert (Domain_uid.equal prm.runner domain.uid);
+    match state with
+    | (State.Suspended _ | State.Unhandled _) as state ->
+        add_into_domain domain (Domain_signal (prm, signal, state))
+    | State.Finished (Error (exn, _bt)) ->
+        Logs.err (fun m ->
+            m "[%a] a signal handler raised an exception: %s" Domain_uid.pp
+              domain.uid (Printexc.to_string exn))
+    | State.Finished (Ok ()) -> ()
 
   let once pool domain = function
     | Domain_tick _ -> .
@@ -619,6 +647,17 @@ module Domain = struct
     | Domain_transfer (prm, res, trigger) ->
         Sequence.(add Left) prm.resources res;
         Trigger.signal trigger
+    | Domain_signal (prm, signal, state) -> (
+        miou_assert (Domain_uid.equal prm.runner (Domain_uid.of_int 0));
+        miou_assert (Domain_uid.equal domain.uid (Domain_uid.of_int 0));
+        let perform = perform pool domain prm in
+        match Computation.cancelled prm.state with
+        | None ->
+            let state = State.run ~quanta:domain.quanta ~perform state in
+            handle_signal ~signal domain prm state
+        | Some (exn, bt) ->
+            let state = State.fail ~backtrace:bt ~exn state in
+            handle_signal ~signal domain prm state)
     | Domain_cancel (prm, bt) as cancellation ->
         Logs.debug (fun m ->
             m "[%a] cancels computation %a" Domain_uid.pp domain.uid Promise.pp
@@ -643,6 +682,7 @@ module Domain = struct
           | Some (Domain_cancel _)
           | Some (Domain_clean _)
           | Some (Domain_transfer _)
+          | Some (Domain_signal _)
           | None ->
               ()
         in
@@ -683,6 +723,7 @@ module Domain = struct
     | exception Heapq.Empty ->
         if system_events_suspended domain then
           unblock_awaits_with_system_events domain
+    | _, (Domain_signal _ as elt) -> once pool domain elt
     | _, elt ->
         Logs.debug (fun m ->
             m "[%a] does %a" Domain_uid.pp domain.uid _pp_domain_elt elt);
@@ -1071,7 +1112,10 @@ let await_first prms =
           | Some (exn, bt) ->
               List.iter (fun prm -> Computation.detach prm.state t) attached;
               Error (exn, bt)
-          | None -> take_one_and_cancel_rest [] prms)
+          | None ->
+              Logs.debug (fun m ->
+                  m "[%a] one promise finished" Promise.pp self);
+              take_one_and_cancel_rest [] prms)
     in
     try_attach_all [] prms
   in
@@ -1157,8 +1201,7 @@ let suspend (Syscall (uid, trigger, prm)) =
   | Some (exn, bt) ->
       Queue.enqueue domain.cancelled_syscalls uid;
       Printexc.raise_with_backtrace exn bt
-  | exception _ ->
-      Queue.enqueue domain.cancelled_syscalls uid
+  | exception _ -> Queue.enqueue domain.cancelled_syscalls uid
 
 let signal (Syscall (_uid, trigger, prm)) =
   let runner' = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
@@ -1211,7 +1254,27 @@ let transfer_dom0_tasks pool =
     in
     List.iter (Domain.add_into_domain pool.dom0) (List.map f elts)
 
+type signal_retrieved =
+  | Signal_retrieved : int * (int -> unit) -> signal_retrieved
+
 let dummy_events = { select= (fun ~block:_ _ -> []); interrupt= Fun.const () }
+let signals = Queue.create ()
+
+let transfer_dom0_signals pool prm0 =
+  if not (Queue.is_empty signals) then
+    let elts = Queue.(to_list (transfer signals)) in
+    let f (Signal_retrieved (signal, fn)) =
+      let state = State.make fn signal in
+      Domain_signal (prm0, signal, state)
+    in
+    List.iter (Domain.add_into_domain pool.dom0) (List.map f elts)
+
+let set_signal signal = function
+  | (Sys.Signal_default | Sys.Signal_ignore) as behavior ->
+      Sys.set_signal signal behavior
+  | Sys.Signal_handle fn ->
+      let fn signal = Queue.enqueue signals (Signal_retrieved (signal, fn)) in
+      Sys.set_signal signal (Signal_handle fn)
 
 let run ?(quanta = quanta) ?(g = Random.State.make_self_init ())
     ?(domains = domains) ?(events = Fun.const dummy_events) fn =
@@ -1224,7 +1287,9 @@ let run ?(quanta = quanta) ?(g = Random.State.make_self_init ())
   let result =
     try
       while Computation.is_running prm0.state && !(pool.fail) = false do
-        transfer_dom0_tasks pool; Domain.run pool dom0
+        transfer_dom0_tasks pool;
+        transfer_dom0_signals pool prm0;
+        Domain.run pool dom0
       done;
       if not !(pool.fail) then Option.get (Computation.peek prm0.state)
       else Error (Failure "A domain failed", Printexc.get_callstack max_int)

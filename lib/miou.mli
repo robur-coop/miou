@@ -1026,6 +1026,16 @@ val run :
   -> (unit -> 'a)
   -> 'a
 
+val set_signal : int -> Sys.signal_behavior -> unit
+(** [set_signal signal behavior] attaches a [behavior] to a [signal]:
+    - [Signal_default] aborts the program
+    - [Signal_ignore] ignore the signal
+    - [Signal_handle fn] calls [fn] (in the [dom0])
+
+    [set_signal] is provided to be able to execute Miou's tasks when we
+    receive a signal from the system. The [dom0] takes the responsability to
+    execute the given [fn]. *)
+
 module Mutex : sig
   type t
   (** The type of mutexes. *)

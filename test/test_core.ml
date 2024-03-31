@@ -1,5 +1,7 @@
 let () = Printexc.record_backtrace true
 
+module Atomic = Stdlib.Atomic
+
 let test01 =
   let description =
     {text|A simple test to show up the order in which tasks are performed.|text}

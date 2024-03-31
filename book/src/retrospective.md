@@ -78,7 +78,8 @@ large application. Indeed, conceptualizing tasks running in the background
 leaves room for practices (like forgetting these tasks) that can lead to
 significant maintenance overhead in the long run. At Robur, through certain
 projects we maintain, we've encountered situations where the time to fix bugs
-becomes disproportionately large given our resources.
+becomes disproportionately large given our resources because we need to
+re-establish the mental model of task management, which isn't all that obvious.
 
 Thus, when developing Miou, it was essential from the outset to establish rules
 to prevent repeating past mistakes. We've already introduced one rule: never
@@ -176,8 +177,8 @@ events even if we attempt to cancel a task.
 ## Multiple domain runtime
 
 In the introduction, it was mentioned that it's possible to use multiple domains
-with Miou. Indeed, since OCaml 5, it has been possible to launch tasks functions
-in parallel. This parallelism has become possible only recently because these
+with Miou. Indeed, since OCaml 5, it has been possible to launch functions in
+parallel. This parallelism has become possible only recently because these
 functions have their own _minor heap_. Thus, synchronization between domains
 regarding allocation and garbage collection is less systematic.
 
@@ -211,8 +212,8 @@ let () = Miou.run @@ fun () ->
 ```
 
 However, the choice of the domain responsible for the task is made randomly.
-Thus, this code is also true (meaning that two tasks launched in parallel
-subsequently can use the same domain):
+Thus, this code is also true (meaning that two tasks launched in succession
+can then use the same domain):
 ```ocaml
 let () = Miou.run @@ fun () ->
   let assertion = ref false in
@@ -280,7 +281,16 @@ concerning `Miou.call` do not exist in the same domains. An internal mechanism
 helps the user not to worry about the synchronicity between the task's state and
 its promise, even though they exist in two spaces that run in parallel.
 
+## For the next steps
+
+This retrospective allows us to introduce the basic elements of Miou. We now
+need to see how to use Miou and also introduce you to some new concepts. The
+next chapter will consist of re-implementing our echo server with Miou. There
+should be only a few differences, but we will seize the opportunity to improve
+our server, especially with the use of parallel tasks and the notion of
+ownership.
 
 [robur]: https://robur.coop/
 [oom]: https://fr.wikipedia.org/wiki/Out_of_memory
 [starvation]: https://en.wikipedia.org/wiki/Starvation_(computer_science)
+[fiber]: https://en.wikipedia.org/wiki/Fiber_(computer_science)

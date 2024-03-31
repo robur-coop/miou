@@ -49,8 +49,8 @@ able to "write" to our file descriptor. The last argument that concerns us is
 the timeout for this observation. A reasonably short time is sufficient; let's
 say 10ms.
 
-For example, let's consider our accept() function. We want to determine whether
-we should execute accept() without blocking:
+For example, let's consider our `accept()` function. We want to determine
+whether we should execute `accept()` without blocking:
 ```ocaml
 let rec our_accept file_descr =
   print_endline "Monitor our file-descriptor.";
@@ -244,6 +244,10 @@ Hello
 $ kill -9 40381
 [1]  + 40381 killed     ./a.out
 ```
+
+At this point, all the basic concepts of a scheduler and asynchronous
+programming have been explained. It's time to take a look back at what we've
+learned and, most importantly, start comparing it with Miou in the next chapter.
 
 [^busy-loop]: The purpose of the 10ms interval is to prevent our program from
 falling into what is known as a ["busy-loop"][busy-loop]. Indeed, these 10ms
