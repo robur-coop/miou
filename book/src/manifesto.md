@@ -1,13 +1,5 @@
 # Manifesto
 
-Ce petit manifeste permet d'expliciter nos ambitions par rapport à Miou et notre
-coopérative. En effet, au delà des questions techniques que peuvent soulever un
-scheduler, il y a aussi des réalités sociales à prendre en compte qui argumentent
-l'existence de Miou dans un écosystème qui peut se retrouver fragmenter sur ces
-questions. Il ne s'agit pas de partager notre avis sur ce qu'on peut retrouver
-entant que projet concurrent à Miou ni prêter des propos et des actes dont vous
-ne pouvez être que le seul juge, il s'agit de dire ce qu'est Miou à nos yeux.
-
 This small manifesto aims to clarify our ambitions regarding Miou and our
 cooperative. Beyond the technical questions raised by a scheduler, there are
 also social realities to consider that justify Miou's existence in an ecosystem
