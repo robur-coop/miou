@@ -1,0 +1,487 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>A simple scheduler - Miou, a simple scheduler for OCaml 5</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('light')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html"><strong aria-hidden="true">1.</strong> Introduction</a></li><li class="chapter-item expanded "><a href="synchronous_server.html"><strong aria-hidden="true">2.</strong> A synchronous server</a></li><li class="chapter-item expanded "><a href="scheduler.html" class="active"><strong aria-hidden="true">3.</strong> A simple scheduler</a></li><li class="chapter-item expanded "><a href="interacting_system.html"><strong aria-hidden="true">4.</strong> Interacting with the system</a></li><li class="chapter-item expanded "><a href="retrospective.html"><strong aria-hidden="true">5.</strong> Retrospective</a></li><li class="chapter-item expanded "><a href="echo.html"><strong aria-hidden="true">6.</strong> An echo server with Miou</a></li><li class="chapter-item expanded "><a href="sleepers.html"><strong aria-hidden="true">7.</strong> Interacting with the system with Miou</a></li><li class="chapter-item expanded "><a href="conditions_and_mutexes.html"><strong aria-hidden="true">8.</strong> Conditions & Mutexes</a></li><li class="chapter-item expanded "><a href="manifesto.html"><strong aria-hidden="true">9.</strong> Manifesto</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Miou, a simple scheduler for OCaml 5</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="a-simple-scheduler"><a class="header" href="#a-simple-scheduler">A simple scheduler</a></h1>
+<p>In our previous chapter, we discussed the idea of backgrounding our <code>echo</code>
+function to continue accepting incoming connections. Let's stick with the idea
+of being able to background functions:</p>
+<pre><code class="language-ocaml">let fn () = print_endline "World"
+
+let () =
+  do_this_in_background fn;
+  print_endline "Hello"
+</code></pre>
+<p>Here, <code>do_this_in_background</code> would be a function that takes a task and adds it
+to a kind of hidden to-do list. Instead of being literally synchronous and
+waiting to display "World" before displaying "Hello", we could imagine directly
+displaying "Hello" and letting <em>something</em> execute our <code>fn</code> function to display
+"World".</p>
+<p>This "something" is what we call a <strong>scheduler</strong>. It holds our list of tasks to
+do and attempts to execute them all in a specific order. In our example, we
+would notify our scheduler that a task <code>fn</code> needs to be done, display "Hello",
+and then <em>wait</em> for our scheduler to complete all tasks (including displaying
+"World").</p>
+<p>In our explanation, we subtly introduced a new concept: waiting. In reality,
+what we want is to wait for all our tasks to finish. To do this, we could have a
+"witness" for our tasks so that we can wait for these tasks through their
+witnesses:</p>
+<pre><code class="language-ocaml">let fn () = print_endline "World"
+
+let () =
+  let witness = do_this_in_background fn in
+  print_endline "Hello";
+  await witness
+</code></pre>
+<p>We're starting to get closer to what every scheduler aims to provide and what
+asynchronous programming is all about. Let's keep this example in mind and move
+on to another concept necessary for implementing our scheduler.</p>
+<h2 id="effects"><a class="header" href="#effects">Effects</a></h2>
+<p>Since OCaml 5, it has been possible to utilise effects. An effect allows you to
+pause the execution of a function and enter a handler, which, depending on the
+effect, would execute a specific operation to resume the paused function with
+the result of that operation.</p>
+<p>Here, we're delving into the flow of execution in your program. If we revisit
+our definition of synchronicity, we understand that our system processes the
+program line by line. However, effects (as well as exceptions) break this flow;
+they're known for breaking the linear progression of execution. Consider the
+example of an exception:</p>
+<pre><code class="language-ocaml">exception My_exception
+
+let () =
+  try print_endline "Hello";
+      raise My_exception;
+      print_endline "World"
+  with My_exception -&gt; print_endline "My_exception"
+</code></pre>
+<p>In this scenario, our code will print "Hello" and then trigger an exception.
+Consequently, the subsequent line won't execute. Instead, this exception will be
+"caught" by our handler <code>with ...</code>. This mechanism attempts to identify the
+raised exception and, based on that, execute certain code — in our example,
+printing "My_exception".</p>
+<p>Raising exceptions or triggering an effect can be likened to a jump in our code.
+The key distinction between an exception and an effect lies in the ability, for
+the latter, to return to the point where the effect was initiated.</p>
+<pre><code class="language-ocaml">open Effect.Deep
+
+type _ Effect.t += My_effect : unit Effect.t
+
+let run fn v =
+  let rec retc x = x
+  and exnc = raise
+  and effc
+    : type c. c Effect.t -&gt; ((c, 'a) continuation -&gt; 'b) option
+    = function
+    | My_effect -&gt;
+      print_endline "My_effect";
+      Some (fun k -&gt; continue k ())
+    | _ -&gt; None
+  and handler = { retc; exnc; effc; } in
+  match_with fn v handler
+
+let my_program () =
+  print_endline "Hello";
+  Effect.perform My_effect;
+  print_endline "World"
+
+let () = run my_program ()
+</code></pre>
+<p>The mechanics are a bit more intricate, but the principle remains consistent.
+Upon executing the above code, we'll observe that we indeed enter our handler
+(and display "My_effect" akin to using a <code>with ...</code> block for exceptions), but
+we return to the precise point where the effect was initiated and then proceed
+to display "World".</p>
+<p>When considering our core challenge of implementing a scheduler, the utility of
+effects becomes apparent in obtaining the value <code>k</code> as a representation of our
+suspended function at a specific point — where we triggered our effect. For
+managing tasks, with each task as a function, this <code>k</code> allows us to suspend and
+resume functions, maintaining them in a suspended state in the background.</p>
+<p>Indeed, for our scheduler, maintaining this suspension is crucial. Rather than
+simply performing an operation and continuing with the result, we aim to:</p>
+<ol>
+<li>keep the suspension in background</li>
+<li>allow other tasks to execute.</li>
+<li>resume the suspension after giving the opportunity for other tasks to
+execute.</li>
+</ol>
+<h2 id="a-task"><a class="header" href="#a-task">A task</a></h2>
+<p>Now, we need to define what a task is. Earlier, we mentioned this value <code>k</code>,
+which would represent a suspended state of our function. We could define what a
+task is (an OCaml function) and in what state this task is:</p>
+<ul>
+<li>an initial state</li>
+<li>a suspended state that can be resumed</li>
+<li>a termination state</li>
+</ul>
+<pre><code class="language-ocaml">open Effect.Shallow
+
+type 'a state =
+  | Initial of (unit -&gt; 'a)
+  | Suspended : ('c, 'a) continuation * 'c Effect.t -&gt; 'a state
+  | Resolved of 'a
+</code></pre>
+<p>Just like with exceptions, we need to "attach" a handler to catch effects and
+obtain that famous <code>k</code>. We can envision a generic handler that generates this
+state from the effects produced by a function:</p>
+<pre><code class="language-ocaml">let handler =
+  let open Effect.Shallow in
+  let retc v = Resolved v in
+  let exnc = raise in
+  let effc
+    : type c. c Effect.t -&gt; ((c, 'a) continuation -&gt; 'b) option
+    = fun eff -&gt; Some (fun k -&gt; Suspended (k, eff)) in
+  { retc; exnc; effc }
+</code></pre>
+<p>Finally, we can define a task simply as our state.</p>
+<pre><code class="language-ocaml">type task = Task : 'a state -&gt; task
+</code></pre>
+<p>At this stage, we have tasks, and it is now essential to define the operations
+that we can perform with them. If we revisit our code from the very beginning,
+which encapsulates the idea that we want to put tasks in the background, we
+essentially perform two operations:</p>
+<ul>
+<li>we notify the scheduler of a new task (with our <code>do_this_in_background</code>).</li>
+<li>we wait for our task with a witness of it.</li>
+</ul>
+<h2 id="a-promise"><a class="header" href="#a-promise">A promise</a></h2>
+<p>This witness holds a term commonly found in asynchronous programming: a
+<strong>promise</strong>. Indeed, this witness is a <em>promise</em> that our task will be executed
+(but is not executed yet). Waiting for a task via its promise simply corresponds
+to obtaining the result of our task. In our example, this result is <code>() : unit</code>
+because we are merely displaying text, but we could easily imagine a hefty
+computation (such as finding a prime number) that we would want to run in the
+background.</p>
+<p>In short, the promise would allow us to obtain this result. We could define it
+as a mutable value that changes as soon as our task is completed:</p>
+<pre><code class="language-ocaml">type 'a promise = 'a option ref
+</code></pre>
+<p>Now we can define our effects that will interact with our scheduler:</p>
+<pre><code class="language-ocaml">type _ Effect.t += Spawn : (unit -&gt; 'a) -&gt; 'a promise Effect.t
+type _ Effect.t += Await : 'a promise -&gt; 'a Effect.t
+</code></pre>
+<h2 id="our-scheduler"><a class="header" href="#our-scheduler">Our scheduler</a></h2>
+<p>Our types are defined, and we know how to obtain them. Now, all we need to do is
+implement our scheduler. As mentioned, the scheduler simply maintains a list of
+tasks to be done. Therefore, it's a <code>task list</code> that we'll be manipulating. The
+action of <code>Spawn</code> will enlarge this list, while <code>Await</code> will observe the state
+of our promise, which will change as soon as its associated task is completed.
+Waiting can result in two different situations:</p>
+<ul>
+<li>the case where, indeed, the promise has been resolved. In this case, we simply
+transmit its result.</li>
+<li>the case where it is not yet resolved. In this particular situation, we give
+the opportunity for other tasks to execute (which can help in resolving our
+initial task). This is referred to as <em>yielding</em>.</li>
+</ul>
+<pre><code class="language-ocaml">let perform
+  : type c. task list ref -&gt; c Effect.t -&gt; [ `Continue of c | `Yield ]
+  = fun todo -&gt; function
+  | Spawn fn -&gt;
+    let value = ref None in
+    let task = Initial (fun () -&gt; value := Some (fn ())) in
+    todo := !todo @ [ Task task ] ;
+    `Continue value
+  | Await value -&gt;
+    begin match !value with
+    | Some value -&gt; `Continue value
+    | None -&gt; `Yield end
+  | _ -&gt; invalid_arg "Invalid effect"
+</code></pre>
+<p>Finally, it's just a matter of iterating over this list to gradually complete
+all our tasks. This iteration involves observing the state of each of our tasks.</p>
+<ul>
+<li>For the initial state, we simply launch the task and see what we obtain
+through the handler we defined earlier (i.e., whether the task is resolved or
+suspended).</li>
+<li>For the resolved state, there's nothing to do; our task has finished.</li>
+<li>Lastly, for the suspended state, we need to determine what operation our
+effect produces (using <code>perform</code>). The case of yielding is interesting because
+it involves keeping our suspension in our to-do list and attempting to execute
+our other tasks first.</li>
+</ul>
+<pre><code class="language-ocaml">let step todo = function
+  | Initial fn -&gt;
+    Effect.Shallow.(continue_with (fiber fn) () handler)
+  | Resolved v -&gt; Resolved v
+  | Suspended (k, effect) -&gt;
+    match perform todo effect with
+    | `Continue v -&gt; Effect.Shallow.(continue_with k v handler)
+    | `Yield -&gt; Suspended (k, effect)
+
+let run fn =
+  let result = ref None in
+  let rec go = function
+    | [] -&gt; Option.get !result
+    | Task task :: rest -&gt;
+      let todo = ref rest in
+      match step todo task with
+      | Resolved _ -&gt; go !todo
+      | (Initial _ | Suspended _) as task -&gt; go (!todo @ [ Task task ]) in
+  let task = Initial (fun () -&gt; result := Some (fn ())) in
+  go [ Task task ]
+</code></pre>
+<h2 id="lets-play"><a class="header" href="#lets-play">Let's play!</a></h2>
+<p>Have you kept in mind our initial code and our primary goal? It was about
+putting a task in the background and executing it afterward. Returning to our
+basic problem, we wanted to manage our clients as background tasks while
+effectively handling the reception of new connections. Let's revisit the
+original code:</p>
+<pre><code class="language-ocaml">let fn () = print_endline "World"
+
+let () =
+  let witness = do_this_in_background fn in
+  print_endline "Hello";
+  await witness
+</code></pre>
+<p>With our scheduler, this code would become:</p>
+<pre><code class="language-ocaml">let spawn fn = Effect.perform (Spawn fn)
+let await prm = Effect.perform (Await prm)
+
+let fn () = print_endline "World"
+
+let () = run @@ fun () -&gt;
+  let prm = spawn fn in
+  print_endline "Hello";
+  await prm
+</code></pre>
+<p>If we compile all of this and run the code, we get:</p>
+<pre><code class="language-shell">$ ocamlopt main.ml
+$ ./a.out
+Hello
+World
+</code></pre>
+<p>Et voilà! Our task displaying "World" was successfully put into the background,
+and we indeed displayed "Hello" first. We now have the basics of our scheduler.
+You now understand the core concepts of all schedulers (whether in OCaml or
+JavaScript). Several (perhaps suboptimal) choices were made, but the most
+important thing is to grasp the concept of asynchronous programming through a
+concrete example.</p>
+<p>Now, it's time to address our initial problem: managing our clients while also
+accepting new connections. At this stage, you might think that simply "spawning"
+our <code>echo</code> function will make it work in the background. However, even though
+we've addressed the issue of synchronicity by offering an asynchronous library,
+we deliberately overlooked mentioning <strong>blocking</strong> functions! That's what we'll
+explore in our next chapter.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="synchronous_server.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="interacting_system.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="synchronous_server.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="interacting_system.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+    </div>
+    </body>
+</html>

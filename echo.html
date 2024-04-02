@@ -1,0 +1,407 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>An echo server with Miou - Miou, a simple scheduler for OCaml 5</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('light')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html"><strong aria-hidden="true">1.</strong> Introduction</a></li><li class="chapter-item expanded "><a href="synchronous_server.html"><strong aria-hidden="true">2.</strong> A synchronous server</a></li><li class="chapter-item expanded "><a href="scheduler.html"><strong aria-hidden="true">3.</strong> A simple scheduler</a></li><li class="chapter-item expanded "><a href="interacting_system.html"><strong aria-hidden="true">4.</strong> Interacting with the system</a></li><li class="chapter-item expanded "><a href="retrospective.html"><strong aria-hidden="true">5.</strong> Retrospective</a></li><li class="chapter-item expanded "><a href="echo.html" class="active"><strong aria-hidden="true">6.</strong> An echo server with Miou</a></li><li class="chapter-item expanded "><a href="sleepers.html"><strong aria-hidden="true">7.</strong> Interacting with the system with Miou</a></li><li class="chapter-item expanded "><a href="conditions_and_mutexes.html"><strong aria-hidden="true">8.</strong> Conditions & Mutexes</a></li><li class="chapter-item expanded "><a href="manifesto.html"><strong aria-hidden="true">9.</strong> Manifesto</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Miou, a simple scheduler for OCaml 5</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="an-echo-server-with-miou"><a class="header" href="#an-echo-server-with-miou">An echo server with Miou</a></h1>
+<p>Passer de notre petit scheduler à Miou est assez simple. Mise à part la règle
+de ne pas oublier ses enfants que nous avons introduit dans le chapitre précédent,
+il s'agit principalement d'utiliser <code>Miou</code> et <code>Miou_unix</code>. Prennons la fonction
+<code>echo</code> qui gère nos clients:</p>
+<p>Moving from our custom scheduler to Miou is quite straightforward. Apart from
+the rule of not forgetting our children that we introduced in the previous
+chapter, it mainly involves using <code>Miou</code> and <code>Miou_unix</code>. Let's take the <code>echo</code>
+function that handles our clients:</p>
+<pre><code class="language-ocaml">let rec echo client =
+  let buf = Bytes.create 0x100 in
+  let len = Miou_unix.read client buf 0 (Bytes.length buf) in
+  if len = 0 then Miou_unix.close client
+  else
+    let str = Bytes.sub_string buf 0 len in
+    let _ = Miou_unix.write client str 0 len in echo client
+</code></pre>
+<p>A subtlety lies in <code>Miou_unix.write</code>, which expects a <code>string</code> instead of
+<code>bytes</code>. In a concurrent execution, it may happen that <code>buf</code> could be modified
+concurrently. Using a <code>string</code> ensures that the buffer we want to transmit does
+not change in the meantime. Once again, this comes from our experience in
+protocol implementation.</p>
+<p>Then, according to the rules introduced in the previous chapter, we need to
+re-implement our server so that it uses an <code>orphans</code> value and periodically
+<em>cleans up</em> our terminated clients to avoid forgetting our children:</p>
+<pre><code class="language-ocaml">let clean_up orphans = match Miou.care orphans with
+  | None | Some None -&gt; ()
+  | Some (Some prm) -&gt; match Miou.await prm with
+    | Ok () -&gt; ()
+    | Error exn -&gt; raise exn
+
+let server () =
+  let socket = Miou_unix.tcpv4 () in
+  let sockaddr = Unix.ADDR_INET (Unix.inet_addr_loopback, 3000) in
+  Miou_unix.bind_and_listen socket sockaddr;
+  let orphans = Miou.orphans () in
+  while true do
+    clean_up orphans;
+    let client, _ = Miou_unix.accept socket in
+    ignore (Miou.call_cc ~orphans (fun () -&gt; echo client))
+  done;
+  Miou_unix.close socket
+
+let () = Miou_unix.run server
+</code></pre>
+<p>Note the use of <code>Miou_unix.run</code> to handle system events and the functions from
+this module. For more details, we will explain the interactions between the
+system and Miou more precisely in the next chapter.</p>
+<p>And there we go, we've switched to Miou! All we need to do is compile our
+project like this:</p>
+<pre><code class="language-shell">$ opam install miou
+$ ocamlfind opt -linkpkg -package miou,miou.unix main.ml
+$ ./a.out &amp;
+[1] 436169
+$ echo "Hello" | netcat -q0 localhost 3000
+Hello
+$ kill -9 436169
+[1]  + 436169 killed     ./a.out
+</code></pre>
+<h2 id="parallelism"><a class="header" href="#parallelism">Parallelism</a></h2>
+<p>Since it's now possible to utilise multiple domains, let's take advantage of
+this to instantiate more than one server. Indeed, it's conceivable that multiple
+servers could exist at the same address (<code>localhost:3000</code>). In such a scenario,
+it's first come, first served. Therefore, we can envision managing multiple
+servers in parallel, each handling several clients concurrently.</p>
+<p>To distribute the implementation of our server across multiple domains, we'll
+use <code>Miou.parallel</code>. We won't forget to involve <code>dom0</code> (referring to our rule
+where <code>dom0</code> would never be assigned a task from other domain) via
+<code>Miou.call_cc</code>:</p>
+<pre><code class="language-ocaml">let () = Miou_unix.run @@ fun () -&gt;
+  let domains = Stdlib.Domain.recommended_domain_count () - 1 in
+  let domains = List.init domains (Fun.const ()) in
+  let prm = Miou.call_cc server in
+  Miou.await prm :: Miou.parallel server domains
+  |&gt; List.iter @@ function
+  | Ok () -&gt; ()
+  | Error exn -&gt; raise exn
+</code></pre>
+<p>To ensure that we're leveraging the full potential of our machine, we can check
+how many threads our program has (note that an OCaml domain always has 2
+threads!). Thus, for a system with 32 cores:</p>
+<pre><code class="language-shell">$ ocamlfind opt -linkpkg -package miou,miou.unix main.ml
+$ ./a.out &amp;
+[1] 438053
+$ ls /proc/438053/task | wc -l
+64
+$ kill -9 438053
+[1]  + 438053 killed     ./a.out
+</code></pre>
+<p>Almost for free, we've managed to launch multiple servers in parallel!</p>
+<h2 id="ownership"><a class="header" href="#ownership">Ownership</a></h2>
+<p>When it comes to building system and network applications, we often deal with
+resources shared between the application and the system. One such resource we
+use here is the file descriptor. OCaml has the advantage of offering a garbage
+collector to handle memory management for us. However, we still need to consider
+releasing system resources, particularly file descriptors.</p>
+<p>Another point to consider is the manipulation of these resources. We subtly
+mentioned, using <code>Miou_unix.write</code>, the possibility that a buffer could be
+concurrently modified. From our experience, the concept of resource ownership
+(like a buffer) specific to a particular task is lacking in OCaml and can lead
+to rather challenging bugs to identify and understand. In this regard, languages
+like Rust offer solutions that can help developers avoid a resource being
+manipulated by two tasks "at the same time". The problem is even more
+significant with tasks that can run in parallel. This is referred to as a
+<a href="https://en.wikipedia.org/wiki/Race_condition">data race</a>.</p>
+<p>Therefore, the best we can offer, Miou provides resource management that
+resembles that of Rust: a task has exclusive access to a resource once it has
+"proof" of ownership.</p>
+<p>Miou offers an API, <code>Miou.Ownership</code>, where you can:</p>
+<ul>
+<li>Create proof of ownership</li>
+<li>Own a resource through this proof</li>
+<li>Disown a resource through this proof</li>
+<li>Transfer this resource to a child via this proof</li>
+<li>Transfer this resource to the parent via this proof</li>
+<li>Verify, before manipulating this resource, that you have exclusive access to
+it</li>
+</ul>
+<p><code>Miou_unix</code> extends this API to file descriptors. In this second part of this
+chapter, it's essential to ensure that we are indeed the owners of the file
+descriptor we are manipulating. This won't change the behavior of our server; it
+just allows us to sleep better tonight!</p>
+<p>Let's start with the <code>echo</code> function:</p>
+<pre><code class="language-ocaml">let rec echo client =
+  let buf = Bytes.create 0x100 in
+  let len = Miou_unix.Ownership.read client buf 0 (Bytes.length buf) in
+  if len = 0 then Miou_unix.Ownership.close client
+  else
+    let str = Bytes.sub_string buf 0 len in
+    let _ = Miou_unix.Ownership.write client str 0 len in echo client
+</code></pre>
+<p><code>Miou_unix.Ownership.{read,write}</code> perform the necessary checks, while
+<code>Miou_unix.Ownership.close</code> disown our file descriptor since we no longer need
+it. Forgetting this step would result in an error in your application, and Miou
+would notify you that a resource has been forgotten (via
+<code>Miou.Resource_leaked</code>). Once attached to a task, a resource must be transferred
+or released; otherwise, it's considered forgotten! The aim is truly to assist
+the developer in not forgetting anything they manipulate.</p>
+<p>Another interesting aspect of resources is the case of an abnormal termination
+of our <code>echo</code> function via an exception. A resource is also associated with a
+<em>finalizer</em> that will be executed if the task in possession of the resource
+terminates abnormally. Again, the goal is to sleep well tonight.</p>
+<p>Now, let's move on to our <code>server</code> function, where we need to transfer our
+client file descriptor to our <code>echo</code> task:</p>
+<pre><code class="language-ocaml">let server () =
+  let socket = Miou_unix.Ownership.tcpv4 () in
+  let sockaddr = Unix.ADDR_INET (Unix.inet_addr_loopback, 3000) in
+  Miou_unix.Ownership.bind_and_listen socket sockaddr;
+  let orphans = Miou.orphans () in
+  while true do
+    clean_up orphans;
+    let client, _ = Miou_unix.Ownership.accept socket in
+    ignore (Miou.call_cc
+      ~give:[ Miou_unix.Ownership.resource client ]
+      ~orphans (fun () -&gt; echo client))
+  done;
+  Miou_unix.Ownership.close socket
+</code></pre>
+<p>And there you have it! Assuming everything goes well, our code is correct, and
+we are using our resources correctly. The <code>Miou.Ownership</code> module is not
+mandatory in Miou's usage but provides a value to dynamically verify the proper
+use and transfer of your resources. While it's not obligatory, we strongly
+recommend using it.</p>
+<p>The <em>finalizer</em> associated with the resource can also be genuinely beneficial,
+especially when cancellation occurs: it ensures there are no leaks, even in
+abnormal situations.</p>
+<h2 id="conclusion"><a class="header" href="#conclusion">Conclusion</a></h2>
+<p>If you've made it this far, you've likely seen a good portion of what Miou has
+to offer and delved into the intricacies of asynchronous programming and system
+interactions. You can continue experimenting and having fun with Miou or delve
+deeper into our tutorial.</p>
+<p>If you recall our initial challenge with our <code>echo</code> server, we divided the
+subject into two parts: the scheduler and system interactions. Miou also
+maintains this separation between the <code>Miou</code> module and the <code>Miou_unix</code> module.
+The next chapter will revisit system interactions, but this time with Miou. The
+goal will be to implement <em>sleepers</em> (and replicate <code>Unix.sleep</code>).</p>
+<p>Finally, the last chapter is an enhancement of our <code>echo</code> server using Mutexes
+and Conditions provided by Miou. This chapter explains in detail the benefits of
+using these modules over those offered by OCaml and presents, once again, a
+concrete case.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="retrospective.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="sleepers.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="retrospective.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="sleepers.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+    </div>
+    </body>
+</html>

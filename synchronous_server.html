@@ -1,0 +1,478 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>A synchronous server - Miou, a simple scheduler for OCaml 5</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('light')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html"><strong aria-hidden="true">1.</strong> Introduction</a></li><li class="chapter-item expanded "><a href="synchronous_server.html" class="active"><strong aria-hidden="true">2.</strong> A synchronous server</a></li><li class="chapter-item expanded "><a href="scheduler.html"><strong aria-hidden="true">3.</strong> A simple scheduler</a></li><li class="chapter-item expanded "><a href="interacting_system.html"><strong aria-hidden="true">4.</strong> Interacting with the system</a></li><li class="chapter-item expanded "><a href="retrospective.html"><strong aria-hidden="true">5.</strong> Retrospective</a></li><li class="chapter-item expanded "><a href="echo.html"><strong aria-hidden="true">6.</strong> An echo server with Miou</a></li><li class="chapter-item expanded "><a href="sleepers.html"><strong aria-hidden="true">7.</strong> Interacting with the system with Miou</a></li><li class="chapter-item expanded "><a href="conditions_and_mutexes.html"><strong aria-hidden="true">8.</strong> Conditions & Mutexes</a></li><li class="chapter-item expanded "><a href="manifesto.html"><strong aria-hidden="true">9.</strong> Manifesto</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Miou, a simple scheduler for OCaml 5</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="a-practical-counter-example-a-synchronous-server"><a class="header" href="#a-practical-counter-example-a-synchronous-server">A practical counter-example: a synchronous server</a></h1>
+<p>The benefits of asynchronous programming aren't immediately apparent to
+everyone, and its understanding can be equally challenging. Therefore, we've
+chosen to illustrate asynchronous programming with Miou through a counterexample
+demonstrating its value: the implementation of a synchronous server. Our goal is
+to then transform our synchronous server into an asynchronous one capable of
+handling billions of connections simultaneously.</p>
+<p>This tutorial presupposes that the reader is proficient in OCaml. While we aim
+to provide comprehensive explanations of each step but we won't delve into basic
+OCaml concepts.</p>
+<p>The goal of this tutorial is to implement an "echo" server. This server simply
+echoes back whatever the user sends to it. While this may seem straightforward,
+several challenges arise, including the issue of synchronicity.</p>
+<h2 id="socket"><a class="header" href="#socket">Socket</a></h2>
+<p>To facilitate communication between a client and a server, we utilize sockets.
+These are fundamental components provided by the system for handling
+communication, and in OCaml, we can manipulate them effectively. Let's delve
+deeper into their functionality.</p>
+<p>A socket acts as an endpoint for communication, enabling two computers to
+connect and exchange data. It follows a <em>client-server</em> model, where one side
+initiates communication (the client), and the other side responds (the server).
+In our example, we'll be focusing on implementing a server. To start, we need to
+initialize a socket that's ready to accept connections.</p>
+<pre><code class="language-ocaml">val socket : socket_domain -&gt; socket_type -&gt; int -&gt; file_descr
+</code></pre>
+<p>This function returns a file descriptor<sup class="footnote-reference"><a href="#file-descriptor">1</a></sup> representing the new
+socket. Initially, this descriptor is "disconnected," meaning it's not yet set
+up for reading or writing.</p>
+<p>Several arguments are required, including the domain (determining whether the
+socket communicates locally or over the Internet), the type of communication
+(such as packet or stream communication), and the protocol used<sup class="footnote-reference"><a href="#unix-tutorial">2</a></sup>.
+For our purposes, establishing a TCP/IP connection suffices. Thus, we create our
+socket as follows:</p>
+<pre><code class="language-ocaml">let server () =
+  let socket = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+  ...
+</code></pre>
+<h2 id="establish-a-service"><a class="header" href="#establish-a-service">Establish a service</a></h2>
+<p>After creating the socket, we need to assign a specific address to it so that it
+can be reached from the network. This is done using the <code>bind</code> system call:</p>
+<pre><code class="language-ocaml">val bind : file_descr -&gt; sockaddr -&gt; unit
+</code></pre>
+<p>Our address must consist of an IP and a port since we intend our socket to
+communicate over the Internet. In OCaml, the <code>sockaddr</code> value represents this
+address. For our server, we want it to be available on our local network at port
+3000:</p>
+<pre><code class="language-ocaml">let server () =
+  let socket = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+  let sockaddr = Unix.ADDR_INET (Unix.inet_addr_loopback, 3000) in
+  Unix.bind socket sockaddr
+</code></pre>
+<p>Next, we specify that the socket can accept connections using the <code>listen</code>
+system call:</p>
+<pre><code class="language-ocaml">val listen : file_descr -&gt; int -&gt; unit
+</code></pre>
+<p>The <code>listen</code> function requires our file descriptor to begin accepting client
+connections. It also needs a second argument, specifying the maximum number of
+pending incoming connections. Our server not only handles incoming connections
+but also echoes back what clients transmit. It's possible that a client may
+want to connect simultaneously, so the system keeps these clients on hold until
+we can manage the new incoming connection.</p>
+<pre><code class="language-ocaml">let server () =
+  let socket = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+  let sockaddr = Unix.ADDR_INET (Unix.inet_addr_loopback, 3000) in
+  Unix.bind socket sockaddr;
+  Unix.listen socket 64
+</code></pre>
+<p>With everything initialized, we can now handle incoming connections using the
+<code>accept</code> syscall:</p>
+<pre><code class="language-ocaml">val accept : file_descr -&gt; file_descr * sockaddr
+</code></pre>
+<p>This function will <strong>block</strong> until a new connection arrives. It returns a new
+file descriptor representing the client along with its address. To communicate
+with the client, we use this new file descriptor.</p>
+<p>We're going to implement our client handler. Its goal is to read what the client
+sends us and then echo it back. Transmitting bytes via a socket is done using
+two functions:</p>
+<pre><code class="language-ocaml">val read : file_descr -&gt; bytes -&gt; int -&gt; int -&gt; int
+val write : file_descr -&gt; bytes -&gt; int -&gt; int -&gt; int
+</code></pre>
+<p>These functions are <strong>blocking</strong> as well. The aim here is to store the bytes
+received from the client to echo them back. We'll repeat this process as long as
+we receive bytes from the client. Finally, we'll need to release our file
+descriptor; we won't need it anymore. We'll use <code>Unix.close</code> to inform the
+system that it can free all resources associated with this file descriptor.</p>
+<pre><code class="language-ocaml">let rec echo client =
+  let buf = Bytes.create 0x100 in
+  let len = Unix.read client buf 0 (Bytes.length buf) in
+  if len = 0 then Unix.close client
+  else let _ = Unix.write client buf 0 len in echo client
+</code></pre>
+<p>Now, let's complete the implementation of our service. This involves calling our
+<code>echo</code> function with the file descriptor of our client as soon as we receive it.</p>
+<pre><code class="language-ocaml">let server () =
+  let socket = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+  let sockaddr = Unix.ADDR_INET (Unix.inet_addr_loopback, 3000) in
+  Unix.bind socket sockaddr;
+  Unix.listen socket 64;
+  let client, address_of_client = Unix.accept socket in
+  echo client;
+  Unix.close socket;
+  print_endline "Server terminated"
+
+let () = server ()
+</code></pre>
+<h3 id="compilation--usage"><a class="header" href="#compilation--usage">Compilation &amp; usage</a></h3>
+<p>Let's start testing our program! We need to compile it first before we can use
+it. A tool like <code>netcat</code>/<code>nc</code> is sufficient to act as a client:</p>
+<pre><code class="language-shell">$ ocamlfind opt -linkpkg -package unix main.ml
+$ ./a.out &amp;
+[1] 4347
+$ echo "Hello World"|netcat -q0 localhost 3000
+Hello World
+Server terminated
+[1]  + 4347 done       ./a.out
+</code></pre>
+<p>Our server worked well! It handled only one client, but it correctly echoed back
+what <code>netcat</code> sent to it (as seen in echo "Hello World"). It's also noteworthy
+that the server terminated correctly. However, at this point, there are still
+several aspects to describe.</p>
+<h2 id="a-step-back"><a class="header" href="#a-step-back">A step back</a></h2>
+<p>There are several concepts we need to clarify in this exercise that are crucial
+when it comes to implementing a system and network application.</p>
+<h3 id="synchronicity"><a class="header" href="#synchronicity">Synchronicity</a></h3>
+<p>While it may be obvious to some, it's important to clarify this concept to fully
+understand the following steps. If we review our code, we can describe what it
+does:</p>
+<ol>
+<li>It creates a socket.</li>
+<li>It defines an address.</li>
+<li>It "binds" this socket to our address.</li>
+<li>It instructs our system to make our socket available on the network.</li>
+<li>It waits for a new connection.</li>
+<li>It executes the <code>echo</code> function with our new incoming connection.</li>
+<li>It displays "Server terminated".</li>
+</ol>
+<p>It's important to note that your system processes the program line by line, in
+the order we wrote it. At each step, the system waits for the current line to
+finish its execution before moving on to the next one. This is necessary because
+each line depends on the work performed in the preceding lines.</p>
+<p>This characteristic makes our program <strong>synchronous</strong>. Even if we introduce the
+<code>echo</code> function, the program remains synchronous because the caller must wait
+for the function to complete its task and return a value before continuing.</p>
+<h3 id="blocking-function"><a class="header" href="#blocking-function">Blocking function</a></h3>
+<p>Previously, we introduced the <code>accept</code> function, which waits for a connection to
+arrive. It's worth noting that if no connection arrives, your program will wait
+indefinitely! We say the function <strong>blocks</strong>, meaning it's waiting for an
+external event (like the arrival of a client). And we can't do anything else as
+long as this function is blocked. This type of function makes it impossible for
+a program to carry out other computations while waiting for the former to
+finish.</p>
+<p>The reason for this is that OCaml programs are single-threaded<sup class="footnote-reference"><a href="#multicore">3</a></sup>. A
+thread is a sequence of instructions that a program follows. Because the program
+consists of a single thread, it can only do one thing at a time: so if it is
+waiting for our long-running synchronous call to return, it can't do anything
+else.</p>
+<h2 id="handle-multiple-clients"><a class="header" href="#handle-multiple-clients">Handle multiple clients</a></h2>
+<p>Our goal now is to handle more than one client. We could simply repeat our
+<code>accept</code> call every time a client arrives.</p>
+<pre><code class="language-ocaml">let rec echo client =
+  let buf = Bytes.create 0x100 in
+  let len = Unix.read client buf 0 (Bytes.length buf) in
+  if len = 0 then Unix.close client
+  else let _ = Unix.write client buf 0 len in echo client
+
+let server () =
+  let socket = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+  let sockaddr = Unix.ADDR_INET (Unix.inet_addr_loopback, 3000) in
+  Unix.bind socket sockaddr;
+  Unix.listen socket 64;
+  while true do
+    let client, address_of_client = Unix.accept socket in
+    echo client
+  done;
+  Unix.close socket;
+  print_endline "Server terminated"
+
+let () = server ()
+</code></pre>
+<p>Let's try our code:</p>
+<pre><code class="language-shell">$ ocamlfind opt -linkpkg -package unix main.ml
+$ ./a.out &amp;
+[1] 8592
+$ echo "Hello World"|netcat -q0 localhost 3000
+Hello World
+$ echo "Hello World"|netcat -q0 localhost 3000
+Hello World
+$ kill -9 8592
+[1]  + 8592 killed     ./a.out
+</code></pre>
+<p>It seems to work! However, let's try a specific scenario: when two clients try
+to connect "at the same time". First, we'll launch a background client that will
+simply connect, and then we'll launch another client that will attempt to send
+some text.</p>
+<pre><code class="language-shell">$ ./a.out &amp;
+[1] 8711
+$ netcat localhost 3000 &amp;
+[2] 8728
+[2]  + 8728 suspended (tty input)  netcat localhost 3000
+$ echo "Hello World"|netcat -q0 localhost 3000
+^C
+$ kill -9 8728
+$ kill -9 8711
+</code></pre>
+<p>Our second client, after our first one is connected, gets stuck. In reality,
+when our first client connected, it made our server unavailable. This goes back
+to our explanation of <strong>synchronicity</strong>: our program can strictly only do one
+thing at a time. So, our program is currently handling our first client, and it
+can't handle our second client until the first one is finished. In practice, our
+<code>echo</code> function must finish so that our server can handle other clients.</p>
+<h2 id="asynchronicity"><a class="header" href="#asynchronicity">Asynchronicity</a></h2>
+<p>We're starting to see the fundamental problem of synchronicity in implementing a
+system and network application: the ability for our service to respond to all
+clients "at the same time." In our specific case, what we want is to be able to
+background our <code>echo</code> function so that our server can wait for a new connection
+again with <code>accept</code>. However, the concept of backgrounding a task is not so
+straightforward:</p>
+<ul>
+<li>We know that we only have one <em>thread</em> available, so we can strictly only do
+one thing. Which thread could execute our background task?</li>
+<li>We know that some functions put us in a waiting state (waiting for a new
+connection or waiting for data sent by the client). Instead of waiting, could
+we seize this opportunity to do "something else"?</li>
+<li>Ultimately, we primarily want to respond to events coming from the system.</li>
+</ul>
+<p>Several solutions exist for this. They vary even more depending on the language
+used and what it can offer to address these issues. Regarding OCaml 5, two
+elements can help us:</p>
+<ul>
+<li>Effects</li>
+<li>Domains</li>
+</ul>
+<p>For the next chapter, we'll focus on effects and follow our second intuition.
+Namely, taking the opportunity to do something else as soon as we're waiting for
+an event such as the arrival of a connection with <code>accept</code>.</p>
+<div class="footnote-definition" id="file-descriptor"><sup class="footnote-definition-label">1</sup>
+<p>It is a unique identifier used by your system to represent
+an input/output resource. In concrete terms, it's a non-negative integer that
+serves as a reference to I/O channel within a process.</p>
+</div>
+<div class="footnote-definition" id="unix-tutorial"><sup class="footnote-definition-label">2</sup>
+<p>These parameters may seem daunting for a newcomer. If you're
+interested in delving deeper into system programming with OCaml and Unix, we
+recommend checking out this <a href="https://ocaml.github.io/ocamlunix/index.html">tutorial</a>.</p>
+</div>
+<div class="footnote-definition" id="multicore"><sup class="footnote-definition-label">3</sup>
+<p>The more curious will say that OCaml is "multicore", and that's
+true. However, it is if you want to use the <code>Domain</code>/<code>Thread</code> module and
+allocate a domain/thread that can do a task in parallel or concurrently. But
+we'll explain all this in detail later.</p>
+</div>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="introduction.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="scheduler.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="introduction.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="scheduler.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+    </div>
+    </body>
+</html>

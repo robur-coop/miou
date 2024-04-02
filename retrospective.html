@@ -1,0 +1,467 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Retrospective - Miou, a simple scheduler for OCaml 5</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('light')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html"><strong aria-hidden="true">1.</strong> Introduction</a></li><li class="chapter-item expanded "><a href="synchronous_server.html"><strong aria-hidden="true">2.</strong> A synchronous server</a></li><li class="chapter-item expanded "><a href="scheduler.html"><strong aria-hidden="true">3.</strong> A simple scheduler</a></li><li class="chapter-item expanded "><a href="interacting_system.html"><strong aria-hidden="true">4.</strong> Interacting with the system</a></li><li class="chapter-item expanded "><a href="retrospective.html" class="active"><strong aria-hidden="true">5.</strong> Retrospective</a></li><li class="chapter-item expanded "><a href="echo.html"><strong aria-hidden="true">6.</strong> An echo server with Miou</a></li><li class="chapter-item expanded "><a href="sleepers.html"><strong aria-hidden="true">7.</strong> Interacting with the system with Miou</a></li><li class="chapter-item expanded "><a href="conditions_and_mutexes.html"><strong aria-hidden="true">8.</strong> Conditions & Mutexes</a></li><li class="chapter-item expanded "><a href="manifesto.html"><strong aria-hidden="true">9.</strong> Manifesto</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Miou, a simple scheduler for OCaml 5</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="retrospective"><a class="header" href="#retrospective">Retrospective</a></h1>
+<p>At this stage, you're familiar with all the concepts of a scheduler,
+asynchronous programming, and interactions with the system. Of course, as you
+might suspect, we've omitted a whole bunch of details, and Miou offers much more
+than our simple scheduler. However, at this point, we can describe in detail
+what Miou brings to the table (including its subtleties). That's what we'll
+explore in this chapter.</p>
+<h2 id="a-task-as-a-resource"><a class="header" href="#a-task-as-a-resource">A task as a resource</a></h2>
+<p>Let's revisit our example with the <code>echo</code> server, where we aimed to handle
+client management in the background:</p>
+<pre><code class="language-ocaml">    ignore (spawn @@ fun () -&gt; echo client)
+</code></pre>
+<p>You can achieve the same thing with <code>Miou.call_cc</code>. This function essentially
+does will more what our <code>spawn</code> does: it creates a new task that will run on the
+same <em>thread</em> using our scheduler. This type of task which coexists with others
+on the same thread is called a <em><a href="https://en.wikipedia.org/wiki/Fiber_(computer_science)">fiber</a></em>. And, just like <code>spawn</code>,
+<code>Miou.call_cc</code> also returns a promise for this task. In Miou, you're creating a
+child of your task, a subtask.</p>
+<p>The key difference with Miou, though, is that you can't forget your children!</p>
+<pre><code class="language-ocaml">let () = Miou.run @@ fun () -&gt;
+  ignore (Miou.call_cc @@ fun () -&gt; print_endline "Hello World!")
+Exception: Miou.Still_has_children.
+</code></pre>
+<p>In Miou, we treat a task as a resource. You allocate it (using <code>Miou.call_cc</code>),
+but you also have to release it with <code>Miou.await</code>. A fundamental rule governs
+Miou programs: all tasks must either be awaited or canceled. Forgetting a task
+will result in a fatal error.</p>
+<h3 id="background-tasks"><a class="header" href="#background-tasks">Background tasks</a></h3>
+<p>This brings up another question: what should we do with our subtasks that manage
+clients? If this rule exists, it's because these children can misbehave. And you
+need to be notified of these abnormal situations. What matters isn't the
+existence of these tasks (since your goal is to put them in the background) but
+their results to ensure everything went well.</p>
+<p>In this regard, Miou offers a way to save your tasks somewhere and retrieve them
+once they're completed. This is mainly done using the <code>orphans</code> value:</p>
+<pre><code class="language-ocaml">let rec clean_up orphans = match Miou.care orphans with
+  | None | Some None -&gt; ()
+  | Some (Some prm) -&gt;
+    match Miou.await prm with
+    | Ok () -&gt; clean_up orphans
+    | Error exn -&gt; raise exn
+
+let server () =
+  ...
+  let orphans = Miou.orphans () in
+  while true do
+    clean_up orphans;
+    let client, address_of_client = Miou_unix.accept socket in
+    ignore (Miou.call_cc ~orphans @@ fun () -&gt; echo client)
+  done
+</code></pre>
+<p>The advantage of this approach is that it treats a task as a resource that must
+be released at some point in your program's execution. Our experience in
+implementing protocols at <a href="https://robur.coop/">Robur</a> has convinced us of the importance of
+not forgetting about our children. Developing system and network applications
+involves creating programs with long execution time (6 months, 1 year, etc.).
+Tasks consume memory and possibly processor resources. Forgetting tasks can lead
+to memory leaks, which can hinder your program's long-term viability (the
+system might terminate your program due to an <a href="https://fr.wikipedia.org/wiki/Out_of_memory">out-of-memory</a> error).</p>
+<h2 id="structured-concurrency"><a class="header" href="#structured-concurrency">Structured concurrency</a></h2>
+<p>Managing tasks and their promises can be a real challenge when implementing a
+large application. Indeed, conceptualizing tasks running in the background
+leaves room for practices (like forgetting these tasks) that can lead to
+significant maintenance overhead in the long run. At Robur, through certain
+projects we maintain, we've encountered situations where the time to fix bugs
+becomes disproportionately large given our resources because we need to
+re-establish the mental model of task management, which isn't all that obvious.</p>
+<p>Thus, when developing Miou, it was essential from the outset to establish rules
+to prevent repeating past mistakes. We've already introduced one rule: never
+forget your children.</p>
+<p>There's a second rule: only the <strong>direct</strong> parent can wait for or cancel its
+children. For instance, the following code is incorrect:</p>
+<pre><code class="language-ocaml">let () = Miou.run @@ fun () -&gt;
+  let a = Miou.call_cc @@ fun () -&gt; Miou.yield () in
+  let b = Miou.call_cc @@ fun () -&gt; Miou.await_exn a in
+  Miou.await_exn a;
+  Miou.await_exn b
+Exception: Miou.Not_a_child.
+</code></pre>
+<p>The purpose of such a constraint is to maintain a simple mental model of the
+active tasks in your application: their affiliations form a tree with the root
+being your main task (the one launched with <code>Miou.run</code>). Therefore, if your main
+task terminates, it invariably means that all sub-tasks have also terminated.</p>
+<h2 id="cancellation"><a class="header" href="#cancellation">Cancellation</a></h2>
+<p>One aspect deliberately left out in the implementation of our small scheduler is
+cancellation. It can be useful to cancel a task that, for example, is taking too
+long. Miou provides this mechanism for all tasks using their promises.</p>
+<pre><code class="language-ocaml">let () = Miou.run @@ fun () -&gt;
+  let prm = Miou.call_cc @@ fun () -&gt; print_endline "Hello World" in
+  Miou.cancel prm
+</code></pre>
+<p>The rules of parentage explained earlier also apply to cancellation. You can
+only cancel your direct children:</p>
+<pre><code class="language-ocaml">let () = Miou.run @@ fun () -&gt;
+  let a = Miou.call_cc @@ fun () -&gt; Miou.yield () in
+  let b = Miou.call_cc @@ fun () -&gt; Miou.cancel a in
+  Miou.await_exn a;
+  Miou.await_exn b
+Exception: Miou.Not_a_child.
+</code></pre>
+<p>Cancellation overrides any promise state. You can cancel a task that has already
+completed. In this case, we lose the result of the task, and it's considered
+canceled:</p>
+<pre><code class="language-ocaml">let () = Miou.run @@ fun () -&gt;
+  let prm = Miou.call @@ fun () -&gt; 1 + 1 in
+  let _ = Miou.await prm in
+  Miou.cancel prm;
+  match Miou.await prm with
+  | Ok _ -&gt; assert false
+  | Error Miou.Cancelled -&gt; assert true
+  | Error exn -&gt; raise exn
+</code></pre>
+<p>Of course, to be consistent with our other rules, canceling a task implies
+canceling all its sub-tasks:</p>
+<pre><code class="language-ocaml">let rec infinite () = infinite (Miou.yield ())
+
+let () = Miou.run @@ fun () -&gt;
+  let p = Miou.call_cc @@ fun () -&gt;
+    let q = Miou.call infinite in
+    Miou.await_exn q in
+  Miou.cancel p
+</code></pre>
+<p>Lastly, let's delve into the behavior of <code>Miou.cancel</code>. It's said that this
+function is <em>asynchronous</em> in the sense that cancellation (especially that of a
+task running in parallel) may take some time. Thus, Miou seizes the opportunity
+to execute other tasks during this cancellation. For example, note that <code>p0</code>
+runs despite the cancellation of <code>p1</code>:</p>
+<pre><code class="language-ocaml">let () = Miou.run @@ fun () -&gt;
+  let p1 = Miou.call @@ fun () -&gt; Miou.yield () in
+  let v = ref false in
+  let p0 = Miou.call_cc @@ fun () -&gt; print_endline "Do p0" in
+  print_endline "Cancel p1";
+  Miou.cancel p1;
+  print_endline "p1 cancelled";
+  Miou.await_exn p0
+</code></pre>
+<pre><code class="language-shell">$ ocamlfind opt -linkpkg -package miou main.ml
+$ ./a.out
+Cancel p1
+Do p0
+p1 is cancelled
+</code></pre>
+<p>The advantage of this asynchronicity is to always be able to handle system
+events even if we attempt to cancel a task.</p>
+<h2 id="multiple-domain-runtime"><a class="header" href="#multiple-domain-runtime">Multiple domain runtime</a></h2>
+<p>In the introduction, it was mentioned that it's possible to use multiple domains
+with Miou. Indeed, since OCaml 5, it has been possible to launch functions in
+parallel. This parallelism has become possible only recently because these
+functions have their own <em>minor heap</em>. Thus, synchronization between domains
+regarding allocation and garbage collection is less systematic.</p>
+<p>To launch a task in parallel with Miou, it's sufficient to use:</p>
+<pre><code class="language-ocaml">let () = Miou.run @@ fun () -&gt;
+  let prm = Miou.call @@ fun () -&gt;
+    print_endline "My parallel task." in
+  Miou.await_exn prm
+</code></pre>
+<p>Miou takes care of allocating multiple domains according to your system's
+specifics. These domains will be waiting for tasks, and <code>Miou.call</code> notifies
+them of a new task to perform. Just like <code>Miou.call_cc</code>, <code>Miou.call</code> also
+returns a promise, and the same rules apply: you must not forget about your
+children.</p>
+<p>A task in parallel explicitly means that it will run in a different domain than
+the one it was created in. That is, this code, which returns the domain in which
+the task is executing, is always true:</p>
+<pre><code class="language-ocaml">let () = Miou.run @@ fun () -&gt;
+  let p =
+    Miou.call @@ fun () -&gt;
+    let u = Stdlib.Domain.self () in
+    let q = Miou.call @@ fun () -&gt; Stdlib.Domain.self () in
+    (u, Miou.await_exn q)
+  in
+  let u, v = Miou.await_exn p in
+  assert (u &lt;&gt; v)
+</code></pre>
+<p>However, the choice of the domain responsible for the task is made randomly.
+Thus, this code is also true (meaning that two tasks launched in succession
+can then use the same domain):</p>
+<pre><code class="language-ocaml">let () = Miou.run @@ fun () -&gt;
+  let assertion = ref false in
+  while !assertion = false do
+    let p = Miou.call @@ fun () -&gt; Stdlib.Domain.self () in
+    let q = Miou.call @@ fun () -&gt; Stdlib.Domain.self () in
+    let u = Miou.await_exn p in
+    let v = Miou.await_exn q in
+    assertion := u = v
+  done
+</code></pre>
+<p>It may happen then that we want to distribute a specific task to all our
+available domains. We cannot do this with <code>Miou.call</code>, which may, several times,
+assign the same domain for a task. However, Miou offers a way to distribute the
+workload evenly across all your domains:</p>
+<pre><code class="language-ocaml">let task () : int = (Stdlib.Domain.self () :&gt; int)
+
+let () = Miou.run ~domains:3 @@ fun () -&gt;
+  let domains =
+    Miou.parallel task (List.init 3 (Fun.const ()))
+    |&gt; List.map Result.get_ok in
+  assert (domains = [1; 2; 3])
+</code></pre>
+<p>Finally, one last rule exists regarding parallel tasks. There may be a situation
+called starvation. Indeed, like your number of cores, the number of domains is
+limited. It may happen that domains wait for each other, but it's certain that
+the main domain (the very first one that executes your code, known as <code>dom0</code>)
+will never be assigned a task via <code>Miou.call</code>.</p>
+<p>This rule prevents a domain from waiting for another domain, which waits for
+another domain, which waits for <code>dom0</code>, which waits for your first domain - the
+<a href="https://en.wikipedia.org/wiki/Starvation_(computer_science)">starvation problem</a>. Thus, it may happen that <code>dom0</code> is no longer
+involved in the execution of your program and is only waiting for the other
+domains. However, we can involve it using <code>Miou.call_cc</code>:</p>
+<pre><code class="language-ocaml">let task () : int = (Stdlib.Domain.self () :&gt; int)
+
+let () = Miou.run ~domains:3 @@ fun () -&gt;
+  let prm = Miou.call_cc my_super_task in
+  let domains =
+    Miou.await prm
+    :: Miou.parallel task (List.init 3 (Fun.const ())) in
+  let domains = List.map Result.get_ok domains in
+  assert (domains = [0; 1; 2; 3])
+</code></pre>
+<p>However, we would like to warn the user. Parallelizing a task doesn't
+necessarily mean that your program will be faster. Once again, Miou focuses
+essentially on managing system events. Domains are equally subject to observing
+these events, which means that all computations are interleaved with this
+observation (and can therefore have an impact on performance).</p>
+<p>Having more domains is not a solution for performance either. If Miou takes care
+of allocating (as well as releasing) domains, it's because they require a lot of
+resources (such as a minor-heap). Thus, the domains are available, but it's Miou
+that manages them.</p>
+<p>Finally, Miou mainly aims to facilitate the use of these domains, especially
+regarding inter-domain synchronization. Indeed, tasks as well as their promises
+concerning <code>Miou.call</code> do not exist in the same domains. An internal mechanism
+helps the user not to worry about the synchronicity between the task's state and
+its promise, even though they exist in two spaces that run in parallel.</p>
+<h2 id="for-the-next-steps"><a class="header" href="#for-the-next-steps">For the next steps</a></h2>
+<p>This retrospective allows us to introduce the basic elements of Miou. We now
+need to see how to use Miou and also introduce you to some new concepts. The
+next chapter will consist of re-implementing our echo server with Miou. There
+should be only a few differences, but we will seize the opportunity to improve
+our server, especially with the use of parallel tasks and the notion of
+ownership.</p>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="interacting_system.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="echo.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="interacting_system.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="echo.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+    </div>
+    </body>
+</html>

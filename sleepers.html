@@ -1,0 +1,607 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Interacting with the system with Miou - Miou, a simple scheduler for OCaml 5</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('light')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html"><strong aria-hidden="true">1.</strong> Introduction</a></li><li class="chapter-item expanded "><a href="synchronous_server.html"><strong aria-hidden="true">2.</strong> A synchronous server</a></li><li class="chapter-item expanded "><a href="scheduler.html"><strong aria-hidden="true">3.</strong> A simple scheduler</a></li><li class="chapter-item expanded "><a href="interacting_system.html"><strong aria-hidden="true">4.</strong> Interacting with the system</a></li><li class="chapter-item expanded "><a href="retrospective.html"><strong aria-hidden="true">5.</strong> Retrospective</a></li><li class="chapter-item expanded "><a href="echo.html"><strong aria-hidden="true">6.</strong> An echo server with Miou</a></li><li class="chapter-item expanded "><a href="sleepers.html" class="active"><strong aria-hidden="true">7.</strong> Interacting with the system with Miou</a></li><li class="chapter-item expanded "><a href="conditions_and_mutexes.html"><strong aria-hidden="true">8.</strong> Conditions & Mutexes</a></li><li class="chapter-item expanded "><a href="manifesto.html"><strong aria-hidden="true">9.</strong> Manifesto</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Miou, a simple scheduler for OCaml 5</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="interacting-with-the-system-with-miou"><a class="header" href="#interacting-with-the-system-with-miou">Interacting with the system with Miou</a></h1>
+<p>Miou is structured similarly to our small scheduler, but with a clear
+distinction between scheduling and system interaction.</p>
+<p>The goal is to be able to inject a certain type of interaction based on the
+system used, which may not necessarily be <code>Unix</code>. As mentioned in the
+introduction, our cooperative also aims to implement services as unikernels.
+These are very specific systems where the concept of files may not even exist.
+In this sense, <code>Miou_unix</code> is specific to <code>Unix</code>.</p>
+<p><code>Unix</code> and <code>Miou_unix</code> may suffice for most use cases. However, they may not be
+suitable for unikernels and may not meet your criteria and system requirements.
+A system like Linux may offer alternative means such as <code>epoll()</code> for
+interacting with the external world, for example.</p>
+<p>Beyond other possibilities, subtle differences may also exist. Indeed, systems
+like Linux or *BSD may not necessarily offer the same semantics in their
+handling of TCP/IP connections, for instance. These nuances make it difficult
+and even <em>error-prone</em> to try to standardize all these interactions. Overall, we
+believe that you are the best person to know how to interact with the system. As
+such, we offer this small tutorial to guide you on how to implement the <em>glue</em>
+between Miou and your system.</p>
+<h2 id="sleepers"><a class="header" href="#sleepers">Sleepers</a></h2>
+<p>One of the simplest interactions we can implement with Miou is the <em>sleeper</em>.
+It's akin to what <code>Unix.sleep</code> does: waiting for a certain amount of time. We'll
+iterate through its implementation to:</p>
+<ul>
+<li>Start by offering such a function.</li>
+<li>Handle the scenario where multiple domains might use this function.</li>
+<li>Finally, manage the cancellation of tasks that have called this function.</li>
+</ul>
+<p>To guide our tutorial, here's the code we aim to execute. The module <code>Chat</code> is
+the one we need to implement.</p>
+<pre><code class="language-ocaml">let program () =
+  Chat.run @@ fun () -&gt;
+  let a = Miou.call_cc @@ fun () -&gt; Chat.sleep 1. in
+  let b = Miou.call_cc @@ fun () -&gt; Chat.sleep 2. in
+  Miou.await_all [ a; b ]
+  |&gt; List.iter @@ function
+  | Ok () -&gt; ()
+  | Error exn -&gt; raise exn
+
+let () =
+  let t0 = Unix.gettimeofday () in
+  program ();
+  let t1 = Unix.gettimeofday () in
+  assert (t1 -. t0 &lt; 3.)
+</code></pre>
+<p>If we assume that tasks run "simultaneously," this program should execute in
+less than 3 seconds.</p>
+<h2 id="our-sleeper-function"><a class="header" href="#our-sleeper-function">Our sleeper function</a></h2>
+<p>If you remember from our little scheduler, we reused our <code>Await</code> effect to
+implement our <code>our_accept</code> function. We then injected our <code>our_select</code> into our
+scheduler so that it could observe events and signal suspension points to resume
+them.</p>
+<p>Similarly, Miou offers such mechanisms. You can suspend a function using a
+unique identifier called <code>Miou.syscall</code>:</p>
+<pre><code class="language-ocaml">type syscall
+type uid = private int [@@immediate]
+
+val syscall : unit -&gt; syscall
+val uid : syscall -&gt; uid
+val suspend : syscall -&gt; unit
+</code></pre>
+<p>The equivalent of our <code>Effect.perform (Await prm)</code> from our little scheduler
+would be <code>Miou.suspend</code>. Therefore, our main goal is to save our syscall
+<em>somewhere</em> and attach the time we need to wait to it:</p>
+<pre><code class="language-ocaml">type sleeper =
+  { time : float
+  ; syscall : Miou.syscall }
+
+module Sleepers = Miou.Pqueue.Make (struct
+  type t = sleeper
+
+  let compare { time= a; _ } { time= b; _ } = Float.compare a b
+  let dummy = { time= 0.0; syscall= Obj.magic () }
+end)
+
+let sleepers = Sleepers.create ()
+
+let sleep delay =
+  let time = Unix.gettimeofday () +. delay in
+  let syscall = Miou.syscall () in
+  Sleepers.insert { time; syscall } sleepers;
+  Miou.suspend syscall
+</code></pre>
+<p>Using a priority queue<sup class="footnote-reference"><a href="#proof">1</a></sup> will allow us to get the syscall that needs to
+resume its function as soon as possible among all our sleepers.</p>
+<p>Now we need to find a way to inject a function that will be called periodically,
+in which we can resume our functions just like we did for our little scheduler
+with our <code>our_select</code> function. Fortunately, Miou offers this possibility of
+injecting such a function via <code>Miou.run</code>:</p>
+<pre><code class="language-ocaml">type select = block:bool -&gt; uid list -&gt; signal list
+type events = { select: select; interrupt: unit -&gt; unit }
+
+val run : ?events:(Domain.Uid.t -&gt; events) -&gt; (unit -&gt; 'a) -&gt; 'a
+</code></pre>
+<p>At the very beginning, Miou tries to allocate the domains. For each domain, it
+will ask for an <code>event</code> value that contains a <code>select</code> function. This is the
+function we need to implement and provide to Miou. This function will be called
+whenever there is a syscall after executing a portion of our tasks and
+periodically. This function must return signals allowing Miou to resume
+functions that have been suspended by our syscalls.</p>
+<pre><code class="language-ocaml">type signal
+
+val signal : syscall -&gt; signal
+</code></pre>
+<p>So, one of its goals is to determine if one of our sleepers should resume one of
+our tasks or not.</p>
+<pre><code class="language-ocaml">let in_the_past ts = ts = 0. || ts &lt;= Unix.gettimeofday ()
+
+let rec remove_and_signal_older sleepers acc =
+  match Sleepers.find_min sleepers with
+  | None -&gt; acc
+  | Some { time; syscall } when in_the_past time -&gt;
+    Sleepers.delete_min_exn sleepers;
+    remove_and_signal_older sleepers (Miou.signal syscall :: acc)
+  | Some _ -&gt; acc
+
+let select ~block:_ _ =
+  let ts = match Sleepers.find_min sleepers with
+    | None -&gt; 0.0
+    | Some { time; _ } -&gt;
+      let value = time -. Unix.gettimeofday () in
+      Float.max 0.0 value in
+  Unix.sleepf ts;
+  remove_and_signal_older sleepers []
+
+let events _ = { Miou.select; interrupt= ignore }
+let run fn = Miou.run ~events fn
+</code></pre>
+<p>As you can see, we are specializing our <code>Miou.run</code> function with our <code>events</code>.
+That's why whenever you use functions from <code>Miou_unix</code>, for example, you should
+use <code>Miou_unix.run</code>. Let's now try our code:</p>
+<pre><code class="language-shell">$ ocamlfind opt -linkpkg -package miou,unix -c chat.ml
+$ ocamlfind opt -linkpkg -package miou,unix chat.cmx main.ml
+$ ./a.out
+$ echo $?
+0
+</code></pre>
+<p>And there you go! We've just proven that our two tasks are running concurrently.
+Note the use of <code>Unix.sleepf</code> instead of <code>Unix.select</code>. Here, we are only
+interested in waiting rather than observing our file descriptors.</p>
+<h2 id="domains--system"><a class="header" href="#domains--system">Domains &amp; system</a></h2>
+<p>As mentioned earlier, Miou manages multiple domains. Therefore, if our <code>select</code>
+function uses a global variable like <code>sleepers</code>, we will definitely encounter an
+access problem with this variable across domains. There are several solutions to
+this issue, one of which involves "protecting" our global variable using a
+Mutex. However, we have specified that each domain manages its own <code>select</code>.</p>
+<p>In general, a syscall is always local to a domain; it cannot be managed by
+another domain that did not suspend it. In this sense, we can consider
+allocating a <code>sleepers</code> for each domain. In OCaml, there is a way to consider
+values that exist and are accessible to each domain, and these domains have
+exclusivity over them: it's called <a href="https://en.wikipedia.org/wiki/Thread-local_storage">Thread Local Storage</a>.</p>
+<p>So instead of having a global <code>sleepers</code>, we will use this API:</p>
+<pre><code class="language-ocaml">let sleepers =
+  let key = Stdlib.Domain.DLS.new_key Sleepers.create in
+  fun () -&gt; Stdlib.Domain.DLS.get key
+
+let sleep delay =
+  let sleepers = sleepers () in
+  let time = Unix.gettimeofday () +. delay in
+  let syscall = Miou.syscall () in
+  Sleepers.insert { time; syscall } sleepers;
+  Miou.suspend syscall
+
+let select ~block:_ _ =
+  let sleepers = sleepers () in
+  let ts = match Sleepers.find_min sleepers with
+    | None -&gt; 0.0
+    | Some { time; _ } -&gt;
+      let value = time -. Unix.gettimeofday () in
+      Float.max 0.0 value in
+  Unix.sleepf ts;
+  remove_and_signal_older sleepers []
+</code></pre>
+<p>We can now safely replace our <code>Miou.call_cc</code> with <code>Miou.call</code>. We know that each
+task will have its own <code>sleepers</code>, and there will be no illegal access between
+domains.</p>
+<h2 id="cancellation"><a class="header" href="#cancellation">Cancellation</a></h2>
+<p>There is one last point remaining: cancellation. Indeed, a task that has
+suspended on a syscall can be canceled. We need to "clean up" our syscalls and
+consider some of them unnecessary to observe. The <code>select</code> function has a final
+argument corresponding to a list of canceled syscalls (with their unique
+identifiers). When cancellation occurs, Miou attempts to collect all canceled
+syscalls and then provides them to you so that you can clean up your variables
+from these syscalls (in this case, our <code>sleepers</code>).</p>
+<p>Another subtlety concerns inter-domain synchronization. Cancellation may require
+synchronization between two domains, especially if we use <code>Miou.call</code> where the
+promise exists in a different domain than the executing task. The problem is
+that this synchronization may occur when one of the two domains performs
+<code>Unix.sleepf</code>: in this case, we would need to wait for our domain to complete
+its operation before continuing with cancellation. This is obviously not
+feasible, especially if cancellation involves cleaning up a myriad of promises
+and tasks across multiple domains (recall that <code>Miou.cancel</code> also cancels
+children).</p>
+<p>We have not mentioned it yet, but <code>events</code> has another function called
+<code>interrupt</code>. This function precisely allows Miou to interrupt <code>select</code> because
+the state of a promise has changed (and this change must be taken into account
+in our syscall management).</p>
+<p>So the question is: how do we interrupt <code>Unix.sleepf</code>? There are several
+solutions, such as sending a signal, for example (and generating the
+<code>EINTR</code><sup class="footnote-reference"><a href="#thread">2</a></sup> exception). However, we could just as well reuse <code>Unix.select</code>.
+To remind you, this function can wait for a certain time (just like
+<code>Unix.sleepf</code>) but can also be interrupted as soon as an event occurs (such as
+the execution of <code>interrupt</code> by Miou). The idea is to create a file descriptor
+that Miou can manipulate and that <code>Unix.select</code> can observe.</p>
+<p>Once again, the idea is not to interrupt the entire domain. An interruption does
+not necessarily mean that we want to wake up the domain because we know it is in
+a state where it cannot handle cancellation—actually, we cannot know that. The
+interruption just aims to unblock the domain only if it is performing a
+<code>select</code>. Thus, it may happen that Miou attempts to interrupt multiple times
+when it is unnecessary — because the domain in question is not operating on the
+<code>select</code>. But that's okay; we can simply ignore these interruptions.</p>
+<p>So, we have two things to do to manage cancellation:</p>
+<ol>
+<li>Clean up our sleepers from the syscalls given as arguments to our <code>select</code>
+function.</li>
+<li>Be able to interrupt our <code>select</code> using a file descriptor that Miou could
+use.</li>
+</ol>
+<p>Let's start by cleaning up our syscalls. The problem with <code>Miou.Pqueue</code> is that
+we cannot arbitrarily delete an element unless it is the smallest element.
+Indeed, we could cancel a sleeper that is not necessarily the next in terms of
+time. But we could <em>tag</em> our sleepers as canceled and simply ignore them when
+we should signal them:</p>
+<pre><code class="language-ocaml">type sleeper =
+  { time : float
+  ; syscall : Miou.syscall
+  ; mutable cancelled : bool }
+
+module Sleepers = Miou.Pqueue.Make (struct
+  type t = sleeper
+
+  let compare { time= a; _ } { time= b; _ } = Float.compare a b
+  let dummy = { time= 0.0; syscall= Obj.magic (); cancelled= false }
+end)
+
+let sleepers =
+  let key = Stdlib.Domain.DLS.new_key Sleepers.create in
+  fun () -&gt; Stdlib.Domain.DLS.get key
+
+let sleep delay =
+  let sleepers = sleepers () in
+  let time = Unix.gettimeofday () +. delay in
+  let syscall = Miou.syscall () in
+  Sleepers.insert { time; syscall; cancelled= false } sleepers;
+  Miou.suspend syscall
+
+let rec remove_and_signal_older sleepers acc =
+  match Sleepers.find_min sleepers with
+  | None -&gt; acc
+  | Some { cancelled; _ } when cancelled -&gt;
+    Sleepers.delete_min_exn sleepers;
+    remove_and_signal_older sleepers acc
+  | Some { time; syscall; _ } when in_the_past time -&gt;
+    Sleepers.delete_min_exn sleepers;
+    remove_and_signal_older sleepers (Miou.signal syscall :: acc)
+  | Some _ -&gt; acc
+
+let rec clean sleepers uids =
+  let f ({ syscall; _ } as elt) =
+    if List.exists ((=) (Miou.uid syscall)) uids
+    then elt.cancelled &lt;- true in
+  Sleepers.iter f sleepers
+
+let rec minimum sleepers =
+  match Sleepers.find_min sleepers with
+  | None -&gt; None
+  | Some { cancelled; _ } when cancelled -&gt;
+    Sleepers.delete_min_exn sleepers;
+    minimum sleepers
+  | Some elt -&gt; Some elt
+
+let select ~block:_ uids =
+  let sleepers = sleepers () in
+  clean sleepers uids;
+  let ts = match minimum sleepers with
+    | None -&gt; 0.0
+    | Some { time; _ } -&gt;
+      let value = time -. Unix.gettimeofday () in
+      Float.max 0.0 value in
+  Unix.sleepf ts;
+  remove_and_signal_older sleepers []
+</code></pre>
+<p>Now, we need to implement our <code>interrupt</code> and modify our <code>select</code> accordingly so
+that it can handle the interruption. As we explained, we will use <code>Unix.select</code>
+to both wait for the necessary time (like <code>Unix.sleepf</code>) and observe a specific
+event: whether we have been interrupted or not.</p>
+<p>The interruption mechanism will be done using a file descriptor (because this is
+what we can observe). We need to transmit a signal of some sort via our
+<code>interrupt</code> function that <code>select</code> can handle. So we will create a <em>pipe</em> where
+<code>interrupt</code> writes to it, and <code>select</code> reads from it as soon as it has bytes
+available:</p>
+<pre><code class="language-ocaml">let consume ic =
+  let buf = Bytes.create 0x100 in
+  ignore (Unix.read ic buf 0 (Bytes.length buf))
+
+let select ic ~block:_ uids =
+  let sleepers = sleepers () in
+  clean sleepers uids;
+  let ts = match minimum sleepers with
+    | None -&gt; 0.0
+    | Some { time; _ } -&gt;
+      let value = time -. Unix.gettimeofday () in
+      Float.max 0.0 value in
+  match Unix.select [ ic ] [] [] ts with
+  | [], _, _ -&gt; remove_and_signal_older sleepers []
+  | ic :: _, _, _ -&gt;
+    consume ic;
+    remove_and_signal_older sleepers []
+
+let buf = Bytes.make 1 '\000'
+
+let events _ =
+  let ic, oc = Unix.pipe () in
+  let interrupt () = ignore (Unix.write oc buf 0 (Bytes.length buf)) in
+  { Miou.select= select ic; interrupt }
+</code></pre>
+<p>And there you have it! We can now allow Miou to interrupt a <code>select</code> in the case
+of cancellation. Interruption occurs quite frequently and is not limited to
+cancellation. Here, we are mainly interested in unblocking our <code>Unix.select</code> so
+that Miou can then handle its tasks immediately. It is also worth noting that we
+don't consume our pipe interruption by interruption. There may be unnecessary
+interruptions that we can ignore (hence reading 0x100 bytes instead of 1).</p>
+<p>To demonstrate the validity of our implementation, we can try canceling a task
+in parallel that would take too long:</p>
+<pre><code class="language-ocaml">let () = Chat.run @@ fun () -&gt;
+  let prm = Miou.call @@ fun () -&gt; Chat.sleep 10. in
+  Miou.yield ();
+  Miou.cancel prm
+</code></pre>
+<p>This code should not take 10 seconds but just the time it takes for
+cancellation.</p>
+<h2 id="blocking-indefinitely"><a class="header" href="#blocking-indefinitely">Blocking indefinitely</a></h2>
+<p>As you can imagine, we have still omitted some details in our tutorial.
+Particularly, the <code>block</code> option. This option signals from Miou that there are
+no tasks left to handle, and only syscalls can unblock your application. This is
+typically what we expect from a system and network application: fundamentally
+waiting for system events as a top priority.</p>
+<p>In this regard, if <code>block:true</code>, we can afford to wait indefinitely (while still
+considering possible interruptions) without handing control back to Miou until
+there is an event. To do this, <code>Unix.select</code> can have <code>-1.0</code> as its last
+argument. However, in our example, this is not very relevant. But for our <code>echo</code>
+server, it's crucial that it does nothing but wait for system events. In this
+regard, we recommend reading the implementation of <code>Miou_unix</code>, which closely
+resembles what we have just done and handles the <code>block</code> option.</p>
+<h2 id="conclusion"><a class="header" href="#conclusion">Conclusion</a></h2>
+<p>You've finally completed this little tutorial, which demonstrates what is
+arguably the most challenging part of Miou. It should be noted that we have
+mentioned other possible solutions in our interaction with the system here and
+there:</p>
+<ul>
+<li>starting with <code>epoll()</code></li>
+<li>mentioning interruption mechanisms other than our <code>Unix.pipe</code></li>
+<li>explaining a completely different design with <code>Stdlib.Thread</code> that could be
+more efficient</li>
+</ul>
+<p>In addition to these, there are subtle differences between systems (even Unix),
+and we realize that standardizing and homogenizing such a problem is a difficult
+task. What is most important to take away from this tutorial is Miou's ability
+to allow you to re-appropriate what is, for us, essential in the development of
+a system and network application: interactions with the system.</p>
+<p>We could claim (and have the audacity to) offer solutions that would cover 90%
+of use cases in the development of such applications, but in our ambition to
+create unikernels as a service, we definitely fall into the margin (the
+remaining 10%). In this regard, we offer perhaps something that may be
+rudimentary but accessible and usable for truly all use cases.</p>
+<p>Finally, this book is not finished. As mentioned in the previous chapter, we
+still need to cover Mutexes and Conditions. To do this, we will reuse our <code>echo</code>
+server and improve it!</p>
+<div class="footnote-definition" id="proof"><sup class="footnote-definition-label">1</sup>
+<p>It is worth noting that the <code>Miou.Pqueue</code> module comes from an
+extraction of an implementation of a proven priority queue using <a href="https://www.why3.org/">Why3</a>
+(see the <a href="https://github.com/ocaml-gospel/vocal">vocal</a> project).</p>
+</div>
+<div class="footnote-definition" id="thread"><sup class="footnote-definition-label">2</sup>
+<p>Another solution, which would be more challenging to implement but
+more efficient, would be to use <code>Stdlib.Thread</code> to observe events. This
+observation would occur concurrently with our domain and transmit signals via a
+shared queue with our <code>select</code>. In this case, <code>select</code> would no longer be
+blocking at all, and we would no longer need to implement an <code>interrupt</code>.</p>
+</div>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="echo.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="conditions_and_mutexes.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="echo.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="conditions_and_mutexes.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+    </div>
+    </body>
+</html>

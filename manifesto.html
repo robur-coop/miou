@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>Introduction - Miou, a simple scheduler for OCaml 5</title>
+        <title>Manifesto - Miou, a simple scheduler for OCaml 5</title>
 
 
         <!-- Custom HTML head -->
@@ -88,7 +88,7 @@
 
         <nav id="sidebar" class="sidebar" aria-label="Table of contents">
             <div class="sidebar-scrollbox">
-                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html" class="active"><strong aria-hidden="true">1.</strong> Introduction</a></li><li class="chapter-item expanded "><a href="synchronous_server.html"><strong aria-hidden="true">2.</strong> A synchronous server</a></li><li class="chapter-item expanded "><a href="scheduler.html"><strong aria-hidden="true">3.</strong> A simple scheduler</a></li><li class="chapter-item expanded "><a href="interacting_system.html"><strong aria-hidden="true">4.</strong> Interacting with the system</a></li><li class="chapter-item expanded "><a href="retrospective.html"><strong aria-hidden="true">5.</strong> Retrospective</a></li><li class="chapter-item expanded "><a href="echo.html"><strong aria-hidden="true">6.</strong> An echo server with Miou</a></li><li class="chapter-item expanded "><a href="sleepers.html"><strong aria-hidden="true">7.</strong> Interacting with the system with Miou</a></li><li class="chapter-item expanded "><a href="conditions_and_mutexes.html"><strong aria-hidden="true">8.</strong> Conditions & Mutexes</a></li><li class="chapter-item expanded "><a href="manifesto.html"><strong aria-hidden="true">9.</strong> Manifesto</a></li></ol>
+                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html"><strong aria-hidden="true">1.</strong> Introduction</a></li><li class="chapter-item expanded "><a href="synchronous_server.html"><strong aria-hidden="true">2.</strong> A synchronous server</a></li><li class="chapter-item expanded "><a href="scheduler.html"><strong aria-hidden="true">3.</strong> A simple scheduler</a></li><li class="chapter-item expanded "><a href="interacting_system.html"><strong aria-hidden="true">4.</strong> Interacting with the system</a></li><li class="chapter-item expanded "><a href="retrospective.html"><strong aria-hidden="true">5.</strong> Retrospective</a></li><li class="chapter-item expanded "><a href="echo.html"><strong aria-hidden="true">6.</strong> An echo server with Miou</a></li><li class="chapter-item expanded "><a href="sleepers.html"><strong aria-hidden="true">7.</strong> Interacting with the system with Miou</a></li><li class="chapter-item expanded "><a href="conditions_and_mutexes.html"><strong aria-hidden="true">8.</strong> Conditions & Mutexes</a></li><li class="chapter-item expanded "><a href="manifesto.html" class="active"><strong aria-hidden="true">9.</strong> Manifesto</a></li></ol>
             </div>
             <div id="sidebar-resize-handle" class="sidebar-resize-handle">
                 <div class="sidebar-resize-indicator"></div>
@@ -173,80 +173,84 @@
 
                 <div id="content" class="content">
                     <main>
-                        <h1 id="miou-a-simple-scheduler-for-ocaml-5"><a class="header" href="#miou-a-simple-scheduler-for-ocaml-5">Miou, a simple scheduler for OCaml 5</a></h1>
-<p>Miou is a small library that facilitates asynchronous and parallel programming
-in OCaml. It is a project of the <a href="https://robur.coop">Robur</a> cooperative, aimed at developing
-system and network applications. This library only requires OCaml 5 and can be
-obtained via <a href="https://opam.ocaml.org">opam</a>.</p>
-<pre><code class="language-shell">$ opam install miou
-</code></pre>
-<p>Miou offers three key features:</p>
-<ul>
-<li>a multi-domain runtime for executing asynchronous code.</li>
-<li>flexibility in defining interactions between the system and Miou.</li>
-<li>essential components for asynchronous and/or parallel programming.</li>
-</ul>
-<h2 id="mious-role-in-your-project"><a class="header" href="#mious-role-in-your-project">Miou's role in your project</a></h2>
-<p>When developing an application that heavily interacts with the system to offer
-services like an HTTP server, embracing asynchronous programming is recommended.
-However, OCaml lacks built-in support for asynchronous programming,
-necessitating the use of a library such as Miou, which provides the required
-runtime.</p>
-<p>Such a runtime emerges as a pivotal element of your application, orchestrating
-and executing tasks to ensure continued service availability despite varying
-workloads. Miou caters to diverse systems, ranging from unikernels to large
-servers with numerous cores or even small embedded devices.</p>
-<p>While pivotal, this runtime represents the final frontier between your
-application's intended functionality and its current execution by interacting
-with the system. Hence, we advise users to defer selecting the scheduler, such
-as Miou, until the application's design phase is complete.</p>
-<h3 id="a-multi-domain-runtime"><a class="header" href="#a-multi-domain-runtime">A multi-domain runtime</a></h3>
-<p>Since OCaml 5, it has been possible to execute tasks in parallel. Miou provides
-this capability by solving the inter-domain synchronization problems involved.
-Miou allocates multiple domains that are available to the user to manage in
-parallel, for example, clients.</p>
-<p>We recommend referring to the OCaml manual to learn more about domains. Indeed,
-Miou manages domains itself because they can be a costly resource. As such, Miou
-handles their allocation, transfers your tasks to them, manages synchronization
-when you want to obtain the results of your tasks, and ultimately deallocates
-these domains properly.</p>
-<h3 id="agnostic-to-the-system"><a class="header" href="#agnostic-to-the-system">Agnostic to the system</a></h3>
-<p>Miou only requires OCaml to operate. This choice stems from our ambition to
-integrate Miou as a scheduler for our unikernels, which are highly specialized
-systems. However, more generally and based on experience, we understand that
-interactions with the system are inherently complex and cannot be standardized
-through a common interface.</p>
-<p>Therefore, we believe that the best person to determine how to interact with
-the system is you! Miou thus provides this capability so that you can leverage
-the full potential of your system.</p>
-<p>However, Miou offers a small extension allowing interaction with your system
-through the <code>miou.unix</code> library. While rudimentary, it is adequate for most
-system and network applications.</p>
-<h3 id="essential-components-for-asynchronousparallel-programming"><a class="header" href="#essential-components-for-asynchronousparallel-programming">Essential components for asynchronous/parallel programming</a></h3>
-<p>Finally, Miou provides essential elements for parallel and/or asynchronous
-programming. These components help address synchronization challenges inherent
-in parallel and/or asynchronous programming.</p>
-<p>It is worth noting that these elements may seem somewhat rudimentary. However,
-we would like to caution the user that the topic of synchronization is a vast
-realm of solutions and research, and we do not claim to have omniscience over
-it. Therefore, we prefer to leave this space open for the user.</p>
-<h2 id="when-not-to-use-miou"><a class="header" href="#when-not-to-use-miou">When not to use Miou</a></h2>
-<p>Although Miou is useful for many projects that need to do a lot of things
-simultaneously, there are also some use-cases where Miou is not a good fit:
-speeding up CPU-bound computations by running them in parallel on several
-domains. Miou is designed for IO-bound applications where each individual task
-spends most of its time waiting for IO. If the only thing your application
-does is run computations in parallel, you should use <a href="https://github.com/c-cube/moonpool">moonpool</a>. That
-said, it is still possible to "mix &amp; match" if you need to do both.</p>
+                        <h1 id="manifesto"><a class="header" href="#manifesto">Manifesto</a></h1>
+<p>Ce petit manifeste permet d'expliciter nos ambitions par rapport à Miou et notre
+coopérative. En effet, au delà des questions techniques que peuvent soulever un
+scheduler, il y a aussi des réalités sociales à prendre en compte qui argumentent
+l'existence de Miou dans un écosystème qui peut se retrouver fragmenter sur ces
+questions. Il ne s'agit pas de partager notre avis sur ce qu'on peut retrouver
+entant que projet concurrent à Miou ni prêter des propos et des actes dont vous
+ne pouvez être que le seul juge, il s'agit de dire ce qu'est Miou à nos yeux.</p>
+<p>This small manifesto aims to clarify our ambitions regarding Miou and our
+cooperative. Beyond the technical questions raised by a scheduler, there are
+also social realities to consider that justify Miou's existence in an ecosystem
+that can become fragmented on these issues. It is not about sharing our opinion
+on what might be found as a competing project to Miou or attributing statements
+and actions of which you alone can be the judge; it is about expressing what
+Miou means to us.</p>
+<h2 id="protocols-services--miou"><a class="header" href="#protocols-services--miou">Protocols, services &amp; Miou</a></h2>
+<p>For several years, we have been endeavoring to produce services in OCaml in the
+form of unikernels, as evidenced by this website. In pursuing this goal, the
+implementation of protocols and services in OCaml naturally comes into play
+within our cooperative. It is worth noting that we have implemented many
+protocols to date and intend to continue in this direction.</p>
+<p>What we have learned over these years is the logical and indeed necessary
+separation between the protocol and the scheduler. Even if the sole application
+domain of implementing a protocol is I/O, we will continue to produce libraries
+that do <strong>not</strong> depend on Miou.</p>
+<p>In this regard, we encourage our users to follow the same path. As mentioned in
+this tutorial, the scheduler is the final frontier between your application and
+reality: the aim is to push this question as far back as possible to ultimately
+make the best choice on which scheduler to use.</p>
+<p>Furthermore, we will not impose the use of Miou in the majority of the software
+we develop and maintain. However, we still have a <em>slight</em> preference for it.</p>
+<h2 id="miou-extension"><a class="header" href="#miou-extension">Miou Extension</a></h2>
+<p>For some, Miou is very, even too, minimal. It offers the bare minimum for
+developing system and network applications, and it can be tedious to reconsider
+(and reimplement) basic building blocks in the design of an application that
+Miou does not provide.</p>
+<p>Once again, we do not shy away from our goal of integrating Miou into our
+unikernels, where this choice to restrict the application domain of our library
+becomes a necessity. In this regard, Miou will remain small.</p>
+<p>However, this choice can be understood (and we hope our users can understand it
+this way) as our humility in not seeking to homogenize and/or standardize an
+ecosystem in which we believe you can find your place: a place that may involve
+extending or even rebuilding Miou. Thus, Miou's goal is not to be widely used.</p>
+<p>All this is to inform our future users that extending Miou to facilitate
+application development can be done as third-party libraries but would not be
+integrated into Miou.</p>
+<h2 id="collective-work"><a class="header" href="#collective-work">Collective Work</a></h2>
+<p>At several points in our tutorial, we mentioned that we are not necessarily
+omniscient about all possible techniques, for example, regarding synchronization
+between multiple tasks. In reality, Miou raises many challenges that can be
+daunting in terms of our skills and resources (we are only a small cooperative).</p>
+<p>But we believe (and we hope to demonstrate publicly on a daily basis) in
+collective work and the contribution of our users to evolve Miou in a direction
+that can satisfy everyone. This collective work can be long, sometimes thankless
+(and we are the first to acknowledge it), but we would be delighted if Miou were
+the synthesis of a community rather than just a few people with very (too)
+strong opinions.</p>
+<p>Moreover, this is already the case. Miou draws heavily from its <em>"competitors"</em>
+and builds upon the outstanding work of individuals who have pondered the same
+questions as us regarding scheduler implementation. It is a task that can be
+lengthy (both in assimilation and implementation) but can correspond, at least,
+to our cooperative structure.</p>
+<h2 id="acknowledgments"><a class="header" href="#acknowledgments">Acknowledgments</a></h2>
+<p>Thus, this little manifesto concludes with thanks to all the individuals who,
+directly or indirectly, have contributed to the development of Miou as well as
+to the <a href="https://robur.coop/">Robur</a> cooperative, which has enabled the development of such a
+library. Hoping that our opinions and vision for the future of Miou resonate
+with you, we will be delighted, even if only to assist you in reclaiming the
+means of communication.</p>
 
                     </main>
 
                     <nav class="nav-wrapper" aria-label="Page navigation">
                         <!-- Mobile navigation buttons -->
-
-                            <a rel="next prefetch" href="synchronous_server.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                                <i class="fa fa-angle-right"></i>
+                            <a rel="prev" href="conditions_and_mutexes.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
                             </a>
+
 
                         <div style="clear: both"></div>
                     </nav>
@@ -254,10 +258,10 @@ said, it is still possible to "mix &amp; match" if you need to do both.</p>
             </div>
 
             <nav class="nav-wide-wrapper" aria-label="Page navigation">
-
-                    <a rel="next prefetch" href="synchronous_server.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
-                        <i class="fa fa-angle-right"></i>
+                    <a rel="prev" href="conditions_and_mutexes.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
                     </a>
+
             </nav>
 
         </div>

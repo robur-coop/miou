@@ -1,0 +1,515 @@
+<!DOCTYPE HTML>
+<html lang="en" class="light" dir="ltr">
+    <head>
+        <!-- Book generated using mdBook -->
+        <meta charset="UTF-8">
+        <title>Conditions &amp; Mutexes - Miou, a simple scheduler for OCaml 5</title>
+
+
+        <!-- Custom HTML head -->
+        
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <meta name="theme-color" content="#ffffff">
+
+        <link rel="icon" href="favicon.svg">
+        <link rel="shortcut icon" href="favicon.png">
+        <link rel="stylesheet" href="css/variables.css">
+        <link rel="stylesheet" href="css/general.css">
+        <link rel="stylesheet" href="css/chrome.css">
+        <link rel="stylesheet" href="css/print.css" media="print">
+
+        <!-- Fonts -->
+        <link rel="stylesheet" href="FontAwesome/css/font-awesome.css">
+        <link rel="stylesheet" href="fonts/fonts.css">
+
+        <!-- Highlight.js Stylesheets -->
+        <link rel="stylesheet" href="highlight.css">
+        <link rel="stylesheet" href="tomorrow-night.css">
+        <link rel="stylesheet" href="ayu-highlight.css">
+
+        <!-- Custom theme stylesheets -->
+
+    </head>
+    <body class="sidebar-visible no-js">
+    <div id="body-container">
+        <!-- Provide site root to javascript -->
+        <script>
+            var path_to_root = "";
+            var default_theme = window.matchMedia("(prefers-color-scheme: dark)").matches ? "navy" : "light";
+        </script>
+
+        <!-- Work around some values being stored in localStorage wrapped in quotes -->
+        <script>
+            try {
+                var theme = localStorage.getItem('mdbook-theme');
+                var sidebar = localStorage.getItem('mdbook-sidebar');
+
+                if (theme.startsWith('"') && theme.endsWith('"')) {
+                    localStorage.setItem('mdbook-theme', theme.slice(1, theme.length - 1));
+                }
+
+                if (sidebar.startsWith('"') && sidebar.endsWith('"')) {
+                    localStorage.setItem('mdbook-sidebar', sidebar.slice(1, sidebar.length - 1));
+                }
+            } catch (e) { }
+        </script>
+
+        <!-- Set the theme before any content is loaded, prevents flash -->
+        <script>
+            var theme;
+            try { theme = localStorage.getItem('mdbook-theme'); } catch(e) { }
+            if (theme === null || theme === undefined) { theme = default_theme; }
+            var html = document.querySelector('html');
+            html.classList.remove('light')
+            html.classList.add(theme);
+            var body = document.querySelector('body');
+            body.classList.remove('no-js')
+            body.classList.add('js');
+        </script>
+
+        <input type="checkbox" id="sidebar-toggle-anchor" class="hidden">
+
+        <!-- Hide / unhide sidebar before it is displayed -->
+        <script>
+            var body = document.querySelector('body');
+            var sidebar = null;
+            var sidebar_toggle = document.getElementById("sidebar-toggle-anchor");
+            if (document.body.clientWidth >= 1080) {
+                try { sidebar = localStorage.getItem('mdbook-sidebar'); } catch(e) { }
+                sidebar = sidebar || 'visible';
+            } else {
+                sidebar = 'hidden';
+            }
+            sidebar_toggle.checked = sidebar === 'visible';
+            body.classList.remove('sidebar-visible');
+            body.classList.add("sidebar-" + sidebar);
+        </script>
+
+        <nav id="sidebar" class="sidebar" aria-label="Table of contents">
+            <div class="sidebar-scrollbox">
+                <ol class="chapter"><li class="chapter-item expanded "><a href="introduction.html"><strong aria-hidden="true">1.</strong> Introduction</a></li><li class="chapter-item expanded "><a href="synchronous_server.html"><strong aria-hidden="true">2.</strong> A synchronous server</a></li><li class="chapter-item expanded "><a href="scheduler.html"><strong aria-hidden="true">3.</strong> A simple scheduler</a></li><li class="chapter-item expanded "><a href="interacting_system.html"><strong aria-hidden="true">4.</strong> Interacting with the system</a></li><li class="chapter-item expanded "><a href="retrospective.html"><strong aria-hidden="true">5.</strong> Retrospective</a></li><li class="chapter-item expanded "><a href="echo.html"><strong aria-hidden="true">6.</strong> An echo server with Miou</a></li><li class="chapter-item expanded "><a href="sleepers.html"><strong aria-hidden="true">7.</strong> Interacting with the system with Miou</a></li><li class="chapter-item expanded "><a href="conditions_and_mutexes.html" class="active"><strong aria-hidden="true">8.</strong> Conditions & Mutexes</a></li><li class="chapter-item expanded "><a href="manifesto.html"><strong aria-hidden="true">9.</strong> Manifesto</a></li></ol>
+            </div>
+            <div id="sidebar-resize-handle" class="sidebar-resize-handle">
+                <div class="sidebar-resize-indicator"></div>
+            </div>
+        </nav>
+
+        <!-- Track and set sidebar scroll position -->
+        <script>
+            var sidebarScrollbox = document.querySelector('#sidebar .sidebar-scrollbox');
+            sidebarScrollbox.addEventListener('click', function(e) {
+                if (e.target.tagName === 'A') {
+                    sessionStorage.setItem('sidebar-scroll', sidebarScrollbox.scrollTop);
+                }
+            }, { passive: true });
+            var sidebarScrollTop = sessionStorage.getItem('sidebar-scroll');
+            sessionStorage.removeItem('sidebar-scroll');
+            if (sidebarScrollTop) {
+                // preserve sidebar scroll position when navigating via links within sidebar
+                sidebarScrollbox.scrollTop = sidebarScrollTop;
+            } else {
+                // scroll sidebar to current active section when navigating via "next/previous chapter" buttons
+                var activeSection = document.querySelector('#sidebar .active');
+                if (activeSection) {
+                    activeSection.scrollIntoView({ block: 'center' });
+                }
+            }
+        </script>
+
+        <div id="page-wrapper" class="page-wrapper">
+
+            <div class="page">
+                                <div id="menu-bar-hover-placeholder"></div>
+                <div id="menu-bar" class="menu-bar sticky">
+                    <div class="left-buttons">
+                        <label id="sidebar-toggle" class="icon-button" for="sidebar-toggle-anchor" title="Toggle Table of Contents" aria-label="Toggle Table of Contents" aria-controls="sidebar">
+                            <i class="fa fa-bars"></i>
+                        </label>
+                        <button id="theme-toggle" class="icon-button" type="button" title="Change theme" aria-label="Change theme" aria-haspopup="true" aria-expanded="false" aria-controls="theme-list">
+                            <i class="fa fa-paint-brush"></i>
+                        </button>
+                        <ul id="theme-list" class="theme-popup" aria-label="Themes" role="menu">
+                            <li role="none"><button role="menuitem" class="theme" id="light">Light</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="rust">Rust</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="coal">Coal</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="navy">Navy</button></li>
+                            <li role="none"><button role="menuitem" class="theme" id="ayu">Ayu</button></li>
+                        </ul>
+                        <button id="search-toggle" class="icon-button" type="button" title="Search. (Shortkey: s)" aria-label="Toggle Searchbar" aria-expanded="false" aria-keyshortcuts="S" aria-controls="searchbar">
+                            <i class="fa fa-search"></i>
+                        </button>
+                    </div>
+
+                    <h1 class="menu-title">Miou, a simple scheduler for OCaml 5</h1>
+
+                    <div class="right-buttons">
+                        <a href="print.html" title="Print this book" aria-label="Print this book">
+                            <i id="print-button" class="fa fa-print"></i>
+                        </a>
+
+                    </div>
+                </div>
+
+                <div id="search-wrapper" class="hidden">
+                    <form id="searchbar-outer" class="searchbar-outer">
+                        <input type="search" id="searchbar" name="searchbar" placeholder="Search this book ..." aria-controls="searchresults-outer" aria-describedby="searchresults-header">
+                    </form>
+                    <div id="searchresults-outer" class="searchresults-outer hidden">
+                        <div id="searchresults-header" class="searchresults-header"></div>
+                        <ul id="searchresults">
+                        </ul>
+                    </div>
+                </div>
+
+                <!-- Apply ARIA attributes after the sidebar and the sidebar toggle button are added to the DOM -->
+                <script>
+                    document.getElementById('sidebar-toggle').setAttribute('aria-expanded', sidebar === 'visible');
+                    document.getElementById('sidebar').setAttribute('aria-hidden', sidebar !== 'visible');
+                    Array.from(document.querySelectorAll('#sidebar a')).forEach(function(link) {
+                        link.setAttribute('tabIndex', sidebar === 'visible' ? 0 : -1);
+                    });
+                </script>
+
+                <div id="content" class="content">
+                    <main>
+                        <h1 id="conditions--mutexes"><a class="header" href="#conditions--mutexes">Conditions &amp; Mutexes</a></h1>
+<p>When it came to implementing our small scheduler and interacting with the
+system, the main challenge was to address the issue of suspending a function so
+that it could run in the background. However, it's not just syscalls that can
+suspend/block the execution of a function. There are also Mutexes and
+Conditions.</p>
+<p>The real challenge of a scheduler is to be able to suspend functions without
+involving the system: in other words, to manage all suspensions. For novices,
+Mutexes and Conditions allow you to block and unblock the execution of a
+function (possibly based on a predicate).</p>
+<p>The usefulness of such mechanisms lies in synchronizing tasks with each other.
+Whether they are in concurrency and/or in parallel, it is difficult, if not
+impossible, to know which task will execute before the others. However, we
+sometimes (and often) want to share information between these tasks. Miou only
+allows one type of information transfer between tasks: from children to their
+direct parents.</p>
+<p>In all other cases (for example, between two tasks with no direct parent-child
+relationship and executing in parallel), we need to consider how to transfer
+this information correctly (meaning that this transfer would work regardless of
+the execution order of our tasks from both Miou's perspective — for
+<code>Miou.call_cc</code> — and the system's perspective — for <code>Miou.call</code>). It is in these
+cases that Mutexes and Conditions can be useful.</p>
+<h2 id="mutexes"><a class="header" href="#mutexes">Mutexes</a></h2>
+<p>Mutexes allow obtaining exclusive access to manipulate information compared to
+other tasks. This means that we can manipulate a global resource, available to
+all tasks, securely using mutexes. To illustrate this example, let's revisit our
+<code>echo</code> server where we want to display incoming connections as logs:</p>
+<pre><code class="language-ocaml">let pp_sockaddr ppf = function
+  | Unix.ADDR_UNIX v -&gt; Format.pp_print_string ppf v
+  | Unix.ADDR_INET (inet_addr, port) -&gt;
+    Format.fprintf ppf "%s:%d" (Unix.string_of_inet_addr inet_addr) port
+
+let server () =
+  let socket = Miou_unix.Ownership.tcpv4 () in
+  let sockaddr = Unix.ADDR_INET (Unix.inet_addr_loopback, 3000) in
+  Miou_unix.Ownership.bind_and_listen socket sockaddr;
+  let orphans = Miou.orphans () in
+  while true do
+    clean_up orphans;
+    let client, sockaddr = Miou_unix.Ownership.accept socket in
+    Format.printf "new client: %a\n%!" pp_sockaddr sockaddr;
+    ignore (Miou.call_cc
+      ~give:[ Miou_unix.Ownership.resource clientr 
+      ~orphans (fun () -&gt; echo client))
+  done;
+  Miou_unix.Ownership.close socket
+</code></pre>
+<p>It <strong>may</strong> happen (and this is the difficulty of parallel programming) that an
+exception occurs seemingly out of nowhere if you run this code:</p>
+<pre><code class="language-ocaml">Fatal error: exception Stdlib.Queue.Empty
+</code></pre>
+<p>The real issue is that the <code>Format</code> module uses an internal queue to properly
+indent your output (especially according to the <a href="https://v2.ocaml.org/api/Format.html#boxes">boxes</a>). In our case, this
+queue ends up being manipulated by all our domains, and, as mentioned in the
+<a href="https://v2.ocaml.org/api/Queue.html">Stdlib.Queue</a> documentation, the module is <strong>not</strong> thread-safe: the
+documentation explicitly mentions the use of a mutex<sup class="footnote-reference"><a href="#queue">1</a></sup>.</p>
+<p>So, we need to protect our output between domains. To do this, a simple mutex is
+necessary:</p>
+<pre><code class="language-ocaml">let mutex_out = Miou.Mutex.create ()
+
+let printf fmt =
+  let finally () = Miou.Mutex.unlock mutex_out in
+  Miou.Mutex.lock mutex_out;
+  Fun.protect ~finally @@ fun () -&gt;
+  Format.printf fmt
+</code></pre>
+<p>This way, we ensure that only one task executes our <code>Format.printf</code> and that the
+others must wait for the first one to finish. We say it has exclusive access to
+the resource.</p>
+<h2 id="conditions"><a class="header" href="#conditions">Conditions</a></h2>
+<p>A major issue with our <code>echo</code> server is its termination. Currently, we are
+unable to terminate our server properly due to the infinite loop. However, we
+could handle a system signal that instructs all our domains to terminate
+gracefully. Since our main loop only accepts connections, we could implement a
+function <code>accept_or_die</code> that, upon receiving a signal such as <code>SIGINT</code>,
+initiates the process to terminate our domains.</p>
+<p>Once again, a global resource comes into play — the signal sent by the system.
+We need to return a <code> `Die</code> value instead of waiting for a new connection. The
+purpose of a condition is to wait until a predicate (obtained using a global
+resource) becomes true. In the case of our <code>echo</code> server, if we receive a
+<code>SIGINT</code> signal, we return <code> `Die</code>; otherwise, we continue waiting for a new
+connection.</p>
+<pre><code class="language-ocaml">let condition = Miou.Condition.create ()
+let mutex_sigint = Miou.Mutex.create ()
+
+let accept_or_die fd =
+  let accept () = `Accept (Miou_unix.Ownership.accept fd) in
+  let or_die () =
+    Miou.Mutex.protect mutex_sigint @@ fun () -&gt;
+    Miou.Condition.wait condition mutex_sigint;
+    `Die in
+  Miou.await_first [ Miou.call_cc accept; Miou.call_cc or_die ]
+  |&gt; function Ok value -&gt; value | Error exn -&gt; raise exn
+
+let server () =
+  let socket = Miou_unix.Ownership.tcpv4 () in
+  let sockaddr = Unix.ADDR_INET (Unix.inet_addr_loopback, 3000) in
+  Miou_unix.Ownership.bind_and_listen socket sockaddr;
+  let rec go orphans =
+    clean_up orphans;
+    match accept_or_die socket with
+    | `Die -&gt; ()
+    | `Accept (fd', sockaddr) -&gt;
+      printf "new client: %a\n%!" pp_sockaddr sockaddr;
+      ignore (Miou.call_cc
+        ~give:[ Miou_unix.Ownership.resource client ]
+        ~orphans (fun () -&gt; echo client));
+      go orphans in
+  go (Miou.orphans ())
+</code></pre>
+<p>We then need to "catch" the <code>SIGINT</code> signal. Signals are special in that they
+can execute a task outside of Miou. However, if these tasks have side effects,
+they won't be managed. Thus, Miou offers a way to attach functions to signals
+using <code>Miou.set_signal</code>:</p>
+<pre><code class="language-ocaml">let stop _signal =
+  Miou.Mutex.protect mutex_sigint @@ fun () -&gt;
+  Miou.Condition.broadcast condition
+
+let () = Miou_unix.run @@ fun () -&gt;
+  Miou.set_signal Sys.sigint (Sys.Signal_handle stop);
+  let domains = Stdlib.Domain.recommended_domain_count () - 1 in
+  let domains = List.init domains (Fun.const ()) in
+  let prm = Miou.call_cc server in
+  Miou.await prm :: Miou.parallel server domains
+  |&gt; List.iter @@ function
+  | Ok () -&gt; ()
+  | Error exn -&gt; raise exn
+</code></pre>
+<p>This simply signals all places where our condition is waiting. Consequently, all
+our domains are signaled to return <code> `Die</code> instead of continuing to wait for a
+new connection.</p>
+<h3 id="ownership-sub-tasks-and-finalisers"><a class="header" href="#ownership-sub-tasks-and-finalisers">Ownership, sub-tasks and finalisers</a></h3>
+<p>If we try this code, it may not work, and Miou might complain with the
+<code>Not_owner</code> exception. This is because our <code>accept</code> task does not own the
+file-descritptor; we need to pass it the resource via the <code>give</code> parameter.</p>
+<p>It's worth noting that this ownership is exclusive. Once we've performed
+<code>Miou_unix.Ownership.accept</code>, we need to:</p>
+<ol>
+<li>transfer the file-descritptor back to the parent (so it can transfer it to
+the next <code>accept</code>).</li>
+<li>transfer the new file-descriptor to the parent that was created in our
+<code>accept</code> task so that it can transfer it to our <code>echo</code> task.</li>
+</ol>
+<p>The importance of finalizers in this situation should also be noted. Indeed,
+<code>await_first</code> will wait for one of the two tasks. If our condition unblocks and
+returns <code> `Die</code>, <code>await_first</code> will then cancel our <code>accept</code> task: we then
+finish it in an abnormal situation where our finalizers will be called on our
+file-descriptors. In other words, except for the active clients, all our
+resources have been properly released by Miou, and we no longer need to take
+care of them during the termination of our program.</p>
+<p>Finally, even after these minor fixes, Miou may still return
+<code>Still_has_children</code>. Indeed, receiving a signal does not mean that we have
+finished all our children (we just cleaned up a few). However, we do know that:</p>
+<ul>
+<li>we will not have any new children.</li>
+<li>our <code>echo</code> task should terminate smoothly despite our signal.</li>
+</ul>
+<p>So we need to <code>await</code> all our remaining children:</p>
+<pre><code class="language-ocaml">let rec terminate orphans =
+  match Miou.care orphans with
+  | None -&gt; ()
+  | Some None -&gt; Miou.yield (); terminate orphans
+  | Some (Some prm) -&gt;
+    match Miou.await prm with
+    | Ok () -&gt; ()
+    | Error exn -&gt; raise exn
+</code></pre>
+<h2 id="the-final-version-of-echo"><a class="header" href="#the-final-version-of-echo">The final version of <code>echo</code></a></h2>
+<p>If we take all our previous comments into account, here is the final version of
+our <code>echo</code> server:</p>
+<pre><code class="language-ocaml">let condition = Miou.Condition.create ()
+let mutex_sigint = Miou.Mutex.create ()
+let mutex_out = Miou.Mutex.create ()
+
+let printf fmt =
+  let finally () = Miou.Mutex.unlock mutex_out in
+  Miou.Mutex.lock mutex_out;
+  Fun.protect ~finally @@ fun () -&gt;
+  Format.printf fmt
+
+let rec echo client =
+  let buf = Bytes.create 0x100 in
+  let len = Miou_unix.Ownership.read client buf 0 (Bytes.length buf) in
+  if len = 0 then Miou_unix.Ownership.close client
+  else
+    let str = Bytes.sub_string buf 0 len in
+    let _ = Miou_unix.Ownership.write client str 0 len in echo client
+
+let accept_or_die fd =
+  let accept () =
+    let fd', sockaddr = Miou_unix.Ownership.accept fd in
+    Miou.Ownership.transfer (Miou_unix.Ownership.resource fd');
+    Miou.Ownership.transfer (Miou_unix.Ownership.resource fd);
+    `Accept (fd', sockaddr) in
+  let or_die () =
+    Miou.Mutex.protect mutex_sigint @@ fun () -&gt;
+    Miou.Condition.wait condition mutex_sigint;
+    `Die in
+  let give = [ Miou_unix.Ownership.resource fd ] in
+  Miou.await_first [ Miou.call_cc ~give accept; Miou.call_cc or_die ]
+  |&gt; function Ok value -&gt; value | Error exn -&gt; raise exn
+
+let pp_sockaddr ppf = function
+  | Unix.ADDR_UNIX v -&gt; Format.pp_print_string ppf v
+  | Unix.ADDR_INET (inet_addr, port) -&gt;
+    Format.fprintf ppf "%s:%d" (Unix.string_of_inet_addr inet_addr) port
+
+let clean_up orphans = match Miou.care orphans with
+  | None | Some None -&gt; ()
+  | Some (Some prm) -&gt; match Miou.await prm with
+    | Ok () -&gt; ()
+    | Error exn -&gt; raise exn
+
+let rec terminate orphans =
+  match Miou.care orphans with
+  | None -&gt; ()
+  | Some None -&gt; Miou.yield (); terminate orphans
+  | Some (Some prm) -&gt;
+    match Miou.await prm with
+    | Ok () -&gt; ()
+    | Error exn -&gt; raise exn
+
+let server () =
+  let socket = Miou_unix.Ownership.tcpv4 () in
+  let sockaddr = Unix.ADDR_INET (Unix.inet_addr_loopback, 3000) in
+  Miou_unix.Ownership.bind_and_listen socket sockaddr;
+  let rec go orphans =
+    clean_up orphans;
+    match accept_or_die socket with
+    | `Die -&gt; terminate orphans
+    | `Accept (client, sockaddr) -&gt;
+      printf "new client: %a\n%!" pp_sockaddr sockaddr;
+      ignore (Miou.call_cc
+        ~give:[ Miou_unix.Ownership.resource client ]
+        ~orphans (fun () -&gt; echo client));
+      go orphans in
+  go (Miou.orphans ())
+
+let stop _signal =
+  Miou.Mutex.protect mutex_sigint @@ fun () -&gt;
+  Miou.Condition.broadcast condition
+
+let () = Miou_unix.run @@ fun () -&gt;
+  Miou.set_signal Sys.sigint (Sys.Signal_handle stop);
+  let domains = Stdlib.Domain.recommended_domain_count () - 1 in
+  let domains = List.init domains (Fun.const ()) in
+  let prm = Miou.call_cc server in
+  Miou.await prm :: Miou.parallel server domains
+  |&gt; List.iter @@ function
+  | Ok () -&gt; ()
+  | Error exn -&gt; raise exn
+</code></pre>
+<p>You can compile it directly with <code>ocamlfind</code>, run it and, above all, test its
+load with <code>parallel</code>:</p>
+<pre><code class="language-shell">$ ocamlfind opt -linkpkg -package miou,miou.unix main.ml
+$ ./a.out &amp;
+$ cat &gt;echo.sh&lt;&lt;EOF
+#!/bin/bash
+
+send() {
+  echo "Hello World" | netcat -q0 localhost 3000
+}
+
+export -f send
+
+while true; do
+  parallel send ::: $(seq 100)
+done
+EOF
+$ chmod +x echo.sh
+$ ./echo.sh
+</code></pre>
+<p>Our final command launches a myriad of clients, with 100 of them executing
+simultaneously. We can observe that all our domains are at work, and there are
+no conflicts on the console thanks to our mutex. Finally, to appreciate all our
+work, a <code>SIGINT</code> (with Ctrl+C) will terminate our server correctly and release
+all our file descriptors!</p>
+<p>This little project broadly demonstrates what is possible with Miou and the
+insights that emerged during its development, particularly regarding system
+resources and I/O. We hope this tutorial has sparked your interest in using Miou
+in your applications. For the more adventurous, you can read our manifesto,
+which explains, in a more social than technical manner, the benefits of Miou.</p>
+<div class="footnote-definition" id="queue"><sup class="footnote-definition-label">1</sup>
+<p>It is worth noting that Miou offers a thread-safe queue: <code>Miou.Queue</code>.
+We use it internally for various purposes, particularly in inter-domain
+synchronization. However, it is essential to recognize that <code>Miou.Queue</code> may
+reveal other issues such as inter-domain contention.</p>
+</div>
+
+                    </main>
+
+                    <nav class="nav-wrapper" aria-label="Page navigation">
+                        <!-- Mobile navigation buttons -->
+                            <a rel="prev" href="sleepers.html" class="mobile-nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                                <i class="fa fa-angle-left"></i>
+                            </a>
+
+                            <a rel="next prefetch" href="manifesto.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                                <i class="fa fa-angle-right"></i>
+                            </a>
+
+                        <div style="clear: both"></div>
+                    </nav>
+                </div>
+            </div>
+
+            <nav class="nav-wide-wrapper" aria-label="Page navigation">
+                    <a rel="prev" href="sleepers.html" class="nav-chapters previous" title="Previous chapter" aria-label="Previous chapter" aria-keyshortcuts="Left">
+                        <i class="fa fa-angle-left"></i>
+                    </a>
+
+                    <a rel="next prefetch" href="manifesto.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                        <i class="fa fa-angle-right"></i>
+                    </a>
+            </nav>
+
+        </div>
+
+
+
+
+        <script>
+            window.playground_copyable = true;
+        </script>
+
+
+        <script src="elasticlunr.min.js"></script>
+        <script src="mark.min.js"></script>
+        <script src="searcher.js"></script>
+
+        <script src="clipboard.min.js"></script>
+        <script src="highlight.js"></script>
+        <script src="book.js"></script>
+
+        <!-- Custom JS scripts -->
+
+
+    </div>
+    </body>
+</html>
