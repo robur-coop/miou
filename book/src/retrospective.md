@@ -163,12 +163,13 @@ let () = Miou.run @@ fun () ->
   Miou.cancel p1;
   print_endline "p1 cancelled";
   Miou.await_exn p0
-
-(* This program prints:
-   Cancel p1
-   Do p0
-   p1 cancelled
-*)
+```
+```shell
+$ ocamlfind opt -linkpkg -package miou main.ml
+$ ./a.out
+Cancel p1
+Do p0
+p1 is cancelled
 ```
 
 The advantage of this asynchronicity is to always be able to handle system

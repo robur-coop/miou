@@ -7,3 +7,4 @@
 - [Retrospective](./retrospective.md)
 - [An echo server with Miou](./echo.md)
 - [Interacting with the system with Miou](./sleepers.md)
+- [Conditions & Mutexes](./conditions_and_mutexes.md)

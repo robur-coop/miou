@@ -1036,6 +1036,35 @@ val set_signal : int -> Sys.signal_behavior -> unit
     receive a signal from the system. The [dom0] takes the responsability to
     execute the given [fn]. *)
 
+val protect :
+     on_cancellation:(unit -> unit)
+  -> finally:(cancelled:bool -> unit)
+  -> (unit -> 'a)
+  -> 'a
+(** [protect ~on_cancellation ~finally fn] invokes [fn ()] and then
+    [finally ~cancelled] before [fn ()] returns its value or an exception as
+    {!val:Fun.protect} or an cancellation. In the case of an abnormal
+    termination, the exception is re-raised after [finally ~cancelled]. If
+    [finally] raises an exception, then the exception {!Fun.Finally_raised} is
+    raised instead. In the case of a cancellation, it invokes [finally ()] and
+    then [on_cancellation ()] before the deletion of [fn ()]. If
+    [on_cancellation ()] raises an exception, then the exception
+    {!On_cancellation_raised} is raised instead.
+
+    [on_cancellation] must {b not} use any effects. Using effects suspends
+    execution and, in the case of cancellation, anything after the effect will
+    never be executed.
+
+    [finally] can use effects. [protect] informs the user if [finally] is
+    invoked due to cancellation or not.
+
+    [protect] can be used to enforce local invariants whether [fn ()] returns
+    normally or raises an exception or is cancelled. However, it does not
+    protect against unexpected exceptions raised inside [finally ~cancelled] and
+    [on_cancellation ()] such as {!Stdlib.Out_of_memory},
+    {!Stdlib.Stack_overflow}, or asynchronous exceptions raised by signal
+    handlers (e.g. {!Sys.Break}). *)
+
 module Mutex : sig
   type t
   (** The type of mutexes. *)

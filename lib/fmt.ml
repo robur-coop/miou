@@ -13,6 +13,8 @@
    OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
 *)
 
+[@@@coverage off]
+
 let pf = Format.fprintf
 let str = Format.asprintf
 let kstr = Format.kasprintf

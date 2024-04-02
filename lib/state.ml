@@ -6,7 +6,7 @@ type 'a t =
   | Suspended : ('a, 'b) continuation * 'a Effect.t -> 'b t
   | Unhandled : ('a, 'b) continuation * 'a -> 'b t
 
-let pp ppf = function
+let[@coverage off] pp ppf = function
   | Finished (Ok _) -> Fmt.string ppf "<resolved>"
   | Finished (Error _) -> Fmt.string ppf "<errored>"
   | Suspended _ -> Fmt.string ppf "<suspended>"
