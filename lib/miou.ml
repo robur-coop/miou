@@ -40,6 +40,16 @@ exception No_domain_available
 exception Not_owner
 exception Resource_leaked
 
+let () =
+  Printexc.register_printer @@ function
+  | Cancelled -> Some "Miou.Cancelled"
+  | Still_has_children -> Some "Miou.Still_has_children"
+  | Not_a_child -> Some "Miou.Not_a_child"
+  | No_domain_available -> Some "Miou.No_domain_available"
+  | Not_owner -> Some "Miou.Not_owner"
+  | Resource_leaked -> Some "Miou.Resource_leaked"
+  | _ -> None
+
 type 'a r = { uid: Resource_uid.t; value: 'a; finaliser: 'a -> unit }
 type resource = Resource : 'a r -> resource [@@unboxed]
 
@@ -75,30 +85,21 @@ module Promise = struct
     ; cleaned= Atomic.make false
     }
 
-  let pp ppf ({ uid; runner; _ } as prm) =
+  let[@coverage off] pp ppf ({ uid; runner; _ } as prm) =
     Fmt.pf ppf "[%a:%a](%d)" Domain_uid.pp runner Promise_uid.pp uid
       Obj.(reachable_words (repr prm))
 
-  let pp_pack ppf (Pack prm) = pp ppf prm
+  let[@coverage off] pp_pack ppf (Pack prm) = pp ppf prm
   let has_forbidden { forbid; _ } = forbid
   let children_terminated prm = Sequence.is_empty prm.children
   let is_running { state; _ } = Computation.is_running state
-
-  open struct
-    let explicitely ~forbid prm fn =
-      if prm.forbid = forbid then fn ()
-      else
-        match fn (prm.forbid <- true) with
-        | value ->
-            prm.forbid <- not forbid;
-            value
-        | exception exn ->
-            prm.forbid <- not forbid;
-            raise exn
-  end
-
-  let forbid t fn = explicitely ~forbid:true t fn
   let uid { uid; _ } = uid
+  let set t ~forbid = t.forbid <- forbid
+
+  let exchange t ~forbid =
+    let seen = t.forbid in
+    t.forbid <- forbid;
+    seen
 
   type nonrec 'a t = 'a t
 end
@@ -140,6 +141,7 @@ type domain_elt =
   | Domain_cancel : _ t * Printexc.raw_backtrace -> domain_elt
   | Domain_clean : _ t * _ t -> domain_elt
   | Domain_task : 'a t * 'a State.t -> domain_elt
+  | Domain_signal : unit t * int * unit State.t -> domain_elt
   | Domain_tick : impossible -> domain_elt
 
 module Domain_elt = struct
@@ -163,6 +165,7 @@ let promise_of_domain_elt = function
   | Domain_clean (prm, _) -> Pack prm
   | Domain_task (prm, _) -> Pack prm
   | Domain_transfer (prm, _, _) -> Pack prm
+  | Domain_signal (prm, _, _) -> Pack prm
 
 type domain = {
     uid: Domain_uid.t
@@ -242,7 +245,7 @@ type _ Effect.t += Cancel : Printexc.raw_backtrace * 'a t -> unit Effect.t
 type _ Effect.t += Yield : unit Effect.t
 type _ Effect.t += Transfer : resource -> Trigger.t Effect.t
 
-let pp_effect : type a. a Effect.t Fmt.t =
+let[@coverage off] pp_effect : type a. a Effect.t Fmt.t =
  fun ppf -> function
   | Spawn _ -> Fmt.string ppf "Spawn"
   | Self -> Fmt.string ppf "Self"
@@ -257,7 +260,7 @@ let pp_effect : type a. a Effect.t Fmt.t =
   | Trigger.Await _ -> Fmt.string ppf "Await"
   | _ -> Fmt.string ppf "#effect"
 
-let _pp_domain_elt ppf = function
+let[@coverage off] _pp_domain_elt ppf = function
   | Domain_create (prm, _fn) ->
       Fmt.pf ppf "@[<1>(Domain_create@ %a)@]" Promise.pp prm
   | Domain_cancel (prm, _) ->
@@ -275,6 +278,8 @@ let _pp_domain_elt ppf = function
   | Domain_transfer (prm, Resource { uid; _ }, _) ->
       Fmt.pf ppf "@[<1>(Domain_transfer@ %a:%a)@]" Promise.pp prm
         Resource_uid.pp uid
+  | Domain_signal (prm, signal, _) ->
+      Fmt.pf ppf "@[<1>(Domain_signal@ %a:%d)@]" Promise.pp prm signal
   | Domain_tick _ -> .
 
 module Domain = struct
@@ -303,6 +308,11 @@ module Domain = struct
         (pool.dom0 :: pool.domains)
     in
     domain.events.interrupt ()
+
+  let interrupt_parent pool prm =
+    match prm.parent with
+    | None -> ()
+    | Some (Pack parent) -> interrupt pool ~domain:parent.runner
 
   (* These functions can be used to add items to be done to the various domains.
      There are 3 cases:
@@ -337,7 +347,9 @@ module Domain = struct
     let (Pack prm) = promise_of_pool_elt elt in
     interrupt pool ~domain:prm.runner
 
-  let add_into_dom0 pool elt = Queue.enqueue pool.to_dom0 elt
+  let add_into_dom0 pool elt =
+    Queue.enqueue pool.to_dom0 elt;
+    pool.dom0.events.interrupt ()
 
   let cancel pool domain ~backtrace:bt prm =
     (* The promise given does not necessarily belong to the [domain] currently
@@ -377,6 +389,7 @@ module Domain = struct
         let f (Pack prm) = cancel pool domain ~backtrace:bt prm in
         Sequence.iter ~f prm.children;
         ignore (Computation.try_cancel prm.state (exn, bt));
+        interrupt_parent pool prm;
         miou_assert (Option.is_some (Computation.cancelled prm.state))
     | State.Finished (Ok value) ->
         if Sequence.is_empty prm.resources = false then begin
@@ -399,6 +412,7 @@ module Domain = struct
         Logs.debug (fun m ->
             m "[%a] %a finished correctly" Domain_uid.pp domain.uid Promise.pp
               prm);
+        interrupt_parent pool prm;
         ignore (Computation.try_return prm.state value)
 
   let propagate_cancellation trigger (pool, possibly_cancelled) child =
@@ -558,7 +572,7 @@ module Domain = struct
     let elts = ref [] in
     let f = function
       | _, Domain_tick _ -> .
-      | _, Domain_cancel _ | _, Domain_clean _ -> ()
+      | _, Domain_cancel _ | _, Domain_clean _ | _, Domain_signal _ -> ()
       | _, elt ->
           let (Pack prm) = promise_of_domain_elt elt in
           if Promise_uid.equal prm.uid uid then elts := elt :: !elts
@@ -582,6 +596,22 @@ module Domain = struct
         | _, 0 -> miou_assert false
         | _ -> add_into_pool pool (Pool_clean (parent, prm)))
 
+  let handle_signal ~signal domain prm state =
+    Logs.debug (fun m ->
+        m "[%a] handles signal (%d) %a and its continuation %a" Domain_uid.pp
+          domain.uid signal Promise.pp prm State.pp state);
+    let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
+    miou_assert (Domain_uid.equal runner domain.uid);
+    miou_assert (Domain_uid.equal prm.runner domain.uid);
+    match state with
+    | (State.Suspended _ | State.Unhandled _) as state ->
+        add_into_domain domain (Domain_signal (prm, signal, state))
+    | State.Finished (Error (exn, _bt)) ->
+        Logs.err (fun m ->
+            m "[%a] a signal handler raised an exception: %s" Domain_uid.pp
+              domain.uid (Printexc.to_string exn))
+    | State.Finished (Ok ()) -> ()
+
   let once pool domain = function
     | Domain_tick _ -> .
     | Domain_create (prm, fn) -> (
@@ -599,6 +629,11 @@ module Domain = struct
     | Domain_task (prm, State.Suspended (k, Trigger.Await trigger)) ->
         Logs.debug (fun m ->
             m "[%a] %a await" Domain_uid.pp domain.uid Promise.pp prm);
+        await pool domain prm trigger k
+    | Domain_signal (prm, signal, State.Suspended (k, Trigger.Await trigger)) ->
+        Logs.debug (fun m ->
+            m "[%a] %a await (signaled by %d)" Domain_uid.pp domain.uid
+              Promise.pp prm signal);
         await pool domain prm trigger k
     | Domain_task (prm, state) -> (
         let perform = perform pool domain prm in
@@ -619,6 +654,17 @@ module Domain = struct
     | Domain_transfer (prm, res, trigger) ->
         Sequence.(add Left) prm.resources res;
         Trigger.signal trigger
+    | Domain_signal (prm, signal, state) -> (
+        miou_assert (Domain_uid.equal prm.runner (Domain_uid.of_int 0));
+        miou_assert (Domain_uid.equal domain.uid (Domain_uid.of_int 0));
+        let perform = perform pool domain prm in
+        match Computation.cancelled prm.state with
+        | None ->
+            let state = State.run ~quanta:domain.quanta ~perform state in
+            handle_signal ~signal domain prm state
+        | Some (exn, bt) ->
+            let state = State.fail ~backtrace:bt ~exn state in
+            handle_signal ~signal domain prm state)
     | Domain_cancel (prm, bt) as cancellation ->
         Logs.debug (fun m ->
             m "[%a] cancels computation %a" Domain_uid.pp domain.uid Promise.pp
@@ -643,6 +689,7 @@ module Domain = struct
           | Some (Domain_cancel _)
           | Some (Domain_clean _)
           | Some (Domain_transfer _)
+          | Some (Domain_signal _)
           | None ->
               ()
         in
@@ -674,6 +721,9 @@ module Domain = struct
     let block = Heapq.size domain.tasks = 0 in
     let cancelled = Queue.(to_list (transfer domain.cancelled_syscalls)) in
     let syscalls = domain.events.select ~block cancelled in
+    Logs.debug (fun m ->
+        m "[%a] handles %d signal(s)" Domain_uid.pp domain.uid
+          (List.length syscalls));
     List.iter (signal_system_events domain) syscalls
 
   let system_events_suspended domain = Atomic.get domain.syscalls > 0
@@ -902,6 +952,9 @@ module Ownership = struct
       Sequence.iter_node ~f self.resources;
       raise Not_owner
     with Found_resource node -> (
+      Logs.debug (fun m ->
+          m "[%a] transfers the resource [%a]" Domain_uid.pp self.runner
+            Resource_uid.pp uid);
       let (Pack parent) = Option.get self.parent in
       if Domain_uid.equal self.runner parent.runner then
         let () = Sequence.(add Left) parent.resources res in
@@ -1071,7 +1124,10 @@ let await_first prms =
           | Some (exn, bt) ->
               List.iter (fun prm -> Computation.detach prm.state t) attached;
               Error (exn, bt)
-          | None -> take_one_and_cancel_rest [] prms)
+          | None ->
+              Logs.debug (fun m ->
+                  m "[%a] one promise finished" Promise.pp self);
+              take_one_and_cancel_rest [] prms)
     in
     try_attach_all [] prms
   in
@@ -1157,8 +1213,7 @@ let suspend (Syscall (uid, trigger, prm)) =
   | Some (exn, bt) ->
       Queue.enqueue domain.cancelled_syscalls uid;
       Printexc.raise_with_backtrace exn bt
-  | exception _ ->
-      Queue.enqueue domain.cancelled_syscalls uid
+  | exception _ -> Queue.enqueue domain.cancelled_syscalls uid
 
 let signal (Syscall (_uid, trigger, prm)) =
   let runner' = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
@@ -1211,7 +1266,36 @@ let transfer_dom0_tasks pool =
     in
     List.iter (Domain.add_into_domain pool.dom0) (List.map f elts)
 
+type signal_retrieved =
+  | Signal_retrieved : int * (int -> unit) -> signal_retrieved
+
 let dummy_events = { select= (fun ~block:_ _ -> []); interrupt= Fun.const () }
+let signals = Queue.create ()
+
+let transfer_dom0_signals pool =
+  if not (Queue.is_empty signals) then begin
+    let elts = Queue.(to_list (transfer signals)) in
+    let f (Signal_retrieved (signal, fn)) =
+      let prm = Promise.create ~forbid:true pool.dom0.uid in
+      let state = State.make fn signal in
+      Domain_signal (prm, signal, state)
+    in
+    Logs.debug (fun m ->
+        m "[%a] transfers %d system signal(s)" Domain_uid.pp pool.dom0.uid
+          (List.length elts));
+    List.iter (Domain.add_into_domain pool.dom0) (List.map f elts)
+  end
+
+let set_signal signal = function
+  | (Sys.Signal_default | Sys.Signal_ignore) as behavior ->
+      Sys.set_signal signal behavior
+  | Sys.Signal_handle fn ->
+      let fn signal =
+        Logs.debug (fun m ->
+            m "[%d] got a signal %d" (Stdlib.Domain.self () :> int) signal);
+        Queue.enqueue signals (Signal_retrieved (signal, fn))
+      in
+      Sys.set_signal signal (Signal_handle fn)
 
 let run ?(quanta = quanta) ?(g = Random.State.make_self_init ())
     ?(domains = domains) ?(events = Fun.const dummy_events) fn =
@@ -1224,7 +1308,9 @@ let run ?(quanta = quanta) ?(g = Random.State.make_self_init ())
   let result =
     try
       while Computation.is_running prm0.state && !(pool.fail) = false do
-        transfer_dom0_tasks pool; Domain.run pool dom0
+        transfer_dom0_tasks pool;
+        transfer_dom0_signals pool;
+        Domain.run pool dom0
       done;
       if not !(pool.fail) then Option.get (Computation.peek prm0.state)
       else Error (Failure "A domain failed", Printexc.get_callstack max_int)
@@ -1245,51 +1331,114 @@ let[@tail_mod_cons] rec drop_first_or_not_found x' = function
   | [] -> raise_notrace Not_found
   | x :: xs -> if x == x' then xs else x :: drop_first_or_not_found x' xs
 
+(* NOTE(dinosaure): about Mutex and Condition, we must clean these resources,
+   especially when the cancellation operates. Miou offers a last shot when a
+   task is cancelled to clean everything. We provide something like
+   [Fun.protect] to trigger the cancellation and run a last function which
+   should clean everything. [finally] operates in any case and informs us if the
+   task was cancelled or not. [on_cancellation] operates only if the task is
+   cancelled. This is where we should clean everything.
+
+   [finally] and [on_cancellation] should not perform an effect when the
+   cancellation operates. An effect suspends the task and Miou will not give you
+   an opportunity to continue (because we want to delete the task). Also,
+   [finally] and [on_cancellation] should not raise an exception. As
+   [Fun.protect], [Finally_raised] is used instead of. *)
+exception On_cancellation_raised of exn
+
+let () =
+  Printexc.register_printer @@ function
+  | On_cancellation_raised exn ->
+      Some ("Miou.On_cancellation_raised: " ^ Printexc.to_string exn)
+  | _ -> None
+
+let protect ~on_cancellation ~finally fn =
+  let finally_no_exn ~cancelled =
+    try finally ~cancelled
+    with exn ->
+      let bt = Printexc.get_raw_backtrace () in
+      Printexc.raise_with_backtrace (Fun.Finally_raised exn) bt
+  in
+  let on_cancellation_no_exn () =
+    try on_cancellation ()
+    with exn ->
+      let bt = Printexc.get_raw_backtrace () in
+      Printexc.raise_with_backtrace (On_cancellation_raised exn) bt
+  in
+  match fn () with
+  | result ->
+      finally_no_exn ~cancelled:false;
+      result
+  | exception Cancelled ->
+      let bt = Printexc.get_raw_backtrace () in
+      finally_no_exn ~cancelled:true;
+      on_cancellation_no_exn ();
+      Printexc.raise_with_backtrace Cancelled bt
+  | exception exn ->
+      let bt = Printexc.get_raw_backtrace () in
+      finally_no_exn ~cancelled:false;
+      Printexc.raise_with_backtrace exn bt
+
 module Mutex = struct
-  type 'a value = { trigger: Trigger.t; prm: 'a t }
+  type 'a value = { trigger: Trigger.t; prm: 'a t option }
   type entry = Entry : 'a value -> entry [@@unboxed]
 
   type state =
-    | Unlocked : state
-    | Locked : { prm: _ t; head: entry list; tail: entry list } -> state
+    | Unlocked
+    | Locked : { prm: _ t option; head: entry list; tail: entry list } -> state
 
   let[@inline never] not_owner () = raise (Sys_error "Mutex: not owner")
   let[@inline never] unlocked () = raise (Sys_error "Mutex: unlocked")
   let[@inline never] owner () = raise (Sys_error "Mutex: owner")
   let create () = Atomic.make Unlocked
+  let locked_nothing = Locked { prm= None; head= []; tail= [] }
 
-  let rec unlock_as t (self : _ t) backoff =
+  let rec unlock_as t (self : _ t option) backoff =
     match Atomic.get t with
     | Unlocked -> unlocked ()
-    | Locked r as seen -> (
-        if Promise_uid.equal r.prm.uid self.uid = false then not_owner ()
-        else
+    | Locked r as seen ->
+        let is_owner =
+          match (self, r.prm) with
+          | None, _ | _, None -> true
+          | Some a, Some b -> Promise_uid.equal a.uid b.uid
+        in
+        if is_owner then begin
           match r.head with
           | Entry { trigger; prm } :: rest ->
               let after = Locked { r with prm; head= rest } in
               transfer_as t self seen after trigger backoff
-          | [] -> (
+          | [] -> begin
               match List.rev r.tail with
               | Entry { trigger; prm } :: rest ->
                   let after = Locked { prm; head= rest; tail= [] } in
                   transfer_as t self seen after trigger backoff
               | [] ->
                   if not (Atomic.compare_and_set t seen Unlocked) then
-                    unlock_as t self (Backoff.once backoff)))
+                    unlock_as t self (Backoff.once backoff)
+            end
+        end
+        else not_owner ()
 
   and transfer_as t self seen after trigger backoff =
     if Atomic.compare_and_set t seen after then Trigger.signal trigger
     else unlock_as t self (Backoff.once backoff)
 
-  let unlock t =
-    let (Pack self) = Effect.perform Self in
-    unlock_as t self Backoff.default
+  let[@inline] unlock t =
+    try
+      let (Pack self) = Effect.perform Self in
+      unlock_as t (Some self) Backoff.default
+    with Effect.Unhandled Self -> unlock_as t None Backoff.default
 
   let rec cleanup_as t (Entry value as entry) backoff =
     match Atomic.get t with
     | Locked r as seen ->
-        if Promise_uid.equal r.prm.uid value.prm.uid then
-          unlock_as t value.prm backoff
+        let is_equal =
+          match (r.prm, value.prm) with
+          | None, None -> true
+          | Some a, Some b -> Promise_uid.equal a.uid b.uid
+          | _ -> false
+        in
+        if is_equal then unlock_as t value.prm backoff
         else if r.head != [] then
           match drop_first_or_not_found entry r.head with
           | head ->
@@ -1309,99 +1458,123 @@ module Mutex = struct
     if not (Atomic.compare_and_set t seen after) then
       cleanup_as t entry (Backoff.once backoff)
 
-  let rec lock_as t prm backoff =
+  let rec lock_as t self backoff =
     match Atomic.get t with
     | Unlocked as seen ->
-        let after = Locked { prm; head= []; tail= [] } in
+        let after =
+          match self with
+          | None -> locked_nothing
+          | Some _ -> Locked { prm= self; head= []; tail= [] }
+        in
         if not (Atomic.compare_and_set t seen after) then
-          lock_as t prm (Backoff.once backoff)
+          lock_as t self (Backoff.once backoff)
     | Locked r as seen ->
-        if Promise_uid.equal r.prm.uid prm.uid then owner ()
-        else
-          let trigger = Trigger.create () in
-          let entry = Entry { trigger; prm } in
-          let after =
-            if r.head == [] then
-              Locked { r with head= List.rev_append [ entry ] r.tail; tail= [] }
-            else Locked { r with tail= entry :: r.tail }
-          in
-          if Atomic.compare_and_set t seen after then (
-            match Trigger.await trigger with
-            | None -> ()
-            | Some (exn, bt) ->
-                cleanup_as t entry Backoff.default;
-                Printexc.raise_with_backtrace exn bt)
-          else lock_as t prm (Backoff.once backoff)
+        let trigger = Trigger.create () in
+        let entry =
+          match (self, r.prm) with
+          | _, None -> Entry { trigger; prm= None }
+          | None, Some prm ->
+              let (Pack self) = Effect.perform Self in
+              if Promise_uid.equal self.uid prm.uid = false then
+                Entry { trigger; prm= Some self }
+              else owner ()
+          | Some self, Some prm ->
+              if Promise_uid.equal self.uid prm.uid = false then
+                Entry { trigger; prm= Some self }
+              else owner ()
+        in
+        let after =
+          if r.head == [] then
+            Locked { r with head= List.rev_append r.tail [ entry ]; tail= [] }
+          else Locked { r with tail= entry :: r.tail }
+        in
+        if Atomic.compare_and_set t seen after then begin
+          let on_cancellation () = cleanup_as t entry Backoff.default in
+          let finally ~cancelled:_ = () in
+          protect ~on_cancellation ~finally @@ fun () ->
+          ignore (Trigger.await trigger)
+        end
+        else lock_as t self (Backoff.once backoff)
 
-  let lock t =
-    let (Pack self) = Effect.perform Self in
-    lock_as t self Backoff.default
+  let[@inline] lock t =
+    try
+      let (Pack self) = Effect.perform Self in
+      lock_as t (Some self) Backoff.default
+    with Effect.Unhandled Self -> lock_as t None Backoff.default
 
   let try_lock t =
-    let (Pack prm) = Effect.perform Self in
-    Atomic.get t == Unlocked
-    || Atomic.compare_and_set t Unlocked (Locked { prm; head= []; tail= [] })
+    try
+      let (Pack prm) = Effect.perform Self in
+      Atomic.get t == Unlocked
+      || Atomic.compare_and_set t Unlocked
+           (Locked { prm= Some prm; head= []; tail= [] })
+    with Effect.Unhandled Self ->
+      Atomic.get t == Unlocked
+      || Atomic.compare_and_set t Unlocked locked_nothing
 
   let protect t fn =
-    let (Pack self) = Effect.perform Self in
-    lock_as t self Backoff.default;
-    match fn () with
-    | value ->
-        unlock_as t self Backoff.default;
-        value
-    | exception exn ->
-        let bt = Printexc.get_raw_backtrace () in
-        unlock_as t self Backoff.default;
-        Printexc.raise_with_backtrace exn bt
-
-  let succumb t fn =
-    let (Pack prm) = Effect.perform Self in
-    unlock_as t prm Backoff.default;
-    match fn () with
-    | value ->
-        Promise.forbid prm (fun () -> lock_as t prm Backoff.default);
-        value
-    | exception exn ->
-        let bt = Printexc.get_raw_backtrace () in
-        Promise.forbid prm (fun () -> lock_as t prm Backoff.default);
-        Printexc.raise_with_backtrace exn bt
+    try
+      let (Pack self) = Effect.perform Self in
+      lock_as t (Some self) Backoff.default;
+      match fn () with
+      | value ->
+          unlock_as t (Some self) Backoff.default;
+          value
+      | exception exn ->
+          let bt = Printexc.get_raw_backtrace () in
+          unlock_as t (Some self) Backoff.default;
+          Printexc.raise_with_backtrace exn bt
+    with Effect.Unhandled Self -> (
+      lock_as t None Backoff.default;
+      match fn () with
+      | value ->
+          unlock_as t None Backoff.default;
+          value
+      | exception exn ->
+          let bt = Printexc.get_raw_backtrace () in
+          unlock_as t None Backoff.default;
+          Printexc.raise_with_backtrace exn bt)
 
   type t = state Atomic.t
 end
 
 module Condition = struct
-  type state = { head: Trigger.t list; tail: Trigger.t list }
+  type queue = { head: Trigger.t list; tail: Trigger.t list }
+  type state = Empty | Queue of queue
 
-  let empty = { head= []; tail= [] }
-  let create () = Atomic.make empty
+  let create () = Atomic.make Empty
 
   let broadcast t =
-    if Atomic.get t != empty then begin
-      let state = Atomic.exchange t empty in
-      List.iter Trigger.signal state.head;
-      List.iter Trigger.signal (List.rev state.tail)
+    if Atomic.get t != Empty then begin
+      match Atomic.exchange t Empty with
+      | Empty -> ()
+      | Queue state ->
+          List.iter Trigger.signal state.head;
+          List.iter Trigger.signal (List.rev state.tail)
     end
 
-  let update_head seen head =
-    if head == [] && seen.tail == [] then empty else { seen with head }
+  let[@inline always] update_head seen head =
+    if head == [] && seen.tail == [] then Empty else Queue { seen with head }
 
   let[@inline always] of_head head =
-    if head = [] then empty else { head; tail= [] }
+    if head = [] then Empty else Queue { head; tail= [] }
 
   let[@inline always] of_tail tail =
-    if tail = [] then empty else { head= []; tail }
+    if tail = [] then Empty else Queue { head= []; tail }
 
   let rec signal backoff t =
-    let seen = Atomic.get t in
-    if seen != empty then
-      match seen.head with
-      | trigger :: head ->
-          signal_compare_and_set backoff t seen (update_head seen head) trigger
-      | [] -> (
-          match List.rev seen.tail with
-          | trigger :: head ->
-              signal_compare_and_set backoff t seen (of_head head) trigger
-          | [] -> assert false)
+    match Atomic.get t with
+    | Empty -> ()
+    | Queue state as seen -> (
+        match state.head with
+        | trigger :: head ->
+            signal_compare_and_set backoff t seen (update_head state head)
+              trigger
+        | [] -> (
+            match List.rev state.tail with
+            | trigger :: head ->
+                signal_compare_and_set backoff t seen (of_head head) trigger
+            | [] -> assert false))
 
   and signal_compare_and_set backoff t seen after trigger =
     if Atomic.compare_and_set t seen after then Trigger.signal trigger
@@ -1410,47 +1583,57 @@ module Condition = struct
   let signal t = signal Backoff.default t
 
   let rec cleanup backoff trigger t =
-    let seen = Atomic.get t in
-    if seen != empty then
-      if seen.head != [] then
-        match drop_first_or_not_found trigger seen.head with
-        | head ->
-            cleanup_compare_and_set backoff trigger t seen
-              (update_head seen head)
-        | exception Not_found -> (
-            match drop_first_or_not_found trigger seen.head with
-            | tail ->
-                cleanup_compare_and_set backoff trigger t seen
-                  { seen with tail }
-            | exception Not_found -> signal t)
-      else
-        match drop_first_or_not_found trigger seen.tail with
-        | tail -> cleanup_compare_and_set backoff trigger t seen (of_tail tail)
-        | exception Not_found -> signal t
+    match Atomic.get t with
+    | Empty -> ()
+    | Queue state as seen -> (
+        if state.head != [] then
+          match drop_first_or_not_found trigger state.head with
+          | head ->
+              cleanup_compare_and_set backoff trigger t seen
+                (update_head state head)
+          | exception Not_found -> (
+              match drop_first_or_not_found trigger state.tail with
+              | tail ->
+                  cleanup_compare_and_set backoff trigger t seen
+                    (Queue { state with tail })
+              | exception Not_found -> signal t)
+        else
+          match drop_first_or_not_found trigger state.tail with
+          | tail ->
+              cleanup_compare_and_set backoff trigger t seen (of_tail tail)
+          | exception Not_found -> signal t)
 
   and cleanup_compare_and_set backoff trigger t seen after =
     if not (Atomic.compare_and_set t seen after) then
       cleanup (Backoff.once backoff) trigger t
 
-  let rec wait backoff trigger t mutex =
+  let rec wait backoff prm trigger t mutex =
     let seen = Atomic.get t in
     let after =
-      if seen == empty then { head= [ trigger ]; tail= [] }
-      else if seen.head != [] then { seen with tail= trigger :: seen.tail }
-      else
-        let head = List.rev_append [ trigger ] seen.tail in
-        { head; tail= [] }
+      match seen with
+      | Empty -> Queue { head= [ trigger ]; tail= [] }
+      | Queue state ->
+          if state.head != [] then
+            Queue { state with tail= trigger :: state.tail }
+          else Queue { head= List.rev_append state.tail [ trigger ]; tail= [] }
     in
     if Atomic.compare_and_set t seen after then begin
-      match Mutex.succumb mutex @@ fun () -> Trigger.await trigger with
-      | None -> ()
-      | Some (exn, bt) ->
-          cleanup Backoff.default trigger t;
-          Printexc.raise_with_backtrace exn bt
+      let on_cancellation () = cleanup Backoff.default trigger t in
+      let finally ~cancelled =
+        let forbid = Promise.exchange prm ~forbid:true in
+        if not cancelled then Mutex.lock_as mutex (Some prm) Backoff.default;
+        Promise.set prm ~forbid
+      in
+      Mutex.unlock_as mutex (Some prm) Backoff.default;
+      protect ~finally ~on_cancellation @@ fun () ->
+      ignore (Trigger.await trigger)
     end
-    else wait (Backoff.once backoff) trigger t mutex
+    else wait (Backoff.once backoff) prm trigger t mutex
 
-  let wait t mutex = wait Backoff.default (Trigger.create ()) t mutex
+  let wait t mutex =
+    let trigger = Trigger.create () in
+    let (Pack self) = Effect.perform Self in
+    wait Backoff.default self trigger t mutex
 
   type t = state Atomic.t
 end

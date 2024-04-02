@@ -316,10 +316,17 @@ let select uid interrupt ~block cancelled_syscalls =
         Obj.(reachable_words (repr domain.revert)));
   Logs.debug (fun m -> m "select(%f)" timeout);
   match Unix.select (interrupt :: rds) wrs [] timeout with
-  | exception Unix.(Unix_error (EINTR, _, _)) -> []
+  | exception Unix.(Unix_error (EINTR, _, _)) ->
+      Logs.debug (fun m ->
+          m "[%a] interrupted by the system" Miou.Domain.Uid.pp uid);
+      collect domain []
   | [], [], _ -> collect domain []
   | rds, wrs, _ ->
-      if interrupted interrupt rds then intr interrupt;
+      if interrupted interrupt rds then begin
+        Logs.debug (fun m ->
+            m "[%a] interrupted by Miou" Miou.Domain.Uid.pp uid);
+        intr interrupt
+      end;
       let signals = collect domain [] in
       let signals = transmit_fds signals domain.revert domain.readers rds in
       let signals = transmit_fds signals domain.revert domain.writers wrs in

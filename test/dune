@@ -6,15 +6,7 @@
 (executable
  (name test_core)
  (modules test_core)
- (libraries threads.posix test unix miou))
-
-(rule
- (copy# ../lib/sync.ml sync.ml))
-
-(executable
- (name test_sync)
- (modules test_sync sync atomic)
- (libraries dscheck test miou))
+ (libraries test unix miou))
 
 (rule
  (alias runtest)
@@ -23,8 +15,3 @@
    MIOU_DOMAINS
    3
    (run ./test_core.exe))))
-
-(rule
- (alias runtest)
- (action
-  (run ./test_sync.exe)))

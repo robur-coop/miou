@@ -1,0 +1,12 @@
+(rule
+ (copy# ../../lib/sync.ml sync.ml))
+
+(executable
+ (name test_sync)
+ (modules test_sync sync atomic)
+ (libraries dscheck test miou))
+
+(rule
+ (alias runtest)
+ (action
+  (run ./test_sync.exe)))

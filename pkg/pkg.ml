@@ -14,4 +14,5 @@ let () =
     [
       Pkg.mllib "lib/miou_backoff.mllib"; Pkg.mllib "lib/miou_sync.mllib"
     ; Pkg.mllib "lib/miou.mllib"; Pkg.mllib "lib/miou_unix.mllib"
+    ; Pkg.test ~dir:"test" "test/test_core"
     ]

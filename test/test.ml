@@ -1,5 +1,7 @@
 let () = Printexc.record_backtrace true
 
+module Atomic = Stdlib.Atomic
+
 let check test =
   let bt = Printexc.get_callstack max_int in
   try
@@ -47,7 +49,9 @@ let runner ?(g = Random.State.make_self_init ()) ?(fmt = Miou.Fmt.fmt "run-%s")
   in
   let rec go retry =
     if retry >= 10 then failwith "Impossible to create a test directory";
-    let directory = Filename.concat root (Fmt.str "%a" fmt (random_string 4)) in
+    let directory =
+      Filename.concat root (Miou.Fmt.str "%a" fmt (random_string 4))
+    in
     if Sys.file_exists directory then go (succ retry) else mkdir { directory }
   in
   go 0
@@ -55,7 +59,7 @@ let runner ?(g = Random.State.make_self_init ()) ?(fmt = Miou.Fmt.fmt "run-%s")
 let run { directory } { title; fn; _ } =
   let old_stderr = Unix.dup Unix.stderr in
   let new_stderr =
-    open_out (Filename.concat directory (Fmt.str "%s.stderr" title))
+    open_out (Filename.concat directory (Miou.Fmt.str "%s.stderr" title))
   in
   Unix.dup2 (Unix.descr_of_out_channel new_stderr) Unix.stderr;
   let finally () =
@@ -67,7 +71,9 @@ let run { directory } { title; fn; _ } =
   Format.eprintf "*** %s ***\n%!" title;
   try Fun.protect ~finally fn
   with exn ->
-    let ic = open_in (Filename.concat directory (Fmt.str "%s.stderr" title)) in
+    let ic =
+      open_in (Filename.concat directory (Miou.Fmt.str "%s.stderr" title))
+    in
     let ln = in_channel_length ic in
     let rs = Bytes.create ln in
     really_input ic rs 0 ln;
