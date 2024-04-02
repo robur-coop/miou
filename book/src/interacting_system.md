@@ -105,7 +105,7 @@ let waiting_fds_for_reading = Hashtbl.create 0x100
 
 let our_accept file_descr =
   let value = ref None in
-  Hashtbl.add waiting_fds_for_read file_descr value;
+  Hashtbl.add waiting_fds_for_reading file_descr value;
   Effect.perform (Await value);
   Hashtbl.remove waiting_fds_for_reading file_descr;
   Unix.accept file_descr
@@ -120,7 +120,7 @@ let fullfill tbl fd =
   value := Some ()
 
 let our_select () =
-  let rds = Seq.to_list (Hashtbl.to_seq_keys waiting_fds_for_reading) in
+  let rds = List.of_seq (Hashtbl.to_seq_keys waiting_fds_for_reading) in
   let rds, _, _ = Unix.select rds [] [] 0.01 in
   List.iter (fullfill waiting_fds_for_reading) rds
 ```
@@ -199,11 +199,11 @@ let our_write file_descr buf off len =
   Unix.write file_descr buf off len
 
 let our_select () =
-  let rds = Seq.to_list (Hashtbl.to_seq_keys waiting_fds_for_reading) in
-  let wrs = Seq.to_list (Hashtbl.to_seq_keys waiting_fds_for_writing) in
-  let rds, wrs, _ = Unix.select rds wrs [] [] 0.01 in
+  let rds = List.of_seq (Hashtbl.to_seq_keys waiting_fds_for_reading) in
+  let wrs = List.of_seq (Hashtbl.to_seq_keys waiting_fds_for_writing) in
+  let rds, wrs, _ = Unix.select rds wrs [] 0.01 in
   List.iter (fullfill waiting_fds_for_reading) rds;
-  List.iter (fullfill waiting_fds_for_reading) wrs
+  List.iter (fullfill waiting_fds_for_writing) wrs
 ```
 
 Now, we can both await new connections and manage in background our clients:

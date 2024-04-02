@@ -69,13 +69,6 @@ $ kill -9 436169
 
 ## Parallelism
 
-Puisqu'il est possible d'utiliser désormais plusieurs domaines, prennons cette
-avantage pour ne pas instancier qu'un seul serveur. En effet, il est possible
-à ce que plusieurs serveur existent sur une même addresse (`localhost:3000`).
-Dans une tel situation, c'est le premier prêt qui est le premier servi. On peut
-donc imaginer gérer en parallèle plusieurs serveur qui géreront, en concurrence
-cette fois ci, plusieurs clients.
-
 Since it's now possible to utilise multiple domains, let's take advantage of
 this to instantiate more than one server. Indeed, it's conceivable that multiple
 servers could exist at the same address (`localhost:3000`). In such a scenario,
@@ -88,7 +81,7 @@ where `dom0` would never be assigned a task from other domain) via
 `Miou.call_cc`:
 ```ocaml
 let () = Miou_unix.run @@ fun () ->
-  let domains = Stdlib.Domain.recommended_domain_count - 1 in
+  let domains = Stdlib.Domain.recommended_domain_count () - 1 in
   let domains = List.init domains (Fun.const ()) in
   let prm = Miou.call_cc server in
   Miou.await prm :: Miou.parallel server domains
@@ -184,7 +177,7 @@ let server () =
     clean_up orphans;
     let client, _ = Miou_unix.Ownership.accept socket in
     ignore (Miou.call_cc
-      ~give:[ Miou_unix.Ownership.resource clientr 
+      ~give:[ Miou_unix.Ownership.resource client ]
       ~orphans (fun () -> echo client))
   done;
   Miou_unix.Ownership.close socket
@@ -217,3 +210,5 @@ Finally, the last chapter is an enhancement of our `echo` server using Mutexes
 and Conditions provided by Miou. This chapter explains in detail the benefits of
 using these modules over those offered by OCaml and presents, once again, a
 concrete case.
+
+[data-race]: https://en.wikipedia.org/wiki/Race_condition

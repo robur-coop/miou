@@ -144,7 +144,7 @@ let select ~block:_ _ =
   Unix.sleepf ts;
   remove_and_signal_older sleepers []
 
-let event _ = { select; interrupt= ignore }
+let events _ = { Miou.select; interrupt= ignore }
 let run fn = Miou.run ~events fn
 ```
 
@@ -263,6 +263,24 @@ type sleeper =
   ; syscall : Miou.syscall
   ; mutable cancelled : bool }
 
+module Sleepers = Miou.Pqueue.Make (struct
+  type t = sleeper
+
+  let compare { time= a; _ } { time= b; _ } = Float.compare a b
+  let dummy = { time= 0.0; syscall= Obj.magic (); cancelled= false }
+end)
+
+let sleepers =
+  let key = Stdlib.Domain.DLS.new_key Sleepers.create in
+  fun () -> Stdlib.Domain.DLS.get key
+
+let sleep delay =
+  let sleepers = sleepers () in
+  let time = Unix.gettimeofday () +. delay in
+  let syscall = Miou.syscall () in
+  Sleepers.insert { time; syscall; cancelled= false } sleepers;
+  Miou.suspend syscall
+
 let rec remove_and_signal_older sleepers acc =
   match Sleepers.find_min sleepers with
   | None -> acc
@@ -283,10 +301,10 @@ let rec clean sleepers uids =
 let rec minimum sleepers =
   match Sleepers.find_min sleepers with
   | None -> None
-  | Some { cancelled; _ } ->
+  | Some { cancelled; _ } when cancelled ->
     Sleepers.delete_min_exn sleepers;
     minimum sleepers
-  | Some elt -> elt
+  | Some elt -> Some elt
 
 let select ~block:_ uids =
   let sleepers = sleepers () in
@@ -329,12 +347,12 @@ let select ic ~block:_ uids =
     consume ic;
     remove_and_signal_older sleepers []
 
-let buf = Byte.make 1 '\000'
+let buf = Bytes.make 1 '\000'
 
-let event _ =
+let events _ =
   let ic, oc = Unix.pipe () in
-  let interrupt () = Unix.write oc buf 0 (Bytes.length buf) in
-  { select= select ic; interrupt }
+  let interrupt () = ignore (Unix.write oc buf 0 (Bytes.length buf)) in
+  { Miou.select= select ic; interrupt }
 ```
 
 And there you have it! We can now allow Miou to interrupt a `select` in the case

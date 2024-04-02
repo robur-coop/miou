@@ -109,7 +109,7 @@ we receive bytes from the client. Finally, we'll need to release our file
 descriptor; we won't need it anymore. We'll use `Unix.close` to inform the
 system that it can free all resources associated with this file descriptor.
 ```ocaml
-let echo client =
+let rec echo client =
   let buf = Bytes.create 0x100 in
   let len = Unix.read client buf 0 (Bytes.length buf) in
   if len = 0 then Unix.close client
@@ -199,7 +199,7 @@ else.
 Our goal now is to handle more than one client. We could simply repeat our
 `accept` call every time a client arrives.
 ```ocaml
-let echo client =
+let rec echo client =
   let buf = Bytes.create 0x100 in
   let len = Unix.read client buf 0 (Bytes.length buf) in
   if len = 0 then Unix.close client
@@ -242,8 +242,8 @@ $ ./a.out &
 [1] 8711
 $ netcat localhost 3000 &
 [2] 8728
-[2]  + 8728 suspended (tty input)  netcat localhost 4000
-$ echo "Hello World"|netcat -q0 localhost 4000
+[2]  + 8728 suspended (tty input)  netcat localhost 3000
+$ echo "Hello World"|netcat -q0 localhost 3000
 ^C
 $ kill -9 8728
 $ kill -9 8711
