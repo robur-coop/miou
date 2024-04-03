@@ -32,7 +32,7 @@ possible and ensure continuity in what Miou has to offer despite its beta
 status. We hope that, given the changes described above, users will understand
 this **breaking-change**.
 
-[vesa]:
+[vesa]: https://github.com/polytypic
 [picos]: https://github.com/ocaml-multicore/picos
 [trigger]: https://git.robur.coop/robur/miou/src/commit/cd4d8000204750d3c7e49512a63cddf725a079d1/lib/sync.mli#L16
 [computation]: https://git.robur.coop/robur/miou/src/commit/cd4d8000204750d3c7e49512a63cddf725a079d1/lib/sync.mli#L70
