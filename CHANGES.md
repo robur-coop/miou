@@ -1,3 +1,50 @@
+### v0.0.1~beta3 (2024-04-03)
+
+A major change in Miou's internals to incorporate the excellent work of
+[Vesa Karvonen][vesa] available in his [picos][picos] project. This change
+integrates the [Trigger][trigger] module and the [Computation][computation]
+module. It also uses the [Await][await] effect, which we hope will be
+standardised.
+
+This addition has enabled us to integrate the new [Condition][condition] and
+[Mutex][mutex] modules.
+
+This change has enabled us to correctly formalise the resources used by our
+scheduler and to release them accordingly, particularly with regard to the
+cancellation whose behaviour is better defined.
+
+We also took the opportunity to integrate the priority queue extracted from the
+[Vocal][vocal] project and checked using [Why3][why3]. We would like to thank
+their authors and maintainers for their help.
+
+Finally, the API has changed very little and only ownership is no longer
+mandatory when using the [Miou_unix][Miou_unix] module but is still available
+through the [Miou_unix.Ownership][Miou_unix_Ownership] module.
+
+As such, we have written [a tutorial][tutorial] that explains in detail what
+Miou can offer and how to create applications with it. It's also a good
+introduction to using effects and implementing a mini echo server and mini
+scheduler.
+
+The changes are far too profound to establish an accurate Changelog since the
+last beta. However, we have tried to respect our previous tests as much as
+possible and ensure continuity in what Miou has to offer despite its beta
+status. We hope that, given the changes described above, users will understand
+this **breaking-change**.
+
+[vesa]:
+[picos]: https://github.com/ocaml-multicore/picos
+[trigger]: https://git.robur.coop/robur/miou/src/commit/cd4d8000204750d3c7e49512a63cddf725a079d1/lib/sync.mli#L16
+[computation]: https://git.robur.coop/robur/miou/src/commit/cd4d8000204750d3c7e49512a63cddf725a079d1/lib/sync.mli#L70
+[await]: https://git.robur.coop/robur/miou/src/commit/cd4d8000204750d3c7e49512a63cddf725a079d1/lib/sync.mli#L44-L46
+[condition]: https://git.robur.coop/robur/miou/src/commit/cd4d8000204750d3c7e49512a63cddf725a079d1/lib/miou.mli#L1102
+[mutex]: https://git.robur.coop/robur/miou/src/commit/cd4d8000204750d3c7e49512a63cddf725a079d1/lib/miou.mli#L1068
+[vocal]: https://github.com/ocaml-gospel/vocal
+[why3]: https://www.why3.org/
+[Miou_unix]: https://git.robur.coop/robur/miou/src/commit/cd4d8000204750d3c7e49512a63cddf725a079d1/lib/miou_unix.mli#L1
+[Miou_unix_Ownership]: https://git.robur.coop/robur/miou/src/commit/cd4d8000204750d3c7e49512a63cddf725a079d1/lib/miou_unix.mli#L52
+[tutorial]: https://robur-coop.github.io/miou/
+
 ### v0.0.1~beta2 (2024-01-04)
 
 - Composition between Miou and user-defined effects. @dinosaure
