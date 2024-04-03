@@ -13,7 +13,8 @@
  (name miou)
  (public_name miou)
  (modules fmt miou gen logs vector pqueue sequence queue state)
- (instrumentation (backend bisect_ppx))
+ (instrumentation
+  (backend bisect_ppx))
  (libraries miou.backoff miou.sync))
 
 (library
