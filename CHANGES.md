@@ -1,4 +1,4 @@
-### v0.0.1~beta3 (2024-04-03)
+### v0.1.0 (2024-04-03)
 
 A major change in Miou's internals to incorporate the excellent work of
 [Vesa Karvonen][vesa] available in his [picos][picos] project. This change
