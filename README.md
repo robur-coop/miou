@@ -26,8 +26,12 @@ Miou meets these objectives by:
 - conservative and stable rules for the library's behaviour
 - an API that delegates suspension management to the user
 
-You can read a simple tutorial explaining how to implement an echo server with
-Miou [here][echo].
+A [book][book] is available which explains how to make applications with Miou in
+details. It introduces the reader to effects, implements a small scheduler and a
+small echo server as an example. You an also read a simple tutorial from our
+documentation explaining how to implement this echo server with [here][echo].
+Miou is heavily inspired by [picos][picos] and we would like to thanks authors
+of this project.
 
 ### Rules
 
@@ -212,8 +216,9 @@ of its users), welcome!
 
 [repository]: https://git.robur.coop/robur/miou
 [github]: https://github.com/robur-coop/miou
-[documentation]: https://robur-coop.github.io/miou/
-[sleepers]: https://robur-coop.github.io/miou/miou/sleepers.html
-[merkle-tree]: https://robur-coop.github.io/miou/miou/merkle.html
-[echo]: https://robur-coop.github.io/miou/miou/echo.html
+[documentation]: https://docs.osau.re/miou/
+[sleepers]: https://docs.osau.re/miou/sleepers.html
+[echo]: https://docs.osau.re/miou/echo.html
 [robur]: https://robur.coop/
+[book]: https://robur-coop.github.io/miou
+[picos]: https://github.com/ocaml-multicore/picos
