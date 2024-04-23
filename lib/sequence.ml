@@ -41,6 +41,9 @@ let add_r data (t : 'a t) =
   t.prev.next <- t_of_node node;
   t.prev <- t_of_node node
 
+let peek_node direction (t : _ t) =
+  match direction with Left -> node_of_t t.next | Right -> node_of_t t.prev
+
 let add direction t data =
   match direction with Left -> add_l data t | Right -> add_r data t
 

@@ -8,7 +8,6 @@ module Pqueue = Pqueue
 module Logs = Logs
 module Fmt = Fmt
 module Gen = Gen
-module Sequence = Sequence
 open Sync
 module Trigger = Trigger
 module Computation = Computation
@@ -1637,4 +1636,10 @@ module Condition = struct
     wait Backoff.default self trigger t mutex
 
   type t = state Atomic.t
+end
+
+module Sequence = struct
+  include Sequence
+
+  let add direction t value = add direction t value; peek_node direction t
 end

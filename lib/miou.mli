@@ -454,7 +454,28 @@ module Fmt = Fmt
 module Trigger = Sync.Trigger
 module Computation = Sync.Computation
 module Queue = Queue
-module Sequence = Sequence
+
+module Sequence : sig
+  type 'a t
+  type 'a node
+  type direction = Right | Left
+
+  exception Empty
+
+  val create : unit -> 'a t
+  val take : direction -> 'a t -> 'a
+  val peek_node : direction -> 'a t -> 'a node
+  val add : direction -> 'a t -> 'a -> 'a node
+  val drop : 'a t -> unit
+  val length : 'a t -> int
+  val exists : ('a -> bool) -> 'a t -> bool
+  val iter : f:('a -> unit) -> 'a t -> unit
+  val iter_node : f:('a node -> unit) -> 'a t -> unit
+  val is_empty : 'a t -> bool
+  val remove : 'a node -> unit
+  val data : 'a node -> 'a
+  val to_list : 'a t -> 'a list
+end
 
 module Domain : sig
   module Uid : sig
