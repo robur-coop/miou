@@ -454,6 +454,7 @@ module Fmt = Fmt
 module Trigger = Sync.Trigger
 module Computation = Sync.Computation
 module Queue = Queue
+module Sequence = Sequence
 
 module Domain : sig
   module Uid : sig

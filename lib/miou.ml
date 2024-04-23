@@ -8,6 +8,7 @@ module Pqueue = Pqueue
 module Logs = Logs
 module Fmt = Fmt
 module Gen = Gen
+module Sequence = Sequence
 open Sync
 module Trigger = Trigger
 module Computation = Computation
