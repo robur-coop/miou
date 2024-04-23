@@ -1637,3 +1637,9 @@ module Condition = struct
 
   type t = state Atomic.t
 end
+
+module Sequence = struct
+  include Sequence
+
+  let add direction t value = add direction t value; peek_node direction t
+end
