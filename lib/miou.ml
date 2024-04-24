@@ -176,6 +176,7 @@ type domain = {
   ; events: events
   ; cancelled_syscalls: Syscall_uid.t Queue.t
   ; syscalls: int Atomic.t
+  ; hooks: (unit -> unit) Sequence.t
 }
 
 type 'r continuation = (State.error option, 'r) State.continuation
@@ -296,6 +297,7 @@ module Domain = struct
     ; events= events uid
     ; syscalls= Atomic.make 0
     ; cancelled_syscalls= Queue.create ()
+    ; hooks= Sequence.create ()
     }
 
   let interrupt pool ~domain:uid =
@@ -728,7 +730,19 @@ module Domain = struct
 
   let system_events_suspended domain = Atomic.get domain.syscalls > 0
 
+  let run_hooks domain =
+    let apply ({ Sequence.data= fn; _ } as node) =
+      try fn ()
+      with exn ->
+        Logs.err (fun m ->
+            m "[%a] a hook raised an exception: %s" Domain_uid.pp domain.uid
+              (Printexc.to_string exn));
+        Sequence.remove node
+    in
+    Sequence.iter_node ~f:apply domain.hooks
+
   let run pool (domain : domain) =
+    run_hooks domain;
     match Heapq.extract_min_exn domain.tasks with
     | exception Heapq.Empty ->
         if system_events_suspended domain then
@@ -1243,6 +1257,21 @@ let care : type a. a orphans -> a t option option =
     with Orphan node ->
       let prm = Sequence.data node in
       Sequence.remove node; Some (Some prm)
+
+module Hook = struct
+  type t = { uid: Domain.Uid.t; node: (unit -> unit) Sequence.node }
+
+  let add fn =
+    let domain = Effect.perform Self_domain in
+    Sequence.(add Left) domain.hooks fn;
+    let node = Sequence.(peek_node Left) domain.hooks in
+    { uid= domain.uid; node }
+
+  let remove hook =
+    let domain = Effect.perform Self_domain in
+    if Domain.Uid.equal domain.uid hook.uid then Sequence.remove hook.node
+    else invalid_arg "The hook does not belong into the current domain"
+end
 
 let quanta =
   match Sys.getenv_opt "MIOU_QUANTA" with
