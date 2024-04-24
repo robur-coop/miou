@@ -944,6 +944,34 @@ val yield : unit -> unit
       - : unit = ()
     ]} *)
 
+module Hook : sig
+  type t
+  (** Type of hooks. *)
+
+  val add : (unit -> unit) -> t
+  (** [add fn] adds a new hook (a function) which will be executed at every
+      {i tick} of the current domain. This means that each time an effect is
+      suspended, the function will be executed. Here's an example:
+
+      {[
+        # Miou.run @@ fun () ->
+          let _hook = Miou.Hook.add @@ fun () -> print_endline "Hello" in
+          Miou.yield ();
+          Miou.yield () ;;
+        Hello
+        Hello
+        - : unit = ()
+      ]}
+
+      A hook is local to the current domain and runs on the domain in which it
+      was created. If the given function raises an argument, the hook is
+      {b deleted}. The user can remove the actual hook with {!val:remove}. *)
+
+  val remove : t -> unit
+  (** [remove h] removes the hook [h]. If [h] does not belong to the current
+      domain, it raises an exception [Invalid_argument]. *)
+end
+
 (** {2:system System events.}
 
     Miou does not monitor system events. We arbitrarily leave this event

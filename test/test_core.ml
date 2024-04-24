@@ -751,6 +751,38 @@ let test37 =
   prgm ();
   Test.check (Buffer.contents buf = "")
 
+let test38 =
+  let description = {text|Basic usage of hooks.|text} in
+  Test.test ~title:"test38" ~description @@ fun () ->
+  let buf = Buffer.create 0x100 in
+  let print_endline str = Buffer.add_string buf str; Buffer.add_char buf '\n' in
+  let prgm () =
+    Miou.run @@ fun () ->
+    let node1 = Miou.Hook.add (fun () -> print_endline "h1") in
+    let node2 = Miou.Hook.add (fun () -> print_endline "h2"; failwith "h2") in
+    Miou.yield (); Miou.Hook.remove node2; Miou.Hook.remove node1
+  in
+  prgm ();
+  (* - h1 from Miou.Hook.add h2
+     - h2 from Miou.yield
+     - h1 from Miou.yield
+     - h1 from Miou.Hook.remove node2
+     - h1 from Miou.Hook.remove node1 *)
+  Test.check (Buffer.contents buf = "h1\nh2\nh1\nh1\nh1\n")
+
+let test39 =
+  let description =
+    {text|Basic usage of hooks (when we remove them in the wrong place).|text}
+  in
+  Test.test ~title:"test38" ~description @@ fun () ->
+  Miou.run @@ fun () ->
+  let hook = Miou.Hook.add Fun.id in
+  let prm = Miou.call @@ fun () -> Miou.Hook.remove hook in
+  match Miou.await prm with
+  | Ok () -> failwith "t39"
+  | Error (Invalid_argument _) -> Test.check true
+  | Error exn -> raise exn
+
 let () =
   let tests =
     [
@@ -758,7 +790,7 @@ let () =
     ; test10; test11; test12; test13; test14; test15; test16; test17; test18
     ; test19; test20; test21; test22; test23; test24; test25; test26; test27
     ; test28; test29; test30; test31; test32; test33; test34; test35; test36
-    ; test37
+    ; test37; test38; test39
     ]
   in
   let ({ Test.directory } as runner) =
