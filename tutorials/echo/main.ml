@@ -80,7 +80,7 @@ let stop (m, c, v) _signal =
 let () =
   Miou_unix.run @@ fun () ->
   let v = (Miou.Mutex.create (), Miou.Condition.create (), ref false) in
-  Miou.set_signal Sys.sigint (Sys.Signal_handle (stop v));
+  ignore (Miou.sys_signal Sys.sigint (Sys.Signal_handle (stop v)));
   let servers = List.init 3 (Fun.const (v, localhost_3000)) in
   let prm = Miou.call_cc @@ fun () -> server (v, localhost_3000) in
   ignore (Miou.parallel server servers);

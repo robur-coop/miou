@@ -1334,16 +1334,16 @@ let transfer_dom0_signals pool =
     List.iter (Domain.add_into_domain pool.dom0) (List.map f elts)
   end
 
-let set_signal signal = function
+let sys_signal signal = function
   | (Sys.Signal_default | Sys.Signal_ignore) as behavior ->
-      Sys.set_signal signal behavior
+      Sys.signal signal behavior
   | Sys.Signal_handle fn ->
       let fn signal =
         Logs.debug (fun m ->
             m "[%d] got a signal %d" (Stdlib.Domain.self () :> int) signal);
         Queue.enqueue signals (Signal_retrieved (signal, fn))
       in
-      Sys.set_signal signal (Signal_handle fn)
+      Sys.signal signal (Signal_handle fn)
 
 let run ?(quanta = quanta) ?(g = Random.State.make_self_init ())
     ?(domains = domains) ?(events = Fun.const dummy_events) fn =
