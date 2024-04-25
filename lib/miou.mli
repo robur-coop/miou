@@ -964,8 +964,10 @@ module Hook : sig
       ]}
 
       A hook is local to the current domain and runs on the domain in which it
-      was created. If the given function raises an argument, the hook is
-      {b deleted}. The user can remove the actual hook with {!val:remove}. *)
+      was created. A hook {b cannot} interact with the scheduler and, what's
+      more, cannot use the effects associated with Miou. Miou's effects manager
+      is not attached to it. If the given function raises an argument, the hook
+      is {b deleted}. The user can remove the actual hook with {!val:remove}. *)
 
   val remove : t -> unit
   (** [remove h] removes the hook [h]. If [h] does not belong to the current
