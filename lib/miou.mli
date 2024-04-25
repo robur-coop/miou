@@ -1186,3 +1186,27 @@ module Condition : sig
       associated with the condition variable [c] holds when [wait] returns; one
       must explicitly test whether {i P} holds after calling [wait]. *)
 end
+
+module Lazy : sig
+  exception Undefined
+  (** Synonym for {!Stdlib.Lazy.Undefined}. *)
+
+  type !'a t
+  (** Represents a deferred computation of suspension. *)
+
+  val from_val : 'a -> 'a t
+  (** [from_val value] returns an already forced suspension whose result is
+      the given [value]. *)
+
+  val from_fun : (unit -> 'a) -> 'a t
+  (** [from_fun fn] returns a suspension. *)
+
+  val force : 'a t -> 'a
+  (** [force t] forces the suspension, i.e. computes [fn ()] using the [fn]
+      passed to {!val:from_fun}, stores the result of the computation to the
+      suspension and reproduces its result. In case the suspension has already
+      been forced the computation is skipped and stored result is reproduced.
+
+      @raise Undefined in case the suspension is currently being forced by the
+      current prommise. *)
+end

@@ -159,6 +159,7 @@ let test12 =
   try Miou.run prgm; Test.check false
   with exn when Printexc.to_string exn = "Miou.Not_a_child" -> Test.check true
 
+(* NOTE(dinosaure): this test can emit a TSan warning. *)
 let test13 =
   let description =
     {text|A test to show that the transmission of a value between tasks only takes place between parents and children.|text}
@@ -783,6 +784,25 @@ let test39 =
   | Error (Invalid_argument _) -> Test.check true
   | Error exn -> raise exn
 
+let test40 =
+  let description =
+    {text|Basic usage of lazy values.|text}
+  in
+  Test.test ~title:"test40" ~description @@ fun () ->
+  let prgm () = Miou.run @@ fun () ->
+    let v = Miou.Lazy.from_fun @@ fun () -> 42 in
+    let prm0 = Miou.call @@ fun () -> `P0 (Miou.Lazy.force v) in
+    let prm1 = Miou.call @@ fun () -> `P1 (Miou.Lazy.force v) in
+    match Miou.await_first [ prm0; prm1 ] with
+    | Ok (`P0 42) -> true
+    | Ok (`P1 42) -> false
+    | Ok _ -> failwith "Unexpected result"
+    | Error exn -> raise exn in
+  let rec until_its value = if prgm () = value then until_its value in
+  until_its true;
+  until_its false;
+  Test.check true
+
 let () =
   let tests =
     [
@@ -790,7 +810,7 @@ let () =
     ; test10; test11; test12; test13; test14; test15; test16; test17; test18
     ; test19; test20; test21; test22; test23; test24; test25; test26; test27
     ; test28; test29; test30; test31; test32; test33; test34; test35; test36
-    ; test37; test38; test39
+    ; test37; test38; test39; test40
     ]
   in
   let ({ Test.directory } as runner) =
