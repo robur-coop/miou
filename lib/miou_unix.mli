@@ -38,8 +38,11 @@ val read : file_descr -> bytes -> int -> int -> int
     [off]. Return the number of bytes actually read. *)
 
 val write : file_descr -> string -> int -> int -> unit
-(** [write fd str ~off ~len] writes [len] bytes starting at [off] from [str] on
+(** [write fd str off len] writes [len] bytes starting at [off] from [str] on
     [fd]. *)
+
+val write_string : file_descr -> string -> unit
+(** [write fd str] writes [str] bytes on [fd]. *)
 
 val close : file_descr -> unit
 (** [close fd] closes properly the given [fd]. *)

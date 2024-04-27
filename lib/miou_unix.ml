@@ -139,6 +139,9 @@ let rec write ({ fd; non_blocking } as file_descr) str off len =
     in
     blocking_write fd; go ()
 
+let write_string fd str =
+  write fd str 0 (String.length str)
+
 let rec accept ?cloexec ({ fd; non_blocking } as file_descr) =
   if non_blocking then (
     match Unix.accept ?cloexec fd with
