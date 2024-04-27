@@ -785,11 +785,10 @@ let test39 =
   | Error exn -> raise exn
 
 let test40 =
-  let description =
-    {text|Basic usage of lazy values.|text}
-  in
+  let description = {text|Basic usage of lazy values.|text} in
   Test.test ~title:"test40" ~description @@ fun () ->
-  let prgm () = Miou.run @@ fun () ->
+  let prgm () =
+    Miou.run @@ fun () ->
     let v = Miou.Lazy.from_fun @@ fun () -> 42 in
     let prm0 = Miou.call @@ fun () -> `P0 (Miou.Lazy.force v) in
     let prm1 = Miou.call @@ fun () -> `P1 (Miou.Lazy.force v) in
@@ -797,11 +796,10 @@ let test40 =
     | Ok (`P0 42) -> true
     | Ok (`P1 42) -> false
     | Ok _ -> failwith "Unexpected result"
-    | Error exn -> raise exn in
+    | Error exn -> raise exn
+  in
   let rec until_its value = if prgm () = value then until_its value in
-  until_its true;
-  until_its false;
-  Test.check true
+  until_its true; until_its false; Test.check true
 
 let () =
   let tests =

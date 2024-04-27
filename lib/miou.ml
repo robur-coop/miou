@@ -97,8 +97,7 @@ module Promise = struct
   let set t ~forbid = t.forbid <- forbid
 
   let raise_if_errored t =
-    if not t.forbid
-    then Computation.raise_if_errored t.state
+    if not t.forbid then Computation.raise_if_errored t.state
 
   let exchange t ~forbid =
     let seen = t.forbid in
@@ -1692,9 +1691,9 @@ module Lazy = struct
 
   type 'a state =
     | Fun of (unit -> 'a)
-    | Run : { prm : _ t; triggers: Trigger.t list } -> 'a state
+    | Run : { prm: _ t; triggers: Trigger.t list } -> 'a state
     | Val of 'a
-    | Exn of { exn : exn; trace : Printexc.raw_backtrace }
+    | Exn of { exn: exn; trace: Printexc.raw_backtrace }
 
   type 'a t = 'a state Atomic.t
 
@@ -1705,55 +1704,59 @@ module Lazy = struct
     match Atomic.get t with
     | Val _ | Exn _ -> ()
     | Fun _ -> failwith "impossible"
-    | Run r as seen ->
-      match drop_first_or_not_found trigger r.triggers with
-      | triggers ->
-        let after = Run { r with triggers } in
-        if not (Atomic.compare_and_set t seen after)
-        then cleanup t trigger (Backoff.once backoff)
-      | exception Not_found -> ()
+    | Run r as seen -> (
+        match drop_first_or_not_found trigger r.triggers with
+        | triggers ->
+            let after = Run { r with triggers } in
+            if not (Atomic.compare_and_set t seen after) then
+              cleanup t trigger (Backoff.once backoff)
+        | exception Not_found -> ())
 
-  let rec force
-    : type a b. a t -> b Promise.t -> Backoff.t -> a
-    = fun t prm backoff -> match Atomic.get t with
+  let rec force : type a b. a t -> b Promise.t -> Backoff.t -> a =
+   fun t prm backoff ->
+    match Atomic.get t with
     | Val v -> v
     | Exn r -> Printexc.raise_with_backtrace r.exn r.trace
     | Fun fn as seen ->
-      let after = Run { prm; triggers= [] } in
-      if Atomic.compare_and_set  t seen after then begin
-        let result = match fn () with
-          | v -> Val v
-          | exception exn ->
-            let trace = Printexc.get_raw_backtrace () in
-            Exn { exn; trace } in
-        match Atomic.exchange t result with
-        | Val _ | Exn _ | Fun _ -> failwith "impossible"
-        | Run r ->
-          List.iter Trigger.signal r.triggers;
-          force t prm Backoff.default
-      end else force t prm (Backoff.once backoff)
-    | Run r as seen ->
-      if Promise.Uid.equal r.prm.uid prm.uid
-      then raise Undefined
-      else
-        let trigger = Trigger.create () in
-        let triggers = trigger :: r.triggers in
-        let after = Run { r with triggers } in
+        let after = Run { prm; triggers= [] } in
         if Atomic.compare_and_set t seen after then begin
-          let on_cancellation () = cleanup t trigger Backoff.default in
-          let finally ~cancelled:_ = () in
-          protect ~on_cancellation ~finally @@ fun () ->
-          ignore (Trigger.await trigger);
-          force t prm Backoff.default
-        end else force t prm (Backoff.once backoff)
+          let result =
+            match fn () with
+            | v -> Val v
+            | exception exn ->
+                let trace = Printexc.get_raw_backtrace () in
+                Exn { exn; trace }
+          in
+          match Atomic.exchange t result with
+          | Val _ | Exn _ | Fun _ -> failwith "impossible"
+          | Run r ->
+              List.iter Trigger.signal r.triggers;
+              force t prm Backoff.default
+        end
+        else force t prm (Backoff.once backoff)
+    | Run r as seen ->
+        if Promise.Uid.equal r.prm.uid prm.uid then raise Undefined
+        else
+          let trigger = Trigger.create () in
+          let triggers = trigger :: r.triggers in
+          let after = Run { r with triggers } in
+          if Atomic.compare_and_set t seen after then begin
+            let on_cancellation () = cleanup t trigger Backoff.default in
+            let finally ~cancelled:_ = () in
+            protect ~on_cancellation ~finally @@ fun () ->
+            ignore (Trigger.await trigger);
+            force t prm Backoff.default
+          end
+          else force t prm (Backoff.once backoff)
 
-  let force t = match Atomic.get t with
+  let force t =
+    match Atomic.get t with
     | Val v -> v
     | Exn r -> Printexc.raise_with_backtrace r.exn r.trace
     | Fun _ | Run _ ->
-      let (Pack self) = Effect.perform Self in
-      Promise.raise_if_errored self;
-      force t self Backoff.default
+        let (Pack self) = Effect.perform Self in
+        Promise.raise_if_errored self;
+        force t self Backoff.default
 end
 
 module Sequence = struct
