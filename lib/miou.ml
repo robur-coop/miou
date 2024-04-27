@@ -1302,7 +1302,23 @@ let transfer_dom0_tasks pool =
 type signal_retrieved =
   | Signal_retrieved : int * (int -> unit) -> signal_retrieved
 
-let dummy_events = { select= (fun ~block:_ _ -> []); interrupt= Fun.const () }
+let error_select =
+  "Your program is waiting for a system event when you are using Miou.run \
+   (which does not handle system events). You should use Miou_unix.run if you \
+   use functions proposed by the Miou_unix module or use your own run function \
+   associated with your suspensions."
+
+exception No_select_provided
+
+let () =
+  Printexc.register_printer @@ function
+  | No_select_provided -> Some error_select
+  | _ -> None
+
+let dummy_events =
+  let select ~block:_ _ = raise No_select_provided in
+  { select; interrupt= Fun.const () }
+
 let signals = Queue.create ()
 
 let transfer_dom0_signals pool =
