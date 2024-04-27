@@ -37,6 +37,12 @@ val read : file_descr -> bytes -> int -> int -> int
 (** [read fd buf ~off ~len] reads [len] bytes from [fd] into [buf] starting at
     [off]. Return the number of bytes actually read. *)
 
+val really_read : file_descr -> bytes -> int -> int -> unit
+(** [read fd buf off len] guaranties to read [len] bytes from [fd] into
+    [buf] starting at [off].
+
+    @raise End_of_file if [fd] is closed before reaching [len] bytes read. *)
+
 val write : file_descr -> string -> int -> int -> unit
 (** [write fd str off len] writes [len] bytes starting at [off] from [str] on
     [fd]. *)

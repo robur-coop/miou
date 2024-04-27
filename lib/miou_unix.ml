@@ -121,6 +121,14 @@ let rec read ({ fd; non_blocking } as file_descr) buf off len =
     in
     blocking_read fd; go ()
 
+let really_read fd buf off len =
+  let rec loop off len =
+    if len <> 0 then
+      let nread = read fd buf off len in
+      loop (off + nread) (len - nread)
+  in
+  loop off len
+
 let rec write ({ fd; non_blocking } as file_descr) str off len =
   if non_blocking then
     match Unix.write fd (Bytes.unsafe_of_string str) off len with
