@@ -129,14 +129,14 @@ let server () =
 We then need to "catch" the `SIGINT` signal. Signals are special in that they
 can execute a task outside of Miou. However, if these tasks have side effects,
 they won't be managed. Thus, Miou offers a way to attach functions to signals
-using `Miou.set_signal`:
+using `Miou.sys_signal`:
 ```ocaml
 let stop _signal =
   Miou.Mutex.protect mutex_sigint @@ fun () ->
   Miou.Condition.broadcast condition
 
 let () = Miou_unix.run @@ fun () ->
-  Miou.set_signal Sys.sigint (Sys.Signal_handle stop);
+  ignore (Miou.sys_signal Sys.sigint (Sys.Signal_handle stop));
   let domains = Stdlib.Domain.recommended_domain_count () - 1 in
   let domains = List.init domains (Fun.const ()) in
   let prm = Miou.call_cc server in
@@ -267,7 +267,7 @@ let stop _signal =
   Miou.Condition.broadcast condition
 
 let () = Miou_unix.run @@ fun () ->
-  Miou.set_signal Sys.sigint (Sys.Signal_handle stop);
+  ignore (Miou.sys_signal Sys.sigint (Sys.Signal_handle stop));
   let domains = Stdlib.Domain.recommended_domain_count () - 1 in
   let domains = List.init domains (Fun.const ()) in
   let prm = Miou.call_cc server in
