@@ -12,11 +12,11 @@ function that handles our clients:
 ```ocaml
 let rec echo client =
   let buf = Bytes.create 0x100 in
-  let len = Miou_unix.read client buf 0 (Bytes.length buf) in
+  let len = Miou_unix.read client buf ~off:0 ~len:(Bytes.length buf) in
   if len = 0 then Miou_unix.close client
   else
     let str = Bytes.sub_string buf 0 len in
-    let _ = Miou_unix.write client str 0 len in echo client
+    let _ = Miou_unix.write client str ~off:0 ~len in echo client
 ```
 
 A subtlety lies in `Miou_unix.write`, which expects a `string` instead of
