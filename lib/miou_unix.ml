@@ -125,7 +125,7 @@ let rec read ({ fd; non_blocking } as file_descr) ?(off = 0) ?len buf =
 let rec really_read file_descr ?(off = 0) ?len buf =
   let len = Option.value ~default:(Bytes.length buf - off) len in
   let len' = read file_descr ~off ~len buf in
-  if len - len' <= 0 then
+  if len - len' > 0 then
     really_read file_descr ~off:(off + len') ~len:(len - len') buf
 
 let rec write ({ fd; non_blocking } as file_descr) ?(off = 0) ?len str =
