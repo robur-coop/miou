@@ -33,13 +33,35 @@ val connect : file_descr -> Unix.sockaddr -> unit
 (** [connect fd sockaddr] is a Miou friendly {!val:Unix.connect}. The function
     accepts only {!type:file_descr}s in non-blocking mode. *)
 
-val read : file_descr -> bytes -> int -> int -> int
-(** [read fd buf ~off ~len] reads [len] bytes from [fd] into [buf] starting at
-    [off]. Return the number of bytes actually read. *)
+val read : file_descr -> ?off:int -> ?len:int -> bytes -> int
+(** [read fd buf ~off ~len] reads up to [len] bytes (defaults to
+    [Bytes.length buf - off] from the given file-descriptor [fd], storing them
+    in byte sequence [buf], starting at position [off] in [buf] (defaults to
+    [0]). It returns the actual number of characters read, between 0 and [len]
+    (inclusive).
 
-val write : file_descr -> string -> int -> int -> unit
-(** [write fd str ~off ~len] writes [len] bytes starting at [off] from [str] on
-    [fd]. *)
+    @raise Unix_error raised by the system call {!val:Unix.read}. The function
+    handles {!val:Unix.EINTR}, {!val:Unix.EAGAIN} and {!val:Unix.EWOULDBLOCK}
+    exceptions and redo the system call. *)
+
+val really_read : file_descr -> ?off:int -> ?len:int -> bytes -> unit
+(** [really_read fd buf ~off ~len] reads [len] bytes (defaults to
+    [Bytes.length buf - off]) from the given file-descriptor [fd], storing them
+    in byte sequence [buf], starting at position [off] in [buf] (defaults to
+    [0]).
+
+    @raise Unix_error raised by the system call {!val:Unix.read}. The function
+    handles {!val:Unix.EINTR}, {!val:Unix.EAGAIN} and {!val:Unix.EWOULDBLOCK}
+    exceptions and redo the system call. *)
+
+val write : file_descr -> ?off:int -> ?len:int -> string -> unit
+(** [write fd str ~off ~len] writes [len] bytes (defaults to
+    [String.length str - off]) from byte sequence [buf], starting at offset
+    [off] (defaults to [0]), to the given file-descriptor [fd].
+
+    @raise Unix_error raised by the system call {!val:Unix.read}. The function
+    handles {!val:Unix.EINTR}, {!val:Unix.EAGAIN} and {!val:Unix.EWOULDBLOCK}
+    exceptions and redo the system call. *)
 
 val close : file_descr -> unit
 (** [close fd] closes properly the given [fd]. *)
@@ -60,8 +82,9 @@ module Ownership : sig
   val bind_and_listen : ?backlog:int -> file_descr -> Unix.sockaddr -> unit
   val accept : ?cloexec:bool -> file_descr -> file_descr * Unix.sockaddr
   val connect : file_descr -> Unix.sockaddr -> unit
-  val read : file_descr -> bytes -> int -> int -> int
-  val write : file_descr -> string -> int -> int -> unit
+  val read : file_descr -> ?off:int -> ?len:int -> bytes -> int
+  val really_read : file_descr -> ?off:int -> ?len:int -> bytes -> unit
+  val write : file_descr -> ?off:int -> ?len:int -> string -> unit
   val close : file_descr -> unit
 end
 

@@ -105,13 +105,14 @@ let blocking_write fd =
   append domain.writers fd syscall;
   Miou.suspend syscall
 
-let rec read ({ fd; non_blocking } as file_descr) buf off len =
+let rec read ({ fd; non_blocking } as file_descr) ?(off = 0) ?len buf =
+  let len = Option.value ~default:(Bytes.length buf - off) len in
   if non_blocking then
     match Unix.read fd buf off len with
-    | exception Unix.(Unix_error (EINTR, _, _)) -> read file_descr buf off len
+    | exception Unix.(Unix_error (EINTR, _, _)) -> read file_descr buf ~off ~len
     | exception Unix.(Unix_error ((EAGAIN | EWOULDBLOCK), _, _)) ->
         blocking_read fd;
-        read file_descr buf off len
+        read file_descr buf ~off ~len
     | value -> value
   else
     let rec go () =
@@ -121,20 +122,30 @@ let rec read ({ fd; non_blocking } as file_descr) buf off len =
     in
     blocking_read fd; go ()
 
-let rec write ({ fd; non_blocking } as file_descr) str off len =
+let rec really_read file_descr ?(off = 0) ?len buf =
+  let len = Option.value ~default:(Bytes.length buf - off) len in
+  let len' = read file_descr ~off ~len buf in
+  if len - len' <= 0 then
+    really_read file_descr ~off:(off + len') ~len:(len - len') buf
+
+let rec write ({ fd; non_blocking } as file_descr) ?(off = 0) ?len str =
+  let len = Option.value ~default:(String.length str - off) len in
   if non_blocking then
     match Unix.write fd (Bytes.unsafe_of_string str) off len with
-    | exception Unix.(Unix_error (EINTR, _, _)) -> write file_descr str off len
+    | exception Unix.(Unix_error (EINTR, _, _)) ->
+        write file_descr ~off ~len str
     | exception Unix.(Unix_error ((EAGAIN | EWOULDBLOCK), _, _)) ->
         blocking_write fd;
-        write file_descr str off len
-    | len' when len' < len -> write file_descr str (off + len') (len - len')
+        write file_descr ~off ~len str
+    | len' when len' < len ->
+        write file_descr ~off:(off + len') ~len:(len - len') str
     | _ -> ()
   else
     let rec go () =
       match Unix.write fd (Bytes.unsafe_of_string str) off len with
       | exception Unix.(Unix_error (EINTR, _, _)) -> go ()
-      | len' when len' < len -> write file_descr str (off + len') (len - len')
+      | len' when len' < len ->
+          write file_descr ~off:(off + len') ~len:(len - len') str
       | _ -> ()
     in
     blocking_write fd; go ()
@@ -197,13 +208,17 @@ module Ownership = struct
     Miou.Ownership.check resource;
     bind_and_listen ?backlog { fd; non_blocking } sockaddr
 
-  let read { fd; non_blocking; resource } buf off len =
+  let read { fd; non_blocking; resource } ?off ?len buf =
     Miou.Ownership.check resource;
-    read { fd; non_blocking } buf off len
+    read { fd; non_blocking } ?off ?len buf
 
-  let write { fd; non_blocking; resource } str off len =
+  let really_read { fd; non_blocking; resource } ?off ?len buf =
     Miou.Ownership.check resource;
-    write { fd; non_blocking } str off len
+    really_read { fd; non_blocking } ?off ?len buf
+
+  let write { fd; non_blocking; resource } ?off ?len str =
+    Miou.Ownership.check resource;
+    write { fd; non_blocking } ?off ?len str
 
   let accept ?cloexec { fd; non_blocking; resource } =
     Miou.Ownership.check resource;
