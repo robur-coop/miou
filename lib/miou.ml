@@ -895,15 +895,17 @@ module Pool = struct
 
   let wait pool =
     let exception Exit in
-    Mutex.lock pool.mutex;
     try
       let working_domains () =
         !(pool.working_counter) > 0 && not !(pool.stop)
       in
       let all_domains () = !(pool.stop) && !(pool.domains_counter) > 0 in
       while true do
-        if working_domains () || all_domains () then
-          Condition.wait pool.condition_all_idle pool.mutex
+        Mutex.lock pool.mutex;
+        if working_domains () || all_domains () then begin
+          Condition.wait pool.condition_all_idle pool.mutex;
+          Mutex.unlock pool.mutex
+        end
         else raise_notrace Exit
       done
     with Exit -> Mutex.unlock pool.mutex
