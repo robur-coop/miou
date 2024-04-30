@@ -286,6 +286,43 @@ let[@coverage off] _pp_domain_elt ppf = function
       Fmt.pf ppf "@[<1>(Domain_signal@ %a:%d)@]" Promise.pp prm signal
   | Domain_tick _ -> .
 
+let add_into_domain domain elt =
+  let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
+  miou_assert (Domain_uid.equal runner domain.uid);
+  let tick = Atomic.fetch_and_add domain.tick 1 in
+  Heapq.insert (tick, elt) domain.tasks
+
+let transfer_dom0_tasks pool =
+  if not (Queue.is_empty pool.to_dom0) then
+    let elts = Queue.(to_list (transfer pool.to_dom0)) in
+    let f = function
+      | Dom0_continue { prm; result; k } ->
+          let state = State.suspended_with k (Get result) in
+          Domain_task (prm, state)
+      | Dom0_clean (prm, child) -> Domain_clean (prm, child)
+      | Dom0_transfer (prm, res, trigger) -> Domain_transfer (prm, res, trigger)
+    in
+    List.iter (add_into_domain pool.dom0) (List.map f elts)
+
+type signal_retrieved =
+  | Signal_retrieved : int * (int -> unit) -> signal_retrieved
+
+let signals = Queue.create ()
+
+let transfer_dom0_signals pool =
+  if not (Queue.is_empty signals) then begin
+    let elts = Queue.(to_list (transfer signals)) in
+    let f (Signal_retrieved (signal, fn)) =
+      let prm = Promise.create ~forbid:true pool.dom0.uid in
+      let state = State.make fn signal in
+      Domain_signal (prm, signal, state)
+    in
+    Logs.debug (fun m ->
+        m "[%a] transfers %d system signal(s)" Domain_uid.pp pool.dom0.uid
+          (List.length elts));
+    List.iter (add_into_domain pool.dom0) (List.map f elts)
+  end
+
 module Domain = struct
   module Uid = Domain_uid
 
@@ -334,12 +371,7 @@ module Domain = struct
      to [dom0]. In other words, [add_into_domain] is intra-domain communication,
      whereas [add_into_pool] and [add_into_dom0] are inter-domain communication.
   *)
-
-  let add_into_domain domain elt =
-    let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
-    miou_assert (Domain_uid.equal runner domain.uid);
-    let tick = Atomic.fetch_and_add domain.tick 1 in
-    Heapq.insert (tick, elt) domain.tasks
+  let add_into_domain = add_into_domain
 
   let add_into_pool pool elt =
     Mutex.lock pool.mutex;
@@ -722,7 +754,11 @@ module Domain = struct
       ignore (Computation.try_cancel prm.state (exn, bt));
       add_into_domain domain (Domain_cancel (prm, bt))
 
-  let unblock_awaits_with_system_events (domain : domain) =
+  let synchronize_dom0_tasks pool =
+    transfer_dom0_tasks pool; transfer_dom0_signals pool
+
+  let unblock_awaits_with_system_events pool (domain : domain) =
+    if (Stdlib.Domain.self () :> int) == 0 then synchronize_dom0_tasks pool;
     let block = Heapq.size domain.tasks = 0 in
     let cancelled = Queue.(to_list (transfer domain.cancelled_syscalls)) in
     let syscalls = domain.events.select ~block cancelled in
@@ -749,13 +785,13 @@ module Domain = struct
     match Heapq.extract_min_exn domain.tasks with
     | exception Heapq.Empty ->
         if system_events_suspended domain then
-          unblock_awaits_with_system_events domain
+          unblock_awaits_with_system_events pool domain
     | _, elt ->
         Logs.debug (fun m ->
             m "[%a] does %a" Domain_uid.pp domain.uid _pp_domain_elt elt);
         once pool domain elt;
         if system_events_suspended domain then
-          unblock_awaits_with_system_events domain
+          unblock_awaits_with_system_events pool domain
 
   let self () =
     let { uid; _ } = Effect.perform Self_domain in
@@ -1286,21 +1322,6 @@ let domains =
   | Some str -> ( try int_of_string str with _ -> Pool.number_of_domains ())
   | None -> Pool.number_of_domains ()
 
-let transfer_dom0_tasks pool =
-  if not (Queue.is_empty pool.to_dom0) then
-    let elts = Queue.(to_list (transfer pool.to_dom0)) in
-    let f = function
-      | Dom0_continue { prm; result; k } ->
-          let state = State.suspended_with k (Get result) in
-          Domain_task (prm, state)
-      | Dom0_clean (prm, child) -> Domain_clean (prm, child)
-      | Dom0_transfer (prm, res, trigger) -> Domain_transfer (prm, res, trigger)
-    in
-    List.iter (Domain.add_into_domain pool.dom0) (List.map f elts)
-
-type signal_retrieved =
-  | Signal_retrieved : int * (int -> unit) -> signal_retrieved
-
 let error_select =
   "Your program is waiting for a system event when you are using Miou.run \
    (which does not handle system events). You should use Miou_unix.run if you \
@@ -1317,22 +1338,6 @@ let () =
 let dummy_events =
   let select ~block:_ _ = raise No_select_provided in
   { select; interrupt= Fun.const () }
-
-let signals = Queue.create ()
-
-let transfer_dom0_signals pool =
-  if not (Queue.is_empty signals) then begin
-    let elts = Queue.(to_list (transfer signals)) in
-    let f (Signal_retrieved (signal, fn)) =
-      let prm = Promise.create ~forbid:true pool.dom0.uid in
-      let state = State.make fn signal in
-      Domain_signal (prm, signal, state)
-    in
-    Logs.debug (fun m ->
-        m "[%a] transfers %d system signal(s)" Domain_uid.pp pool.dom0.uid
-          (List.length elts));
-    List.iter (Domain.add_into_domain pool.dom0) (List.map f elts)
-  end
 
 let sys_signal signal = function
   | (Sys.Signal_default | Sys.Signal_ignore) as behavior ->
