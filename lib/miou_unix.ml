@@ -70,8 +70,17 @@ let clean domain uids =
   in
   Heapq.iter clean domain.sleepers
 
+let rec drop_heapq heapq =
+  try Heapq.delete_min_exn heapq; drop_heapq heapq with _ -> ()
+
 let domain =
-  let make () =
+  let rec split_from_parent v =
+    File_descrs.clear v.readers;
+    File_descrs.clear v.writers;
+    drop_heapq v.sleepers;
+    Hashtbl.clear v.revert;
+    make ()
+  and make () =
     {
       readers= File_descrs.create 0x100
     ; writers= File_descrs.create 0x100
@@ -79,7 +88,7 @@ let domain =
     ; revert= Hashtbl.create 0x100
     }
   in
-  let key = Stdlib.Domain.DLS.new_key make in
+  let key = Stdlib.Domain.DLS.new_key ~split_from_parent make in
   fun () -> Stdlib.Domain.DLS.get key
 
 let append tbl fd syscall =
