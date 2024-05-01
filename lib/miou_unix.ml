@@ -114,14 +114,14 @@ let blocking_write fd =
   append domain.writers fd syscall;
   Miou.suspend syscall
 
-let rec read ({ fd; non_blocking } as file_descr) ?(off = 0) ?len buf =
-  let len = Option.value ~default:(Bytes.length buf - off) len in
+let rec unsafe_read ({ fd; non_blocking } as file_descr) off len buf =
   if non_blocking then
     match Unix.read fd buf off len with
-    | exception Unix.(Unix_error (EINTR, _, _)) -> read file_descr buf ~off ~len
+    | exception Unix.(Unix_error (EINTR, _, _)) ->
+        unsafe_read file_descr off len buf
     | exception Unix.(Unix_error ((EAGAIN | EWOULDBLOCK), _, _)) ->
         blocking_read fd;
-        read file_descr buf ~off ~len
+        unsafe_read file_descr off len buf
     | value -> value
   else
     let rec go () =
@@ -131,33 +131,50 @@ let rec read ({ fd; non_blocking } as file_descr) ?(off = 0) ?len buf =
     in
     blocking_read fd; go ()
 
-let rec really_read file_descr ?(off = 0) ?len buf =
+let read file_descr ?(off= 0) ?len buf =
   let len = Option.value ~default:(Bytes.length buf - off) len in
-  let len' = read file_descr ~off ~len buf in
-  if len - len' > 0 then
-    really_read file_descr ~off:(off + len') ~len:(len - len') buf
+  if off < 0 || len < 0 || off > Bytes.length buf - len
+  then invalid_arg "Miou_unix.read";
+  unsafe_read file_descr off len buf
 
-let rec write ({ fd; non_blocking } as file_descr) ?(off = 0) ?len str =
-  let len = Option.value ~default:(String.length str - off) len in
+let rec really_read_go file_descr off len buf =
+  let len' = unsafe_read file_descr off len buf in
+  if len' == 0 then raise End_of_file
+  else if len - len' > 0 then
+    really_read_go file_descr (off + len') (len - len') buf
+
+let really_read file_descr ?(off = 0) ?len buf =
+  let len = Option.value ~default:(Bytes.length buf - off) len in
+  if off < 0 || len < 0 || off > Bytes.length buf - len
+  then invalid_arg "Miou_unix.really_read";
+  if len > 0 then really_read_go file_descr off len buf
+
+let rec unsafe_write ({ fd; non_blocking } as file_descr) off len str =
   if non_blocking then
     match Unix.write fd (Bytes.unsafe_of_string str) off len with
     | exception Unix.(Unix_error (EINTR, _, _)) ->
-        write file_descr ~off ~len str
+        unsafe_write file_descr off len str
     | exception Unix.(Unix_error ((EAGAIN | EWOULDBLOCK), _, _)) ->
         blocking_write fd;
-        write file_descr ~off ~len str
+        unsafe_write file_descr off len str
     | len' when len' < len ->
-        write file_descr ~off:(off + len') ~len:(len - len') str
+        unsafe_write file_descr (off + len') (len - len') str
     | _ -> ()
   else
     let rec go () =
       match Unix.write fd (Bytes.unsafe_of_string str) off len with
       | exception Unix.(Unix_error (EINTR, _, _)) -> go ()
       | len' when len' < len ->
-          write file_descr ~off:(off + len') ~len:(len - len') str
+          unsafe_write file_descr (off + len') (len - len') str
       | _ -> ()
     in
     blocking_write fd; go ()
+
+let write file_descr ?(off= 0) ?len str =
+  let len = Option.value ~default:(String.length str - off) len in
+  if off < 0 || len < 0 || off > String.length str - len
+  then invalid_arg "Miou_unix.write";
+  unsafe_write file_descr off len str
 
 let rec accept ?cloexec ({ fd; non_blocking } as file_descr) =
   if non_blocking then (

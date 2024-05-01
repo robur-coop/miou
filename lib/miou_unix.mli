@@ -42,17 +42,26 @@ val read : file_descr -> ?off:int -> ?len:int -> bytes -> int
 
     @raise Unix_error raised by the system call {!val:Unix.read}. The function
     handles {!val:Unix.EINTR}, {!val:Unix.EAGAIN} and {!val:Unix.EWOULDBLOCK}
-    exceptions and redo the system call. *)
+    exceptions and redo the system call.
+
+    @raise Invalid_argument if [off] and [len] do not designate a valid range of
+    [buf] *)
 
 val really_read : file_descr -> ?off:int -> ?len:int -> bytes -> unit
 (** [really_read fd buf ~off ~len] reads [len] bytes (defaults to
     [Bytes.length buf - off]) from the given file-descriptor [fd], storing them
     in byte sequence [buf], starting at position [off] in [buf] (defaults to
-    [0]).
+    [0]). If [len = 0], [really_read] does nothing.
 
     @raise Unix_error raised by the system call {!val:Unix.read}. The function
     handles {!val:Unix.EINTR}, {!val:Unix.EAGAIN} and {!val:Unix.EWOULDBLOCK}
-    exceptions and redo the system call. *)
+    exceptions and redo the system call.
+
+    @raise End_of_file if {!val:Unix.read} returns [0] before [len] characters
+    have been read.
+
+    @raise Invalid_argument if [off] and [len] do not designate a valid range of
+    [buf] *)
 
 val write : file_descr -> ?off:int -> ?len:int -> string -> unit
 (** [write fd str ~off ~len] writes [len] bytes (defaults to
@@ -61,7 +70,10 @@ val write : file_descr -> ?off:int -> ?len:int -> string -> unit
 
     @raise Unix_error raised by the system call {!val:Unix.read}. The function
     handles {!val:Unix.EINTR}, {!val:Unix.EAGAIN} and {!val:Unix.EWOULDBLOCK}
-    exceptions and redo the system call. *)
+    exceptions and redo the system call.
+
+    @raise Invalid_argument if [off] and [len] do not designate a valid range of
+    [buf] *)
 
 val close : file_descr -> unit
 (** [close fd] closes properly the given [fd]. *)
