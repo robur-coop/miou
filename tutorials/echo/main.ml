@@ -25,39 +25,48 @@ let handler fd () =
   in
   go (Bytes.create 0x100)
 
-let rec stop (m, c, v) =
-  let value =
-    Miou.Mutex.protect m @@ fun () ->
-    while !v = false do
-      Miou.Condition.wait c m
-    done;
-    !v
-  in
-  if not value then stop (m, c, v) else `Stop
+let stop (m, c, v) =
+  Miou.Mutex.protect m @@ fun () ->
+  while !v = false do
+    Miou.Condition.wait c m
+  done
+
+exception Stop
 
 let accept_or_stop v fd =
   let accept () =
-    let fd, sockaddr = Miou_unix.Ownership.accept fd in
+    let fd', sockaddr = Miou_unix.Ownership.accept fd in
     Miou.Ownership.transfer (Miou_unix.Ownership.resource fd);
-    `Accept (fd, sockaddr)
+    Miou.Ownership.transfer (Miou_unix.Ownership.resource fd');
+    (fd', sockaddr)
   in
-  Miou.await_first
-    [
-      Miou.call_cc (fun () -> stop v)
-    ; Miou.call_cc ~give:[ Miou_unix.Ownership.resource fd ] accept
-    ]
-  |> Result.get_ok
+  match
+    Miou.await_first
+      [
+        Miou.call_cc (fun () -> stop v; raise Stop)
+      ; Miou.call_cc ~give:[ Miou_unix.Ownership.resource fd ] accept
+      ]
+  with
+  | Error Stop -> `Stop
+  | Ok (fd, addr) -> `Accept (fd, addr)
+  | Error exn -> raise exn
 
 let rec clean_up orphans =
   match Miou.care orphans with
   | None | Some None -> ()
   | Some (Some prm) -> Miou.await_exn prm; clean_up orphans
 
+let rec terminate orphans =
+  match Miou.care orphans with
+  | None -> ()
+  | Some None -> Miou.yield ()
+  | Some (Some prm) -> Miou.await_exn prm; terminate orphans
+
 let server (stop, sockaddr) =
   let rec go orphans fd =
     clean_up orphans;
     match accept_or_stop stop fd with
-    | `Stop -> ()
+    | `Stop -> terminate orphans
     | `Accept (fd', _) ->
         let _ =
           Miou.call
