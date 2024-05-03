@@ -131,10 +131,10 @@ let rec unsafe_read ({ fd; non_blocking } as file_descr) off len buf =
     in
     blocking_read fd; go ()
 
-let read file_descr ?(off= 0) ?len buf =
+let read file_descr ?(off = 0) ?len buf =
   let len = Option.value ~default:(Bytes.length buf - off) len in
-  if off < 0 || len < 0 || off > Bytes.length buf - len
-  then invalid_arg "Miou_unix.read";
+  if off < 0 || len < 0 || off > Bytes.length buf - len then
+    invalid_arg "Miou_unix.read";
   unsafe_read file_descr off len buf
 
 let rec really_read_go file_descr off len buf =
@@ -145,8 +145,8 @@ let rec really_read_go file_descr off len buf =
 
 let really_read file_descr ?(off = 0) ?len buf =
   let len = Option.value ~default:(Bytes.length buf - off) len in
-  if off < 0 || len < 0 || off > Bytes.length buf - len
-  then invalid_arg "Miou_unix.really_read";
+  if off < 0 || len < 0 || off > Bytes.length buf - len then
+    invalid_arg "Miou_unix.really_read";
   if len > 0 then really_read_go file_descr off len buf
 
 let rec unsafe_write ({ fd; non_blocking } as file_descr) off len str =
@@ -170,10 +170,10 @@ let rec unsafe_write ({ fd; non_blocking } as file_descr) off len str =
     in
     blocking_write fd; go ()
 
-let write file_descr ?(off= 0) ?len str =
+let write file_descr ?(off = 0) ?len str =
   let len = Option.value ~default:(String.length str - off) len in
-  if off < 0 || len < 0 || off > String.length str - len
-  then invalid_arg "Miou_unix.write";
+  if off < 0 || len < 0 || off > String.length str - len then
+    invalid_arg "Miou_unix.write";
   unsafe_write file_descr off len str
 
 let rec accept ?cloexec ({ fd; non_blocking } as file_descr) =
