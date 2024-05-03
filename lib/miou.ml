@@ -796,6 +796,8 @@ module Domain = struct
   let self () =
     let { uid; _ } = Effect.perform Self_domain in
     uid
+
+  let available () = List.length (Effect.perform Domains)
 end
 
 module Clatch = struct

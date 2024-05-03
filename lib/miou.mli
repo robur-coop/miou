@@ -487,6 +487,7 @@ module Domain : sig
   end
 
   val self : unit -> Uid.t
+  val available : unit -> int
 end
 
 type 'a t
