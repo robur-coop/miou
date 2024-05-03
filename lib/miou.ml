@@ -527,7 +527,10 @@ module Domain = struct
       | Await_cancellation child as await ->
           if
             Promise.is_running child = false
-            && Sequence.is_empty child.children
+            (* XXX(dinosaure): [&& Sequence.is_empty child.children] is an
+               invalid access spotted by TSan. The goal of this check is to be
+               sure that children of our [child] are cancelled too. However,
+               [child.cleaned] should be enough. *)
             && Atomic.get child.cleaned
           then k (Operation.return (clean_children ~self:prm child))
           else k (Operation.continue await)
@@ -685,8 +688,11 @@ module Domain = struct
             handle pool domain prm state
         | Some (exn, bt) ->
             let state = State.fail ~backtrace:bt ~exn state in
-            Atomic.set prm.cleaned true;
-            handle pool domain prm state)
+            if Sequence.is_empty prm.children then begin
+              Atomic.set prm.cleaned true;
+              handle pool domain prm state
+            end
+            else add_into_domain domain (Domain_task (prm, state)))
     | Domain_clean (prm, child) -> clean_children ~self:prm child
     | Domain_transfer (prm, res, trigger) ->
         Sequence.(add Left) prm.resources res;
@@ -730,14 +736,15 @@ module Domain = struct
           | None ->
               ()
         in
-        Atomic.set prm.cleaned true;
         Logs.debug (fun m ->
             m "[%a] clean-up children (%a) of %a" Domain_uid.pp domain.uid
               Promise.pp prm
               Fmt.(Dump.option Promise.pp_pack)
               prm.parent);
-        if Sequence.is_empty prm.children then
-          signal_to_clean_children pool domain prm
+        if Sequence.is_empty prm.children then begin
+          signal_to_clean_children pool domain prm;
+          Atomic.set prm.cleaned true
+        end
         else add_into_domain domain cancellation
 
   let signal_system_events domain (Signal (trigger, prm)) =
@@ -1569,6 +1576,8 @@ module Mutex = struct
       Atomic.get t == Unlocked
       || Atomic.compare_and_set t Unlocked locked_nothing
 
+  let inhibit fn = try fn () with _ -> ()
+
   let protect t fn =
     try
       let (Pack self) = Effect.perform Self in
@@ -1579,7 +1588,12 @@ module Mutex = struct
           value
       | exception exn ->
           let bt = Printexc.get_raw_backtrace () in
-          unlock_as t (Some self) Backoff.default;
+          (* NOTE(dinosaure): we must inhibit exceptions from [unlock_as]. In
+             the cancellation case, [fn] didn't probably re-lock the mutex (and
+             that's what's intended). So, [unlock_as] can raise another
+             exception [Sys_error "Mutex: unlocked"] but [exn] is more important
+             to reraise. *)
+          inhibit (fun () -> unlock_as t (Some self) Backoff.default);
           Printexc.raise_with_backtrace exn bt
     with Effect.Unhandled Self -> (
       lock_as t None Backoff.default;
@@ -1589,7 +1603,7 @@ module Mutex = struct
           value
       | exception exn ->
           let bt = Printexc.get_raw_backtrace () in
-          unlock_as t None Backoff.default;
+          inhibit (fun () -> unlock_as t None Backoff.default);
           Printexc.raise_with_backtrace exn bt)
 
   type t = state Atomic.t
@@ -1676,14 +1690,13 @@ module Condition = struct
     in
     if Atomic.compare_and_set t seen after then begin
       let on_cancellation () = cleanup Backoff.default trigger t in
-      let finally ~cancelled =
-        let forbid = Promise.exchange prm ~forbid:true in
-        if not cancelled then Mutex.lock_as mutex (Some prm) Backoff.default;
-        Promise.set prm ~forbid
-      in
+      let finally ~cancelled:_ = () in
       Mutex.unlock_as mutex (Some prm) Backoff.default;
       protect ~finally ~on_cancellation @@ fun () ->
-      ignore (Trigger.await trigger)
+      let _result = Trigger.await trigger in
+      let forbid = Promise.exchange prm ~forbid:true in
+      Mutex.lock_as mutex (Some prm) Backoff.default;
+      Promise.set prm ~forbid
     end
     else wait (Backoff.once backoff) prm trigger t mutex
 
