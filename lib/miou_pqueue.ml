@@ -1,5 +1,7 @@
 [@@@ocamlformat "disable"]
 
+module Vector = Miou_vector
+
 (********************************************************************)
 (*                                                                  *)
 (*  The Why3 Verification Platform   /   The Why3 Development Team  *)

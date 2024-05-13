@@ -1,5 +1,5 @@
 (rule
- (copy# ../../lib/sync.ml sync.ml))
+ (copy# ../../lib/miou_sync.ml sync.ml))
 
 (executable
  (name test_sync)

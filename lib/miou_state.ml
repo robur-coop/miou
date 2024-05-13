@@ -1,3 +1,6 @@
+module Fmt = Miou_fmt
+module Logs = Miou_logs
+
 type ('a, 'b) continuation = ('a, 'b) Effect.Shallow.continuation
 type error = exn * Printexc.raw_backtrace
 
