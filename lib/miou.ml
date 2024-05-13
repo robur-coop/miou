@@ -306,6 +306,47 @@ let[@coverage off] _pp_domain_elt ppf = function
       Fmt.pf ppf "@[<1>(Domain_signal@ %a:%d)@]" Promise.pp prm signal
   | Domain_tick _ -> .
 
+module Trace = struct
+  let trace = Option.is_some (Sys.getenv_opt "MIOU_TRACE")
+
+  open Miou_runtime_events
+
+  let event : type a. a Runtime_events.User.t -> (unit -> a) -> unit =
+   fun k fn -> if trace then Runtime_events.User.write k (fn ())
+
+  let spawn k (prm : _ t) =
+    let parent =
+      match prm.parent with
+      | None -> Promise_uid.(to_int null)
+      | Some (Pack parent) -> Promise_uid.to_int parent.uid
+    in
+    let runner = Domain_uid.to_int prm.runner in
+    let uid = Promise_uid.to_int prm.uid in
+    event spawn @@ fun () ->
+    let resources = Miou_sequence.length prm.resources in
+    { k; resources; uid; parent; runner }
+
+  let await (prm : _ t) =
+    let runner = Domain_uid.to_int prm.runner in
+    let uid = Promise_uid.to_int prm.uid in
+    event await @@ fun () -> { uid; runner }
+
+  let cancel (prm : _ t) =
+    let runner = Domain_uid.to_int prm.runner in
+    let uid = Promise_uid.to_int prm.uid in
+    event cancel @@ fun () -> { uid; runner }
+
+  let resume (prm : _ t) =
+    let runner = Domain_uid.to_int prm.runner in
+    let uid = Promise_uid.to_int prm.uid in
+    event resume @@ fun () -> { uid; runner }
+
+  let cancelled (prm : _ t) =
+    let runner = Domain_uid.to_int prm.runner in
+    let uid = Promise_uid.to_int prm.uid in
+    event cancelled @@ fun () -> { uid; runner }
+end
+
 let add_into_domain domain elt =
   let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
   miou_assert (Domain_uid.equal runner domain.uid);
@@ -531,6 +572,7 @@ module Domain = struct
           let prm' = Promise.create ~parent:prm ~forbid ~resources domain.uid in
           canceller pool ~self:prm prm';
           Miou_sequence.(add Left) prm.children (Pack prm');
+          Trace.spawn `Concurrent prm';
           add_into_domain domain (Domain_create (prm', fn));
           k (Operation.return prm')
       | Spawn (Parallel runner, forbid, resources, fn) ->
@@ -538,10 +580,12 @@ module Domain = struct
           let prm' = Promise.create ~parent:prm ~forbid ~resources runner in
           canceller pool ~self:prm prm';
           Miou_sequence.(add Left) prm.children (Pack prm');
+          Trace.spawn `Parallel prm';
           add_into_pool pool (Pool_create (prm', fn));
           k (Operation.return prm')
       | Cancel (backtrace, child) ->
           cancel pool domain ~backtrace child;
+          Trace.cancel child;
           k (Operation.continue (Await_cancellation child))
       | Await_cancellation child as await ->
           if
@@ -551,7 +595,10 @@ module Domain = struct
                sure that children of our [child] are cancelled too. However,
                [child.cleaned] should be enough. *)
             && Atomic.get child.cleaned
-          then k (Operation.return (clean_children ~self:prm child))
+          then begin
+            Trace.cancelled child;
+            k (Operation.return (clean_children ~self:prm child))
+          end
           else k (Operation.continue await)
       | Transfer res ->
           let (Pack parent) = Option.get prm.parent in
@@ -571,6 +618,7 @@ module Domain = struct
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
     if not (Promise.has_forbidden prm) then Computation.detach prm.state trigger;
     let result = Computation.cancelled prm.state in
+    Trace.resume prm;
     if Domain_uid.equal runner domain.uid then
       let state = State.suspended_with k (Get result) in
       add_into_domain domain (Domain_task (prm, state))
@@ -686,6 +734,7 @@ module Domain = struct
             Atomic.set prm.cleaned true;
             handle pool domain prm state)
     | Domain_task (prm, State.Suspended (k, Trigger.Await trigger)) ->
+        Trace.await prm;
         await pool domain prm trigger k
     | Domain_signal (prm, _signal, State.Suspended (k, Trigger.Await trigger))
       ->
