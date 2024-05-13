@@ -2,13 +2,14 @@ type impossible = |
 
 external reraise : exn -> 'a = "%reraise"
 
-module Queue = Queue
-module State = State
-module Pqueue = Pqueue
-module Logs = Logs
-module Fmt = Fmt
-module Gen = Gen
-open Sync
+module Backoff = Miou_backoff
+module Queue = Miou_queue
+module State = Miou_state
+module Pqueue = Miou_pqueue
+module Logs = Miou_logs
+module Fmt = Miou_fmt
+module Gen = Miou_gen
+open Miou_sync
 module Trigger = Trigger
 module Computation = Computation
 module Promise_uid = Gen.Make ()
@@ -59,8 +60,8 @@ type 'a t = {
   ; mutable forbid: bool
   ; state: 'a Computation.t
   ; parent: pack option
-  ; children: pack Sequence.t
-  ; resources: resource Sequence.t
+  ; children: pack Miou_sequence.t
+  ; resources: resource Miou_sequence.t
   ; mutable cancelled: (exn * Printexc.raw_backtrace) option
   ; cleaned: bool Atomic.t
 }
@@ -71,15 +72,15 @@ module Promise = struct
   module Uid = Promise_uid
 
   let create ?parent ~forbid ?resources:(ress = []) runner =
-    let resources = Sequence.create () in
-    List.iter Sequence.(add Left resources) ress;
+    let resources = Miou_sequence.create () in
+    List.iter Miou_sequence.(add Left resources) ress;
     {
       uid= Promise_uid.gen ()
     ; runner
     ; forbid
     ; state= Computation.create ()
     ; parent= Option.map (fun prm -> Pack prm) parent
-    ; children= Sequence.create ()
+    ; children= Miou_sequence.create ()
     ; resources
     ; cancelled= None
     ; cleaned= Atomic.make false
@@ -91,7 +92,7 @@ module Promise = struct
 
   let[@coverage off] pp_pack ppf (Pack prm) = pp ppf prm
   let has_forbidden { forbid; _ } = forbid
-  let children_terminated prm = Sequence.is_empty prm.children
+  let children_terminated prm = Miou_sequence.is_empty prm.children
   let is_running { state; _ } = Computation.is_running state
   let uid { uid; _ } = uid
   let set t ~forbid = t.forbid <- forbid
@@ -107,7 +108,7 @@ module Promise = struct
   type nonrec 'a t = 'a t
 end
 
-exception Clean_children of pack Sequence.node
+exception Clean_children of pack Miou_sequence.node
 
 (* - the domain which runs this function **must** be the runner of [self].
    - [self] is **probably** the parent of [child] but, in some situation,
@@ -115,7 +116,7 @@ exception Clean_children of pack Sequence.node
      created and used in [await_{first,one}]. From our previous assertion, even
      if [self] is not the parent of [child], we can safely execute this code.
    - we prevent the case where [self] is not the parent of [child], and undoes
-     an unnecessary iteration ([Sequence.iter_node])
+     an unnecessary iteration ([Miou_sequence.iter_node])
 *)
 let clean_children ~self (child : _ t) =
   let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
@@ -123,14 +124,14 @@ let clean_children ~self (child : _ t) =
   Logs.debug (fun m ->
       m "[%a] clean %a into %a" Domain_uid.pp runner Promise.pp child Promise.pp
         self);
-  let f (Sequence.{ data= Pack prm; _ } as node) =
+  let f (Miou_sequence.{ data= Pack prm; _ } as node) =
     if Promise_uid.equal child.uid prm.uid then
       raise_notrace (Clean_children node)
   in
   let some (Pack prm) = Promise_uid.equal self.uid prm.uid in
   if Option.fold ~none:false ~some child.parent then
-    try Sequence.iter_node ~f self.children
-    with Clean_children node -> Sequence.remove node
+    try Miou_sequence.iter_node ~f self.children
+    with Clean_children node -> Miou_sequence.remove node
 
 type syscall = Syscall : Syscall_uid.t * Trigger.t * _ t -> syscall
 type signal = Signal : Trigger.t * _ t -> signal
@@ -179,7 +180,7 @@ type domain = {
   ; events: events
   ; cancelled_syscalls: Syscall_uid.t Queue.t
   ; syscalls: int Atomic.t
-  ; hooks: (unit -> unit) Sequence.t
+  ; hooks: (unit -> unit) Miou_sequence.t
 }
 
 type 'r continuation = (State.error option, 'r) State.continuation
@@ -214,7 +215,7 @@ type dom0_elt =
   | Dom0_transfer : _ t * resource * Trigger.t -> dom0_elt
 
 type pool = {
-    tasks: pool_elt Sequence.t
+    tasks: pool_elt Miou_sequence.t
   ; mutex: Mutex.t
   ; condition_pending_work: Condition.t
   ; condition_all_idle: Condition.t
@@ -337,7 +338,7 @@ module Domain = struct
     ; events= events uid
     ; syscalls= Atomic.make 0
     ; cancelled_syscalls= Queue.create ()
-    ; hooks= Sequence.create ()
+    ; hooks= Miou_sequence.create ()
     }
 
   let interrupt pool ~domain:uid =
@@ -376,9 +377,11 @@ module Domain = struct
   let add_into_pool pool elt =
     Mutex.lock pool.mutex;
     let direction =
-      match elt with Pool_cancel _ -> Sequence.Left | _ -> Sequence.Right
+      match elt with
+      | Pool_cancel _ -> Miou_sequence.Left
+      | _ -> Miou_sequence.Right
     in
-    Sequence.add direction pool.tasks elt;
+    Miou_sequence.add direction pool.tasks elt;
     Condition.broadcast pool.condition_pending_work;
     Mutex.unlock pool.mutex;
     let (Pack prm) = promise_of_pool_elt elt in
@@ -421,15 +424,15 @@ module Domain = struct
                   Domain_uid.pp domain.uid Resource_uid.pp uid Promise.pp prm
                   (Printexc.to_string exn))
         in
-        Sequence.iter ~f prm.resources;
-        Sequence.drop prm.resources;
+        Miou_sequence.iter ~f prm.resources;
+        Miou_sequence.drop prm.resources;
         let f (Pack prm) = cancel pool domain ~backtrace:bt prm in
-        Sequence.iter ~f prm.children;
+        Miou_sequence.iter ~f prm.children;
         ignore (Computation.try_cancel prm.state (exn, bt));
         interrupt_parent pool prm;
         miou_assert (Option.is_some (Computation.cancelled prm.state))
     | State.Finished (Ok value) ->
-        if Sequence.is_empty prm.resources = false then begin
+        if Miou_sequence.is_empty prm.resources = false then begin
           let f (Resource { uid; value; finaliser }) =
             try finaliser value
             with exn ->
@@ -440,8 +443,8 @@ module Domain = struct
                     Domain_uid.pp domain.uid Resource_uid.pp uid Promise.pp prm
                     (Printexc.to_string exn))
           in
-          Sequence.iter ~f prm.resources;
-          Sequence.drop prm.resources;
+          Miou_sequence.iter ~f prm.resources;
+          Miou_sequence.drop prm.resources;
           raise_notrace Resource_leaked
         end;
         if Promise.children_terminated prm = false then
@@ -484,15 +487,15 @@ module Domain = struct
 
   let clean_resources prm resources =
     let to_delete = ref [] in
-    let f ({ Sequence.data= Resource { uid; _ }; _ } as node) =
+    let f ({ Miou_sequence.data= Resource { uid; _ }; _ } as node) =
       if
         List.exists
           (fun (Resource { uid= uid'; _ }) -> Resource_uid.equal uid uid')
           resources
       then to_delete := node :: !to_delete
     in
-    Sequence.iter_node ~f prm.resources;
-    List.iter Sequence.remove !to_delete
+    Miou_sequence.iter_node ~f prm.resources;
+    List.iter Miou_sequence.remove !to_delete
 
   let perform : pool -> domain -> 'x t -> State.perform =
    fun pool domain prm ->
@@ -511,14 +514,14 @@ module Domain = struct
           clean_resources prm resources;
           let prm' = Promise.create ~parent:prm ~forbid ~resources domain.uid in
           canceller pool ~self:prm prm';
-          Sequence.(add Left) prm.children (Pack prm');
+          Miou_sequence.(add Left) prm.children (Pack prm');
           add_into_domain domain (Domain_create (prm', fn));
           k (Operation.return prm')
       | Spawn (Parallel runner, forbid, resources, fn) ->
           clean_resources prm resources;
           let prm' = Promise.create ~parent:prm ~forbid ~resources runner in
           canceller pool ~self:prm prm';
-          Sequence.(add Left) prm.children (Pack prm');
+          Miou_sequence.(add Left) prm.children (Pack prm');
           add_into_pool pool (Pool_create (prm', fn));
           k (Operation.return prm')
       | Cancel (backtrace, child) ->
@@ -527,7 +530,7 @@ module Domain = struct
       | Await_cancellation child as await ->
           if
             Promise.is_running child = false
-            (* XXX(dinosaure): [&& Sequence.is_empty child.children] is an
+            (* XXX(dinosaure): [&& Miou_sequence.is_empty child.children] is an
                invalid access spotted by TSan. The goal of this check is to be
                sure that children of our [child] are cancelled too. However,
                [child.cleaned] should be enough. *)
@@ -688,14 +691,14 @@ module Domain = struct
             handle pool domain prm state
         | Some (exn, bt) ->
             let state = State.fail ~backtrace:bt ~exn state in
-            if Sequence.is_empty prm.children then begin
+            if Miou_sequence.is_empty prm.children then begin
               Atomic.set prm.cleaned true;
               handle pool domain prm state
             end
             else add_into_domain domain (Domain_task (prm, state)))
     | Domain_clean (prm, child) -> clean_children ~self:prm child
     | Domain_transfer (prm, res, trigger) ->
-        Sequence.(add Left) prm.resources res;
+        Miou_sequence.(add Left) prm.resources res;
         Trigger.signal trigger
     | Domain_signal (prm, signal, state) -> (
         miou_assert (Domain_uid.equal prm.runner (Domain_uid.of_int 0));
@@ -741,7 +744,7 @@ module Domain = struct
               Promise.pp prm
               Fmt.(Dump.option Promise.pp_pack)
               prm.parent);
-        if Sequence.is_empty prm.children then begin
+        if Miou_sequence.is_empty prm.children then begin
           signal_to_clean_children pool domain prm;
           Atomic.set prm.cleaned true
         end
@@ -777,15 +780,15 @@ module Domain = struct
   let system_events_suspended domain = Atomic.get domain.syscalls > 0
 
   let run_hooks domain =
-    let apply ({ Sequence.data= fn; _ } as node) =
+    let apply ({ Miou_sequence.data= fn; _ } as node) =
       try fn ()
       with exn ->
         Logs.err (fun m ->
             m "[%a] a hook raised an exception: %s" Domain_uid.pp domain.uid
               (Printexc.to_string exn));
-        Sequence.remove node
+        Miou_sequence.remove node
     in
-    Sequence.iter_node ~f:apply domain.hooks
+    Miou_sequence.iter_node ~f:apply domain.hooks
 
   let run pool (domain : domain) =
     run_hooks domain;
@@ -837,7 +840,7 @@ module Pool = struct
       if Domain_uid.equal prm.runner domain.uid then raise_notrace Yes
     in
     try
-      Sequence.iter ~f pool.tasks;
+      Miou_sequence.iter ~f pool.tasks;
       false
     with Yes -> true
 
@@ -848,13 +851,13 @@ module Pool = struct
 
   let transfer_all_tasks (pool : pool) (domain : domain) =
     let nodes = ref [] in
-    let f ({ Sequence.data; _ } as node) =
+    let f ({ Miou_sequence.data; _ } as node) =
       let (Pack prm) = promise_of_pool_elt data in
       if Domain_uid.equal prm.runner domain.uid then nodes := node :: !nodes
     in
-    Sequence.iter_node ~f pool.tasks;
-    let f ({ Sequence.data; _ } as node) =
-      Sequence.remove node;
+    Miou_sequence.iter_node ~f pool.tasks;
+    let f ({ Miou_sequence.data; _ } as node) =
+      Miou_sequence.remove node;
       match data with
       | Pool_create (prm, fn) -> Domain_create (prm, fn)
       | Pool_cancel (prm, bt) -> Domain_cancel (prm, bt)
@@ -934,7 +937,7 @@ module Pool = struct
       ?domains:(domains_counter = number_of_domains ()) ~events () =
     let pool =
       {
-        tasks= Sequence.create ()
+        tasks= Miou_sequence.create ()
       ; mutex= Mutex.create ()
       ; condition_pending_work= Condition.create ()
       ; condition_all_idle= Condition.create ()
@@ -977,7 +980,7 @@ module Ownership = struct
         m "[%a] checks if [%a] is owned by %a" Domain_uid.pp self.runner
           Resource_uid.pp uid Promise.pp self);
     let equal (Resource { uid= uid'; _ }) = Resource_uid.equal uid uid' in
-    if Sequence.exists equal self.resources = false then raise Not_owner
+    if Miou_sequence.exists equal self.resources = false then raise Not_owner
 
   let own (Resource { uid; _ } as res) =
     let (Pack self) = Effect.perform Self in
@@ -985,22 +988,22 @@ module Ownership = struct
         m "[%a] adds [%a] into %a" Domain_uid.pp self.runner Resource_uid.pp uid
           Promise.pp self);
     let equal (Resource { uid= uid'; _ }) = Resource_uid.equal uid uid' in
-    if Sequence.exists equal self.resources then
+    if Miou_sequence.exists equal self.resources then
       invalid_arg "The current promise already holds the resource given"
-    else Sequence.(add Left) self.resources res
+    else Miou_sequence.(add Left) self.resources res
 
-  exception Found_resource of resource Sequence.node
+  exception Found_resource of resource Miou_sequence.node
 
   let disown (Resource { uid; _ }) =
     let (Pack self) = Effect.perform Self in
     let equal (Resource { uid= uid'; _ }) = Resource_uid.equal uid uid' in
     try
-      let f ({ Sequence.data; _ } as node) =
+      let f ({ Miou_sequence.data; _ } as node) =
         if equal data then raise_notrace (Found_resource node)
       in
-      Sequence.iter_node ~f self.resources;
+      Miou_sequence.iter_node ~f self.resources;
       raise Not_owner
-    with Found_resource node -> Sequence.remove node
+    with Found_resource node -> Miou_sequence.remove node
 
   let transfer (Resource { uid; _ } as res) =
     let (Pack self) = Effect.perform Self in
@@ -1010,10 +1013,10 @@ module Ownership = struct
          resource";
     let equal (Resource { uid= uid'; _ }) = Resource_uid.equal uid uid' in
     try
-      let f ({ Sequence.data; _ } as node) =
+      let f ({ Miou_sequence.data; _ } as node) =
         if equal data then raise_notrace (Found_resource node)
       in
-      Sequence.iter_node ~f self.resources;
+      Miou_sequence.iter_node ~f self.resources;
       raise Not_owner
     with Found_resource node -> (
       Logs.debug (fun m ->
@@ -1021,20 +1024,20 @@ module Ownership = struct
             Resource_uid.pp uid);
       let (Pack parent) = Option.get self.parent in
       if Domain_uid.equal self.runner parent.runner then
-        let () = Sequence.(add Left) parent.resources res in
-        Sequence.remove node
+        let () = Miou_sequence.(add Left) parent.resources res in
+        Miou_sequence.remove node
       else
         let trigger = Effect.perform (Transfer res) in
         match Trigger.await trigger with
-        | None -> Sequence.remove node
+        | None -> Miou_sequence.remove node
         | Some (exn, bt) -> Printexc.raise_with_backtrace exn bt
-        | exception _ -> Sequence.remove node)
+        | exception _ -> Miou_sequence.remove node)
 end
 
 let call_cc ?(give = []) ?orphans fn =
   let prm = Effect.perform (Spawn (Concurrent, false, give, fn)) in
   Logs.debug (fun m -> m "%a spawned" Promise.pp prm);
-  Option.iter (fun s -> Sequence.(add Left) s prm) orphans;
+  Option.iter (fun s -> Miou_sequence.(add Left) s prm) orphans;
   prm
 
 let call ?(give = []) ?orphans fn =
@@ -1048,7 +1051,7 @@ let call ?(give = []) ?orphans fn =
     | lst -> List.nth lst (Random.State.int g (List.length lst))
   in
   let prm = Effect.perform (Spawn (Parallel runner, false, give, fn)) in
-  Option.iter (fun s -> Sequence.(add Left) s prm) orphans;
+  Option.iter (fun s -> Miou_sequence.(add Left) s prm) orphans;
   prm
 
 let await prm =
@@ -1287,39 +1290,39 @@ let signal (Syscall (_uid, trigger, prm)) =
 
 let uid (Syscall (uid, _, _)) = uid
 
-type 'a orphans = 'a t Sequence.t
+type 'a orphans = 'a t Miou_sequence.t
 
-let orphans () = Sequence.create ()
-let length = Sequence.length
+let orphans () = Miou_sequence.create ()
+let length = Miou_sequence.length
 
 let care : type a. a orphans -> a t option option =
  fun orphans ->
-  if Sequence.is_empty orphans then None
+  if Miou_sequence.is_empty orphans then None
   else
-    let exception Orphan of a t Sequence.node in
-    let f ({ Sequence.data= prm; _ } as node) =
+    let exception Orphan of a t Miou_sequence.node in
+    let f ({ Miou_sequence.data= prm; _ } as node) =
       if Computation.is_running prm.state = false then
         raise_notrace (Orphan node)
     in
     try
-      Sequence.iter_node ~f orphans;
+      Miou_sequence.iter_node ~f orphans;
       Some None
     with Orphan node ->
-      let prm = Sequence.data node in
-      Sequence.remove node; Some (Some prm)
+      let prm = Miou_sequence.data node in
+      Miou_sequence.remove node; Some (Some prm)
 
 module Hook = struct
-  type t = { uid: Domain.Uid.t; node: (unit -> unit) Sequence.node }
+  type t = { uid: Domain.Uid.t; node: (unit -> unit) Miou_sequence.node }
 
   let add fn =
     let domain = Effect.perform Self_domain in
-    Sequence.(add Left) domain.hooks fn;
-    let node = Sequence.(peek_node Left) domain.hooks in
+    Miou_sequence.(add Left) domain.hooks fn;
+    let node = Miou_sequence.(peek_node Left) domain.hooks in
     { uid= domain.uid; node }
 
   let remove hook =
     let domain = Effect.perform Self_domain in
-    if Domain.Uid.equal domain.uid hook.uid then Sequence.remove hook.node
+    if Domain.Uid.equal domain.uid hook.uid then Miou_sequence.remove hook.node
     else invalid_arg "The hook does not belong into the current domain"
 end
 
@@ -1782,7 +1785,7 @@ module Lazy = struct
 end
 
 module Sequence = struct
-  include Sequence
+  include Miou_sequence
 
   let add direction t value = add direction t value; peek_node direction t
 end

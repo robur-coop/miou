@@ -1,18 +1,30 @@
 (library
  (name backoff)
  (public_name miou.backoff)
- (modules backoff))
+ (wrapped false)
+ (modules miou_backoff))
 
 (library
  (name sync)
  (public_name miou.sync)
- (modules sync)
+ (wrapped false)
+ (modules miou_sync)
  (libraries miou.backoff))
 
 (library
  (name miou)
  (public_name miou)
- (modules fmt miou gen logs vector pqueue sequence queue state)
+ (wrapped false)
+ (modules
+  miou_fmt
+  miou
+  miou_gen
+  miou_logs
+  miou_vector
+  miou_pqueue
+  miou_sequence
+  miou_queue
+  miou_state)
  (instrumentation
   (backend bisect_ppx))
  (libraries miou.backoff miou.sync))
@@ -20,6 +32,7 @@
 (library
  (name miou_unix)
  (public_name miou.unix)
+ (wrapped false)
  (modules miou_unix)
  (libraries unix miou))
 

@@ -1,7 +1,8 @@
 #!/usr/bin/env ocaml
 
-#use "topfind"
+[@@@ocamlformat "disable"]
 
+#use "topfind"
 #require "topkg"
 
 open Topkg
@@ -12,7 +13,9 @@ let () =
   Pkg.describe ~opams:[ miou_opam ] "miou" @@ fun c ->
   Ok
     [
-      Pkg.mllib "lib/miou_backoff.mllib"; Pkg.mllib "lib/miou_sync.mllib"
-    ; Pkg.mllib "lib/miou.mllib"; Pkg.mllib "lib/miou_unix.mllib"
+      Pkg.mllib ~dst_dir:"backoff/" "lib/miou_backoff.mllib"
+    ; Pkg.mllib ~dst_dir:"sync/" "lib/miou_sync.mllib"
+    ; Pkg.mllib "lib/miou.mllib"
+    ; Pkg.mllib ~dst_dir:"unix/" "lib/miou_unix.mllib"
     ; Pkg.test ~dir:"test" "test/test_core"
     ]
