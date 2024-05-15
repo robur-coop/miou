@@ -546,7 +546,7 @@ module Domain = struct
           k (Operation.return trigger)
       | Trigger.Await _ -> k Operation.interrupt
       | Yield -> k Operation.yield
-      | effect -> k (Operation.perform effect)
+      | eff -> k (Operation.perform eff)
     in
     { perform }
 

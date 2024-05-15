@@ -27,7 +27,7 @@ let handler_continue =
   let open Effect.Shallow in
   let effc :
       type c. c Effect.t -> ((c, 'a) Effect.Shallow.continuation -> 'b) option =
-   fun effect -> Some (effc effect)
+   fun eff -> Some (effc eff)
   in
   { retc; exnc; effc }
 
