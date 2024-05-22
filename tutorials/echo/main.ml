@@ -43,8 +43,8 @@ let accept_or_stop v fd =
   match
     Miou.await_first
       [
-        Miou.call_cc (fun () -> stop v; raise Stop)
-      ; Miou.call_cc ~give:[ Miou_unix.Ownership.resource fd ] accept
+        Miou.async (fun () -> stop v; raise Stop)
+      ; Miou.async ~give:[ Miou_unix.Ownership.resource fd ] accept
       ]
   with
   | Error Stop -> `Stop
@@ -91,6 +91,6 @@ let () =
   let v = (Miou.Mutex.create (), Miou.Condition.create (), ref false) in
   ignore (Miou.sys_signal Sys.sigint (Sys.Signal_handle (stop v)));
   let servers = List.init 3 (Fun.const (v, localhost_3000)) in
-  let prm = Miou.call_cc @@ fun () -> server (v, localhost_3000) in
+  let prm = Miou.async @@ fun () -> server (v, localhost_3000) in
   ignore (Miou.parallel server servers);
   Miou.await_exn prm

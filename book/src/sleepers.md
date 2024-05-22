@@ -36,8 +36,8 @@ the one we need to implement.
 ```ocaml
 let program () =
   Chat.run @@ fun () ->
-  let a = Miou.call_cc @@ fun () -> Chat.sleep 1. in
-  let b = Miou.call_cc @@ fun () -> Chat.sleep 2. in
+  let a = Miou.async @@ fun () -> Chat.sleep 1. in
+  let b = Miou.async @@ fun () -> Chat.sleep 2. in
   Miou.await_all [ a; b ]
   |> List.iter @@ function
   | Ok () -> ()
@@ -201,7 +201,7 @@ let select ~block:_ _ =
   remove_and_signal_older sleepers []
 ```
 
-We can now safely replace our `Miou.call_cc` with `Miou.call`. We know that each
+We can now safely replace our `Miou.async` with `Miou.call`. We know that each
 task will have its own `sleepers`, and there will be no illegal access between
 domains.
 

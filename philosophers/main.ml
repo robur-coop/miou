@@ -88,7 +88,7 @@ let () =
   let sem = Array.init 5 (fun _ -> Semaphore.create 1) in
   let state = Array.init 5 (fun _ -> Thinking) in
   let sleep =
-    Miou.call_cc @@ fun () ->
+    Miou.async @@ fun () ->
     Miou_unix.sleep (Float.of_int ts);
     Array.iter Semaphore.release sem
   in
@@ -96,7 +96,7 @@ let () =
     List.init (Stdlib.Domain.recommended_domain_count () - 1) Fun.id
   in
   let philosophers =
-    Miou.call_cc @@ fun () ->
+    Miou.async @@ fun () ->
     ignore (Miou.parallel (philosopher sem state) philosophers)
   in
   Miou.await_first [ philosophers; sleep ] |> ignore

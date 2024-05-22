@@ -43,8 +43,8 @@ let () =
   let t0 = Unix.gettimeofday () in
   let () =
     Miou.run ~events @@ fun () ->
-    let a = Miou.call_cc (fun () -> sleep 1.) in
-    let b = Miou.call_cc (fun () -> sleep 2.) in
+    let a = Miou.async (fun () -> sleep 1.) in
+    let b = Miou.async (fun () -> sleep 2.) in
     Miou.await_all [ a; b ]
     |> List.iter @@ function Ok () -> () | Error exn -> raise exn
   in

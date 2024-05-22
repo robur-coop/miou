@@ -60,7 +60,7 @@ let perform = function
 let () =
   Miou.run @@ fun () ->
   let t0 = Bounded_stream.create 20 0 and t1 = Bounded_stream.create 30 0 in
-  let prm = Miou.call_cc @@ fun () -> consume t1 0 8000 in
+  let prm = Miou.async @@ fun () -> consume t1 0 8000 in
   let results =
     Miou.await prm
     :: Miou.parallel perform

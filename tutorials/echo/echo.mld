@@ -65,18 +65,18 @@ So we're going to give Miou the ability to suspend our [handler] in order to
 check whether {!val:Miou_unix.accept} is also waiting or whether a connection
 has just arrived.
 
-To specify an asynchronous task with Miou, we use {!val:Miou.call_cc}:
+To specify an asynchronous task with Miou, we use {!val:Miou.async}:
 
 {[
 let server sockaddr =
   let rec go prms fd =
     let fd', sockaddr = Miou_unix.accept fd in
-    let prm = Miou.call_cc (handler fd') in
+    let prm = Miou.async (handler fd') in
     go (prm :: prms) fd in
   go [] (listen sockaddr)
 ]}
 
-Using {!val:Miou.call_cc} returns a "promise". It's a kind of {i witness} for
+Using {!val:Miou.async} returns a "promise". It's a kind of {i witness} for
 our task that lets us know the status of it:
 - whether it is running
 - whether it has finished successfully
@@ -88,7 +88,7 @@ It is possible to manipulate this promise and wait for our task to finish:
 let server sockaddr =
   let rec go fd =
     let fd', sockaddr = Miou_unix.accept fd in
-    let prm = Miou.call_cc (handler fd') in
+    let prm = Miou.async (handler fd') in
     ignore (Miou.await_exn prm);
     go fd in
   go (listen sockaddr)
@@ -131,7 +131,7 @@ let server sockaddr =
   let rec go orphans fd =
     clean_up orphans;
     let fd', sockaddr = Miou_unix.accept fd in
-    let _ = Miou.call_cc ~orphans (handler fd') in
+    let _ = Miou.async ~orphans (handler fd') in
     go orphans fd in
   go (Miou.orphans ()) (listen sockaddr)
 ]}
@@ -159,7 +159,7 @@ that still causes problems.
 {2 Parallelism.}
 
 One of the big advantages of Miou is that it is easy to consider the
-parallelisation of a task. In this case, {!val:Miou.call_cc} can easily be
+parallelisation of a task. In this case, {!val:Miou.async} can easily be
 replaced by {!val:Miou.call}.
 
 {[
@@ -167,7 +167,7 @@ let server sockaddr =
   let rec go orphans fd =
     clean_up orphans;
     let fd', sockaddr = Miou_unix.accept fd in
-    let _ = Miou.call_cc ~orphans (handler fd') in
+    let _ = Miou.async ~orphans (handler fd') in
     go orphans fd in
   go (Miou.orphans ()) (listen sockaddr)
 ]}
@@ -186,14 +186,14 @@ let server sockaddr =
   let rec go orphans fd =
     clean_up orphans;
     let fd', sockaddr = Miou_unix.accept fd in
-    let _ = Miou.call_cc ~orphans (handler fd') in
+    let _ = Miou.async ~orphans (handler fd') in
     go orphans fd in
   go (Miou.orphans ()) (listen sockaddr)
 
 let addr = Unix.ADDR_INET (Unix.inet_addr_loopback, 9000)
 
 let () = Miou.run @@ fun () ->
-  let prm = Miou.call_cc @@ fun () -> server addr in
+  let prm = Miou.async @@ fun () -> server addr in
   Miou.parallel server
     (List.init (Miou.Domain.count ()) (Fun.const addr))
   |> List.iter (function Ok () -> () | Error exn -> raise exn);
