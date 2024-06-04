@@ -73,7 +73,7 @@
     {3 A task manager.}
 
     Miou is a task manager. In other words, it manages a list of to-do tasks
-    (which you can add to with {!val:call_cc}/{!val:call}) and allows the user
+    (which you can add to with {!val:async}/{!val:call}) and allows the user
     to manage these tasks. When a task is created, Miou gives the user a
     representation of the task: a promise {!type:t}.
 
@@ -88,7 +88,7 @@
 
     {[
       let digest filename =
-        Miou.call_cc @@ fun () ->
+        Miou.async @@ fun () ->
         (filename, Digest.file filename)
 
       let my_program filenames =
@@ -155,7 +155,7 @@
     a given task. However, a given task can suspend itself in order to cooperate
     with other tasks on a limited resource such as a particular domain.
 
-    Miou offers a way of creating tasks (see {!val:call_cc}) that are more
+    Miou offers a way of creating tasks (see {!val:async}) that are more
     precisely called {i fibers}. These fibers must cooperate with each other to
     share the domain on which they run. This means that a fiber should not have
     exclusive domain control when other fibers are waiting to be executed. 
@@ -168,8 +168,8 @@
                 print_endline str;
                 pr str (pred n)
           end in
-        let prm0 = Miou.call_cc @@ fun () -> pr "Hello" 1 in
-        let prm1 = Miou.call_cc @@ fun () -> pr "World" 1 in
+        let prm0 = Miou.async @@ fun () -> pr "Hello" 1 in
+        let prm1 = Miou.async @@ fun () -> pr "World" 1 in
         Miou.await_exn prm0;
         Miou.await_exn prm1 ;;
       Hello
@@ -206,8 +206,8 @@
           let socket = accept () in
           let _ = Miou.call (handler socket) in
           server () in
-        let prm0 = Miou.call_cc server in
-        let prm1 = Miou.call_cc my_long_computation in
+        let prm0 = Miou.async server in
+        let prm1 = Miou.async my_long_computation in
         Miou.both prm0 prm1 ;;
 
       (* [my_long_computation] should have multiple cooperative points to let
@@ -336,7 +336,7 @@
     afterwards:
     
     {[
-      # Miou.run @@ fun () -> Miou.call_cc (Fun.const ()) ;;
+      # Miou.run @@ fun () -> Miou.async (Fun.const ()) ;;
       Exception: Miou.Still_has_children.
     ]}
     
@@ -347,8 +347,8 @@
     
     {[
       # Miou.run @@ fun () ->
-        let p = Miou.call_cc (Fun.const ()) in
-        let q = Miou.call_cc (fun () -> Miou.await_exn p) in
+        let p = Miou.async (Fun.const ()) in
+        let q = Miou.async (fun () -> Miou.await_exn p) in
         Miou.await_all [ p; q ] |> ignore
       Exception: Miou.Not_a_child.
     ]}
@@ -399,11 +399,11 @@
       - : unit = ()
     ]}
 
-    However, you can involve [dom0] in the calculations with {!val:call_cc}.
+    However, you can involve [dom0] in the calculations with {!val:async}.
 
     {[
       let () = Miou.run ~domains:3 @@ fun () ->
-        let prm = Miou.call_cc server in
+        let prm = Miou.async server in
         Miou.parallel server (List.init 3 (Fun.const ()))
         |> List.iter (function Ok () -> () | Error exn -> raise exn);
         Miou.await_exn prm
@@ -555,7 +555,7 @@ module Ownership : sig
       {[
         # let show () = print_endline "Resource released!"
         # Miou.run @@ fun () ->
-          let p = Miou.call_cc @@ fun () ->
+          let p = Miou.async @@ fun () ->
             let t = Miou.Ownership.create ~finally:show () in
             Miou.Ownership.own t;
             failwith "p" in
@@ -582,7 +582,7 @@ module Ownership : sig
       {[
         # let show () = print_endline "Resource released!" ;;
         # Miou.run @@ fun () ->
-          let p = Miou.call_cc @@ fun () ->
+          let p = Miou.async @@ fun () ->
             let t = Miou.Ownership.create ~finally:show () in
             Miou.Ownership.own t in
           await_exn p ;;
@@ -602,8 +602,8 @@ module Ownership : sig
 
         let with_timeout ~give sec fn =
           Miou.await_first
-            [ Miou.call_cc @@ fun () -> Miou_unix.sleep sec; raise Timeout
-            ; Miou.call_cc ~give fn ] ;;
+            [ Miou.async @@ fun () -> Miou_unix.sleep sec; raise Timeout
+            ; Miou.async ~give fn ] ;;
 
         let connect socket sockaddr =
           let t = Miou_unix.Ownership.resource socket in
@@ -668,7 +668,7 @@ type 'a orphans
 
 val orphans : unit -> 'a orphans
 (** [orphans ()] makes a new orphan collectors which can used by {!val:call}
-    and {!val:call_cc}. *)
+    and {!val:async}. *)
 
 val care : 'a orphans -> 'a t option option
 (** [care orphans] returns a {i ready-to-await} promise or [Some None]. The user
@@ -682,9 +682,9 @@ val length : _ orphans -> int
 
 (** {2 Launch a promise.} *)
 
-val call_cc :
+val async :
   ?give:Ownership.t list -> ?orphans:'a orphans -> (unit -> 'a) -> 'a t
-(** [call_cc fn] (for Call with Current Continuation) returns a promise
+(** [async fn] (for Call with Current Continuation) returns a promise
     {!type:t} representing the state of the task given as an argument. The task
     will be executed {b concurrently} with the other tasks in the current
     domain. *)
@@ -773,7 +773,7 @@ val parallel : ('a -> 'b) -> 'a list -> ('b, exn) result list
       val server : unit -> unit
 
       let () = Miou.run ~domains:3 @@ fun () ->
-        let p = Miou.call_cc server in
+        let p = Miou.async server in
         Miou.parallel server (List.init 3 (Fun.const ()))
         |> List.iter (function Ok () -> () | Error exn -> raise exn);
         Miou.await_exn p
@@ -788,8 +788,8 @@ val await : 'a t -> ('a, exn) result
 
     {[
       # Miou_unix.run @@ fun () ->
-        let p = Miou.call_cc @@ fun () ->
-          let child_of_p = Miou.call_cc @@ fun () -> Miou_unix.sleep 10. in
+        let p = Miou.async @@ fun () ->
+          let child_of_p = Miou.async @@ fun () -> Miou_unix.sleep 10. in
           failwith "p";
           Miou.await_exn child_of_p in
         Miou.await p ;;
@@ -804,7 +804,7 @@ val await : 'a t -> ('a, exn) result
 
     {[
       # Miou.run @@ fun () ->
-        ignore (Miou.call_cc (Fun.const ())) ;;
+        ignore (Miou.async (Fun.const ())) ;;
       Exception: Miou.Still_has_children.
     ]} *)
 
@@ -821,8 +821,8 @@ val await_one : 'a t list -> ('a, exn) result
     {[
       # Miou.run @@ fun () ->
         Miou.await_one
-          [ Miou.call_cc (Fun.const 1)
-          ; Miou.call_cc (Fun.const 2) ] ;;
+          [ Miou.async (Fun.const 1)
+          ; Miou.async (Fun.const 2) ] ;;
       Exception: Miou.Still_has_children
     ]}
 
@@ -830,8 +830,8 @@ val await_one : 'a t list -> ('a, exn) result
 
     {[
       # Miou.run @@ fun () ->
-        let p = Miou.call_cc (Fun.const 1) in
-        let q = Miou.call_cc (Fun.const 2) in
+        let p = Miou.async (Fun.const 1) in
+        let q = Miou.async (Fun.const 2) in
         match Miou.await_one [ p; q ] with
         | 1 -> Miou.await_exn q
         | 2 -> Miou.await_exn p
@@ -853,8 +853,8 @@ val await_first : 'a t list -> ('a, exn) result
     {[
       # exception Timeout ;;
       # Miou_unix.run @@ fun () ->
-        let p0 = Miou.call_cc (Fun.const ()) in
-        let p1 = Miou.call_cc @@ fun () -> Miou_unix.sleep 2.; raise Timeout in
+        let p0 = Miou.async (Fun.const ()) in
+        let p1 = Miou.async @@ fun () -> Miou_unix.sleep 2.; raise Timeout in
         Miou.await_first [ p0; p1 ] ;;
       - : (unit, exn) result = Ok ()
     ]}
@@ -893,7 +893,7 @@ val cancel : 'a t -> unit
 
     {[
       # Miou.run @@ fun () ->
-        let p = Miou.call_cc (Fun.const ()) in
+        let p = Miou.async (Fun.const ()) in
         Miou.await_exn p;
         Miou.cancel p;
         Miou.await_exn p ;;
@@ -905,7 +905,7 @@ val cancel : 'a t -> unit
 
     {[
       # Miou.run @@ fun () ->
-        let p = Miou.call_cc @@ fun () -> print_endline "Resolved!" in
+        let p = Miou.async @@ fun () -> print_endline "Resolved!" in
         Miou.yield ();
         Miou.cancel p;
         Miou.await_exn p ;;
@@ -929,14 +929,14 @@ val yield : unit -> unit
 
     {[
       # Miou.run @@ fun () ->
-        let p = Miou.call_cc @@ fun () -> print_endline "Hello" in
+        let p = Miou.async @@ fun () -> print_endline "Hello" in
         print_endline "World";
         Miou.await_exn p ;;
       World
       Hello
       - : unit = ()
       # Miou.run @@ fun () ->
-        let p = Miou.call_cc @@ fun () -> print_endline "Hello" in
+        let p = Miou.async @@ fun () -> print_endline "Hello" in
         Miou.yield ();
         print_endline "World";
         Miou.await_exn p

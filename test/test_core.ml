@@ -12,7 +12,7 @@ let test01 =
     Buffer.add_string buf str; Buffer.add_string buf "\n"
   in
   Miou.run @@ fun () ->
-  let prm = Miou.call_cc @@ fun () -> print_endline "Hello" in
+  let prm = Miou.async @@ fun () -> print_endline "Hello" in
   print_endline "World";
   Miou.await_exn prm;
   Test.check (Buffer.contents buf = "World\nHello\n")
@@ -22,7 +22,7 @@ let test02 =
     {text|A test to show up our exception Still_has_children and our verification about pending children.|text}
   in
   Test.test ~title:"test02" ~description @@ fun () ->
-  let prgm () = ignore (Miou.call_cc (Fun.const ())) in
+  let prgm () = ignore (Miou.async (Fun.const ())) in
   try Miou.run prgm; Test.check false
   with exn -> Test.check (Printexc.to_string exn = "Miou.Still_has_children")
 
@@ -32,7 +32,7 @@ let test03 =
   in
   Test.test ~title:"test03" ~description @@ fun () ->
   Miou.run @@ fun () ->
-  let prm = Miou.call_cc (Fun.const ()) in
+  let prm = Miou.async (Fun.const ()) in
   Miou.await_exn prm; Miou.await_exn prm; Test.check true
 
 let test04 =
@@ -68,7 +68,7 @@ let test06 =
   in
   Test.test ~title:"test06" ~description @@ fun () ->
   Miou.run @@ fun () ->
-  let prm = Miou.call_cc (Fun.const ()) in
+  let prm = Miou.async (Fun.const ()) in
   Miou.await_exn prm;
   Miou.cancel prm;
   match Miou.await prm with
@@ -95,8 +95,8 @@ let test08 =
   Test.test ~title:"test08" ~description @@ fun () ->
   Miou.run @@ fun () ->
   let prm =
-    Miou.call_cc @@ fun () ->
-    let _ = Miou.call_cc (Fun.const ()) in
+    Miou.async @@ fun () ->
+    let _ = Miou.async (Fun.const ()) in
     Miou.yield (); failwith "t08"
   in
   match Miou.await prm with
@@ -111,8 +111,8 @@ let test09 =
   Miou.run @@ fun () ->
   let prm =
     Miou.call @@ fun () ->
-    let p0 = Miou.call_cc infinite in
-    let p1 = Miou.call_cc infinite in
+    let p0 = Miou.async infinite in
+    let p1 = Miou.async infinite in
     Miou.await_exn p0; Miou.await_exn p1
   in
   Miou.cancel prm; Test.check true
@@ -127,7 +127,7 @@ let test10 =
     Buffer.add_string buf str; Buffer.add_string buf "\n"
   in
   Miou.run @@ fun () ->
-  let prm = Miou.call_cc @@ fun () -> print_endline "Hello" in
+  let prm = Miou.async @@ fun () -> print_endline "Hello" in
   Miou.yield ();
   print_endline "World";
   Miou.await_exn prm;
@@ -152,8 +152,8 @@ let test12 =
   in
   Test.test ~title:"test12" ~description @@ fun () ->
   let prgm () =
-    let a = Miou.call_cc (Fun.const ()) in
-    let b = Miou.call_cc @@ fun () -> Miou.await_exn a in
+    let a = Miou.async (Fun.const ()) in
+    let b = Miou.async @@ fun () -> Miou.await_exn a in
     Miou.await_exn a; Miou.await_exn b
   in
   try Miou.run prgm; Test.check false
@@ -169,7 +169,7 @@ let test13 =
     let p = ref None in
     let a =
       Miou.call @@ fun () ->
-      p := Some (Miou.call_cc (Fun.const ()));
+      p := Some (Miou.async (Fun.const ()));
       Miou.await_exn (Option.get !p)
     in
     let b =
@@ -202,7 +202,7 @@ let test15 =
   in
   Test.test ~title:"test15" ~description @@ fun () ->
   let prgm () =
-    let p0 = Miou.call_cc @@ fun () -> Miou.call_cc (Fun.const ()) in
+    let p0 = Miou.async @@ fun () -> Miou.async (Fun.const ()) in
     let p1 = Miou.await_exn p0 in
     Miou.await_exn p1
   in
@@ -416,8 +416,8 @@ let test22 =
     Miouc.reset ();
     Miouc.run @@ fun () ->
     let p =
-      Miou.call_cc @@ fun () ->
-      let child_of_p = Miou.call_cc @@ fun () -> Miouc.sleep 1 in
+      Miou.async @@ fun () ->
+      let child_of_p = Miou.async @@ fun () -> Miouc.sleep 1 in
       if Random.State.bool g then raise Basic_failure;
       Miou.await_exn child_of_p
     in
@@ -485,8 +485,8 @@ let test26 =
   let prgm () =
     Miouc.reset ();
     Miouc.run @@ fun () ->
-    let a = Miou.call_cc @@ fun () -> Miouc.sleep 5 in
-    let b = Miou.call_cc @@ fun () -> Miouc.sleep 5 in
+    let a = Miou.async @@ fun () -> Miouc.sleep 5 in
+    let b = Miou.async @@ fun () -> Miouc.sleep 5 in
     Miou.await_all [ a; b ] |> ignore
   in
   prgm ();
@@ -525,8 +525,8 @@ let test29 =
   Test.test ~title:"test29" ~description @@ fun () ->
   let exception Timeout in
   let with_timeout cycle fn =
-    let p0 = Miou.call_cc fn in
-    let p1 = Miou.call_cc @@ fun () -> Miouc.sleep cycle; raise Timeout in
+    let p0 = Miou.async fn in
+    let p1 = Miou.async @@ fun () -> Miouc.sleep cycle; raise Timeout in
     Miou.await_first [ p0; p1 ]
   in
   Miouc.reset ();
@@ -622,7 +622,7 @@ let test31 =
   in
   Miou.run @@ fun () ->
   let t0 = Bounded_stream.create 20 0 and t1 = Bounded_stream.create 30 0 in
-  let prm = Miou.call_cc @@ fun () -> consume t1 0 8000 in
+  let prm = Miou.async @@ fun () -> consume t1 0 8000 in
   let results =
     Miou.await prm
     :: Miou.parallel perform
@@ -667,7 +667,7 @@ let test33 =
   let computation = Miou.Computation.create () in
   let@ _ =
     finally Miou.await_exn @@ fun () ->
-    Miou.call_cc @@ fun () ->
+    Miou.async @@ fun () ->
     let rec fib i =
       Miou.Computation.raise_if_errored computation;
       Miou.yield ();
@@ -677,7 +677,7 @@ let test33 =
   in
   let@ _ =
     finally Miou.await_exn @@ fun () ->
-    Miou.call_cc @@ fun () ->
+    Miou.async @@ fun () ->
     let exn_bt = (Exit, Printexc.get_callstack 2) in
     ignore (Miou.Computation.try_cancel computation exn_bt)
   in
@@ -702,7 +702,7 @@ let test35 =
   let prgm () =
     Miou.run @@ fun () ->
     let p =
-      Miou.call_cc @@ fun () ->
+      Miou.async @@ fun () ->
       let t = Miou.Ownership.create ~finally:print () in
       Miou.Ownership.own t; failwith "p"
     in
@@ -723,7 +723,7 @@ let test36 =
   let prgm () =
     Miou.run @@ fun () ->
     let p =
-      Miou.call_cc @@ fun () ->
+      Miou.async @@ fun () ->
       let t = Miou.Ownership.create ~finally:print () in
       Miou.Ownership.own t
     in
@@ -743,7 +743,7 @@ let test37 =
   let prgm () =
     Miou.run @@ fun () ->
     let p =
-      Miou.call_cc @@ fun () ->
+      Miou.async @@ fun () ->
       let t = Miou.Ownership.create ~finally:print () in
       Miou.Ownership.own t; Miou.Ownership.disown t
     in

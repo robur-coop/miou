@@ -43,7 +43,7 @@ let server () =
   while true do
     clean_up orphans;
     let client, _ = Miou_unix.accept socket in
-    ignore (Miou.call_cc ~orphans (fun () -> echo client))
+    ignore (Miou.async ~orphans (fun () -> echo client))
   done;
   Miou_unix.close socket
 
@@ -78,12 +78,12 @@ servers in parallel, each handling several clients concurrently.
 To distribute the implementation of our server across multiple domains, we'll
 use `Miou.parallel`. We won't forget to involve `dom0` (referring to our rule
 where `dom0` would never be assigned a task from other domain) via
-`Miou.call_cc`:
+`Miou.async`:
 ```ocaml
 let () = Miou_unix.run @@ fun () ->
   let domains = Stdlib.Domain.recommended_domain_count () - 1 in
   let domains = List.init domains (Fun.const ()) in
-  let prm = Miou.call_cc server in
+  let prm = Miou.async server in
   Miou.await prm :: Miou.parallel server domains
   |> List.iter @@ function
   | Ok () -> ()
@@ -176,7 +176,7 @@ let server () =
   while true do
     clean_up orphans;
     let client, _ = Miou_unix.Ownership.accept socket in
-    ignore (Miou.call_cc
+    ignore (Miou.async
       ~give:[ Miou_unix.Ownership.resource client ]
       ~orphans (fun () -> echo client))
   done;

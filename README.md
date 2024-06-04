@@ -48,7 +48,7 @@ technical debt that these bring).
 
 There are 2 ways of creating a task:
 - it can run concurrently with other tasks and execute on the domain in which it
-  was created (see `Miou.call_cc`)
+  was created (see `Miou.async`)
 - it can run in parallel with other tasks and be executed on **another** domain
   (see `Miou.call`)
 
@@ -56,7 +56,7 @@ The first rule to follow is that the user must wait for all the tasks he/she has
 created. If they don't, Miou raises an exception: `Still_has_children`:
 ```ocaml
 let () = Miou.run @@ fun () ->
-  ignore (Miou.call_cc @@ fun () -> 42)
+  ignore (Miou.async @@ fun () -> 42)
 Exception: Miou.Still_has_children
 ```
 
@@ -64,7 +64,7 @@ The user must therefore take care to use `Miou.await` for all the tasks
 (concurrent and parallel) that he/she has created:
 ```ocaml
 let () = Miou.run @@ fun () ->
-  let p0 = Miou.call_cc @@ fun () -> 42 in
+  let p0 = Miou.async @@ fun () -> 42 in
   Miou.await_exn p0
 ```
 
@@ -73,8 +73,8 @@ let () = Miou.run @@ fun () ->
 A task can only be awaited by the person who created it.
 ```ocaml
 let () = Miou.run @@ fun () ->
-  let p0 = Miou.call_cc @@ fun () -> 42 in
-  let p1 = Miou.call_cc @@ fun () -> Miou.await_exn p0 in
+  let p0 = Miou.async @@ fun () -> 42 in
+  let p1 = Miou.async @@ fun () -> Miou.await_exn p0 in
   Miou.await_exn p1
 Esxception: Miou.Not_a_child
 ```
@@ -94,8 +94,8 @@ If a task fails (with an exception), all its sub-tasks also end.
 
 ```ocaml
 let prgm () = Miouu.run @@ fun () ->
-  let p = Miou.call_cc @@ fun () ->
-    let q = Miou.call_cc @@ fun () -> sleep 1. in
+  let p = Miou.async @@ fun () ->
+    let q = Miou.async @@ fun () -> sleep 1. in
     raise (Failure "p") in
   Miou.await p
 
@@ -120,7 +120,7 @@ termination of all its children.
 
 ```ocaml
 let () = Miou.run @@ fun () ->
-  Miou.cancel (Miou.call_cc @@ fun () -> 42)
+  Miou.cancel (Miou.async @@ fun () -> 42)
 ```
 
 This code shows that if it is not possible to `ignore` the result of a task, it
@@ -132,8 +132,8 @@ Tasks are taken randomly. That is to say that this code could return 1 as 2.
 ```ocaml
 let prgm () =
   Miou.run @@ fun () ->
-  let a = Miou.call_cc (Fun.const 1) in
-  let b = Miou.call_cc (Fun.const 2) in
+  let a = Miou.async (Fun.const 1) in
+  let b = Miou.async (Fun.const 2) in
   Miou.await_first [ a; b ]
 
 let rec until_its n =

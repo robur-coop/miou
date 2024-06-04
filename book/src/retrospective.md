@@ -15,21 +15,21 @@ client management in the background:
     ignore (spawn @@ fun () -> echo client)
 ```
 
-You can achieve the same thing with `Miou.call_cc`. This function essentially
+You can achieve the same thing with `Miou.async`. This function essentially
 does will more what our `spawn` does: it creates a new task that will run on the
 same _thread_ using our scheduler. This type of task which coexists with others
 on the same thread is called a _[fiber][fiber]_. And, just like `spawn`,
-`Miou.call_cc` also returns a promise for this task. In Miou, you're creating a
+`Miou.async` also returns a promise for this task. In Miou, you're creating a
 child of your task, a subtask.
 
 The key difference with Miou, though, is that you can't forget your children!
 ```ocaml
 let () = Miou.run @@ fun () ->
-  ignore (Miou.call_cc @@ fun () -> print_endline "Hello World!")
+  ignore (Miou.async @@ fun () -> print_endline "Hello World!")
 Exception: Miou.Still_has_children.
 ```
 
-In Miou, we treat a task as a resource. You allocate it (using `Miou.call_cc`),
+In Miou, we treat a task as a resource. You allocate it (using `Miou.async`),
 but you also have to release it with `Miou.await`. A fundamental rule governs
 Miou programs: all tasks must either be awaited or canceled. Forgetting a task
 will result in a fatal error.
@@ -58,7 +58,7 @@ let server () =
   while true do
     clean_up orphans;
     let client, address_of_client = Miou_unix.accept socket in
-    ignore (Miou.call_cc ~orphans @@ fun () -> echo client)
+    ignore (Miou.async ~orphans @@ fun () -> echo client)
   done
 ```
 
@@ -89,8 +89,8 @@ There's a second rule: only the **direct** parent can wait for or cancel its
 children. For instance, the following code is incorrect:
 ```ocaml
 let () = Miou.run @@ fun () ->
-  let a = Miou.call_cc @@ fun () -> Miou.yield () in
-  let b = Miou.call_cc @@ fun () -> Miou.await_exn a in
+  let a = Miou.async @@ fun () -> Miou.yield () in
+  let b = Miou.async @@ fun () -> Miou.await_exn a in
   Miou.await_exn a;
   Miou.await_exn b
 Exception: Miou.Not_a_child.
@@ -108,7 +108,7 @@ cancellation. It can be useful to cancel a task that, for example, is taking too
 long. Miou provides this mechanism for all tasks using their promises.
 ```ocaml
 let () = Miou.run @@ fun () ->
-  let prm = Miou.call_cc @@ fun () -> print_endline "Hello World" in
+  let prm = Miou.async @@ fun () -> print_endline "Hello World" in
   Miou.cancel prm
 ```
 
@@ -116,8 +116,8 @@ The rules of parentage explained earlier also apply to cancellation. You can
 only cancel your direct children:
 ```ocaml
 let () = Miou.run @@ fun () ->
-  let a = Miou.call_cc @@ fun () -> Miou.yield () in
-  let b = Miou.call_cc @@ fun () -> Miou.cancel a in
+  let a = Miou.async @@ fun () -> Miou.yield () in
+  let b = Miou.async @@ fun () -> Miou.cancel a in
   Miou.await_exn a;
   Miou.await_exn b
 Exception: Miou.Not_a_child.
@@ -143,7 +143,7 @@ canceling all its sub-tasks:
 let rec infinite () = infinite (Miou.yield ())
 
 let () = Miou.run @@ fun () ->
-  let p = Miou.call_cc @@ fun () ->
+  let p = Miou.async @@ fun () ->
     let q = Miou.call infinite in
     Miou.await_exn q in
   Miou.cancel p
@@ -158,7 +158,7 @@ runs despite the cancellation of `p1`:
 let () = Miou.run @@ fun () ->
   let p1 = Miou.call @@ fun () -> Miou.yield () in
   let v = ref false in
-  let p0 = Miou.call_cc @@ fun () -> print_endline "Do p0" in
+  let p0 = Miou.async @@ fun () -> print_endline "Do p0" in
   print_endline "Cancel p1";
   Miou.cancel p1;
   print_endline "p1 cancelled";
@@ -193,7 +193,7 @@ let () = Miou.run @@ fun () ->
 
 Miou takes care of allocating multiple domains according to your system's
 specifics. These domains will be waiting for tasks, and `Miou.call` notifies
-them of a new task to perform. Just like `Miou.call_cc`, `Miou.call` also
+them of a new task to perform. Just like `Miou.async`, `Miou.call` also
 returns a promise, and the same rules apply: you must not forget about your
 children.
 
@@ -251,13 +251,13 @@ This rule prevents a domain from waiting for another domain, which waits for
 another domain, which waits for `dom0`, which waits for your first domain - the
 [starvation problem][starvation]. Thus, it may happen that `dom0` is no longer
 involved in the execution of your program and is only waiting for the other
-domains. However, we can involve it using `Miou.call_cc`:
+domains. However, we can involve it using `Miou.async`:
 
 ```ocaml
 let task () : int = (Stdlib.Domain.self () :> int)
 
 let () = Miou.run ~domains:3 @@ fun () ->
-  let prm = Miou.call_cc my_super_task in
+  let prm = Miou.async my_super_task in
   let domains =
     Miou.await prm
     :: Miou.parallel task (List.init 3 (Fun.const ())) in

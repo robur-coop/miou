@@ -5,7 +5,7 @@ with {i blocking} operations. For the example, we're going to implement the
 sleepers. [Unix.sleepf] is a blocking operation. The fundamental problem with
 Miou is that it performs operations in the background (scheduling). So using a
 blocking operation with Miou prevents it from managing other tasks
-concurrently (manage tasks entered with {!val:Miou.call_cc}) or in parallel
+concurrently (manage tasks entered with {!val:Miou.async}) or in parallel
 (wait for parallel process tasks introduced by {!val:Miou.call}). 
 
 As stated in the documentation, and this is a fundamental rule:
@@ -28,8 +28,8 @@ open Miou
 
 let program () =
   Miou.run @@ fun () ->
-  let a = Miou.call_cc (fun () -> sleep 1.) in
-  let b = Miou.call_cc (fun () -> sleep 2.) in
+  let a = Miou.async (fun () -> sleep 1.) in
+  let b = Miou.async (fun () -> sleep 2.) in
   Miou.await_all [ a; b ]
   |> List.iter @@ function Ok () -> () | Error exn -> raise exn
 
@@ -155,8 +155,8 @@ we can use them:
 {[
 let prgm () =
   Miou.run ~events @@ fun () ->
-  let a = Miou.call_cc (fun () -> sleep 1.) in
-  let b = Miou.call_cc (fun () -> sleep 2.) in
+  let a = Miou.async (fun () -> sleep 1.) in
+  let b = Miou.async (fun () -> sleep 2.) in
   ignore (Miou.await a);
   ignore (Miou.await b)
 
@@ -215,7 +215,7 @@ not fancy, but it has the merit of having worked for quite some time.
 
 As you can imagine, this little introduction is not complete if we take into
 account {!val:Miou.call}. Miou can launch tasks in parallel and these tasks
-can perform I/O. In our example, we can replace {!val:Miou.call_cc} with
+can perform I/O. In our example, we can replace {!val:Miou.async} with
 {!val:Miou.call}. The problems that will arise from such a change will be, to
 say the least, difficult to explain in full. However, they focus on a point that
 is fairly simple to see: we are {b not} protecting our [sleepers] from changes
@@ -229,7 +229,7 @@ done some parallel programming, these mechanisms can:
 
 Based on these findings, we propose a fairly simple design: a {i syscall}
 is {b always} managed by the domain that launched it. It is {b local} to the
-domain. It is somewhat equivalent to {!val:Miou.call_cc}, suspension only
+domain. It is somewhat equivalent to {!val:Miou.async}, suspension only
 ({!val:Miou.suspend}) operates concurrently with other tasks and each domain
 manages its own syscalls.
 

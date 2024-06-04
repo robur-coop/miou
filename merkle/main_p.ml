@@ -34,7 +34,7 @@ let rec hash_of_tree filename =
 
 and perform = function
   | `Dir, filename ->
-      Miou.call_cc @@ fun () ->
+      Miou.async @@ fun () ->
       let name = Filename.basename filename in
       let hash = hash_of_tree filename in
       Fmt.str "40000 %s\000%s" name (Hash.to_raw_string hash)

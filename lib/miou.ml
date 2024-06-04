@@ -1034,7 +1034,7 @@ module Ownership = struct
         | exception _ -> Miou_sequence.remove node)
 end
 
-let call_cc ?(give = []) ?orphans fn =
+let async ?(give = []) ?orphans fn =
   let prm = Effect.perform (Spawn (Concurrent, false, give, fn)) in
   Logs.debug (fun m -> m "%a spawned" Promise.pp prm);
   Option.iter (fun s -> Miou_sequence.(add Left) s prm) orphans;
@@ -1123,7 +1123,7 @@ let await_one prms =
     in
     try_attach_all [] prms
   in
-  let prm = call_cc choose in
+  let prm = async choose in
   miou_assert (await_exn prm);
   match Computation.await_exn c with
   | Ok value -> Ok value
@@ -1198,7 +1198,7 @@ let await_first prms =
     in
     try_attach_all [] prms
   in
-  let prm = call_cc choose in
+  let prm = async choose in
   miou_assert (await_exn prm);
   match Computation.await_exn c with
   | Ok value -> Ok value
