@@ -1,3 +1,72 @@
+### v0.2.0 (2024-06-04)
+
+- Don't try to abusively fill the pipe to interrupt a domain
+
+  Interrupting a domain involves writing to a pipe to interrupt the `select(2)`
+  if it is running. The pipe has a limited memory, depending on the system, and
+  if you ask to interrupt a domain too much, you end up blocking the `write`.
+  This patch prevents writing to the pipe if it has not yet been read.
+
+  (@dinosaure, #46)
+
+- Expose the Sequence module
+  (@dinosaure, #47)
+- Be able to add a hook (effect free) into the scheduler
+  
+  It is possible to add a hook to the scheduler. If the user wants to execute a
+  function to a domain each time the domain is busy with a task, they can do so.
+  However, the effects are not managed in the passed function.
+  
+  (@dinosaure, #48)
+
+- Add `Miou.Lazy`, a domain-safe `Lazy` module like `Stdlib.Lazy`
+  (@dinosaure, initially implemented by @polytypic, #49)
+- Raise an exception if the user uses syscalls (from `Miou_unix`) and `Miou.run`
+  instead of `Miou_unix.run`
+
+  If a user uses a suspend function offered by `Miou_unix` but does not use
+  `Miou_unix.run`, the programme may block indefinitely. This patch prevents
+  such an error by raising an exception if we want to add a suspension point and
+  we haven't specified how to handle it (if we use `Miou.run` instead of 
+  `Miou_unix.run`).
+
+  (@dinosaure, reported by @kit-ty-kate, #51)
+
+- Rename `Miou.set_signal` to `Miou.sys_signal`
+  (@dinosaure, #50)
+
+- Improve `Miou_unix.{read,write}`
+  (@kit-ty-kate, @dinosaure, #52, 2f552a6, #54)
+- Fix an issue related to the dom0 and pending tasks locked by mutexes
+
+  Tasks may have been transmitted to dom0 while it was executing a task and
+  before the `select(2)`. This patch resynchronises the pending tasks in dom0's
+  TODO-list before making the `select(2)`: specifically to find out whether the
+  `select(2)` can block indefinitely or not. This patch also cleans up the old
+  states of the tables used by `Miou_unix` if it is used on an ongoing basis (as
+  in the case of tests).
+
+  (@dinosaure, #53)
+
+- Add `Miou.Domain.available`
+  (@dinosaure, #53)
+- Fix a race condition (observed with TSan) when we wait the cancellation of a
+  children
+
+  This patch changes Miou's behaviour a little when waiting for a task to be
+  cancelled and prevents invalid access to a value that does not belong to the
+  current domain (and which can be modified by another domain). Thanks
+  @OlivierNicole and @fabbing for their advice on using TSan.
+
+  (@dinosaure, #56)
+
+- Update the layout of Miou to avoid conflicts with other packages (like `backoff`)
+  (@dinosaure, reported by @patricoferris, #57)
+- OCaml 5.3 support
+  (@kit-ty-kate, github#22)
+- Rename `Miou.call_cc` to `Miou.async`
+  (@dinosaure, @kit-ty-kate, @Armael, github#23)
+
 ### v0.1.0 (2024-04-03)
 
 A major change in Miou's internals to incorporate the excellent work of
