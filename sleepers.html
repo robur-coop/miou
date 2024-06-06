@@ -205,8 +205,8 @@ iterate through its implementation to:</p>
 the one we need to implement.</p>
 <pre><code class="language-ocaml">let program () =
   Chat.run @@ fun () -&gt;
-  let a = Miou.call_cc @@ fun () -&gt; Chat.sleep 1. in
-  let b = Miou.call_cc @@ fun () -&gt; Chat.sleep 2. in
+  let a = Miou.async @@ fun () -&gt; Chat.sleep 1. in
+  let b = Miou.async @@ fun () -&gt; Chat.sleep 2. in
   Miou.await_all [ a; b ]
   |&gt; List.iter @@ function
   | Ok () -&gt; ()
@@ -346,7 +346,7 @@ let select ~block:_ _ =
   Unix.sleepf ts;
   remove_and_signal_older sleepers []
 </code></pre>
-<p>We can now safely replace our <code>Miou.call_cc</code> with <code>Miou.call</code>. We know that each
+<p>We can now safely replace our <code>Miou.async</code> with <code>Miou.call</code>. We know that each
 task will have its own <code>sleepers</code>, and there will be no illegal access between
 domains.</p>
 <h2 id="cancellation"><a class="header" href="#cancellation">Cancellation</a></h2>

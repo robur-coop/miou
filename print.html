@@ -987,18 +987,18 @@ explore in this chapter.</p>
 client management in the background:</p>
 <pre><code class="language-ocaml">    ignore (spawn @@ fun () -&gt; echo client)
 </code></pre>
-<p>You can achieve the same thing with <code>Miou.call_cc</code>. This function essentially
+<p>You can achieve the same thing with <code>Miou.async</code>. This function essentially
 does will more what our <code>spawn</code> does: it creates a new task that will run on the
 same <em>thread</em> using our scheduler. This type of task which coexists with others
 on the same thread is called a <em><a href="https://en.wikipedia.org/wiki/Fiber_(computer_science)">fiber</a></em>. And, just like <code>spawn</code>,
-<code>Miou.call_cc</code> also returns a promise for this task. In Miou, you're creating a
+<code>Miou.async</code> also returns a promise for this task. In Miou, you're creating a
 child of your task, a subtask.</p>
 <p>The key difference with Miou, though, is that you can't forget your children!</p>
 <pre><code class="language-ocaml">let () = Miou.run @@ fun () -&gt;
-  ignore (Miou.call_cc @@ fun () -&gt; print_endline "Hello World!")
+  ignore (Miou.async @@ fun () -&gt; print_endline "Hello World!")
 Exception: Miou.Still_has_children.
 </code></pre>
-<p>In Miou, we treat a task as a resource. You allocate it (using <code>Miou.call_cc</code>),
+<p>In Miou, we treat a task as a resource. You allocate it (using <code>Miou.async</code>),
 but you also have to release it with <code>Miou.await</code>. A fundamental rule governs
 Miou programs: all tasks must either be awaited or canceled. Forgetting a task
 will result in a fatal error.</p>
@@ -1023,7 +1023,7 @@ let server () =
   while true do
     clean_up orphans;
     let client, address_of_client = Miou_unix.accept socket in
-    ignore (Miou.call_cc ~orphans @@ fun () -&gt; echo client)
+    ignore (Miou.async ~orphans @@ fun () -&gt; echo client)
   done
 </code></pre>
 <p>The advantage of this approach is that it treats a task as a resource that must
@@ -1048,8 +1048,8 @@ forget your children.</p>
 <p>There's a second rule: only the <strong>direct</strong> parent can wait for or cancel its
 children. For instance, the following code is incorrect:</p>
 <pre><code class="language-ocaml">let () = Miou.run @@ fun () -&gt;
-  let a = Miou.call_cc @@ fun () -&gt; Miou.yield () in
-  let b = Miou.call_cc @@ fun () -&gt; Miou.await_exn a in
+  let a = Miou.async @@ fun () -&gt; Miou.yield () in
+  let b = Miou.async @@ fun () -&gt; Miou.await_exn a in
   Miou.await_exn a;
   Miou.await_exn b
 Exception: Miou.Not_a_child.
@@ -1063,14 +1063,14 @@ task terminates, it invariably means that all sub-tasks have also terminated.</p
 cancellation. It can be useful to cancel a task that, for example, is taking too
 long. Miou provides this mechanism for all tasks using their promises.</p>
 <pre><code class="language-ocaml">let () = Miou.run @@ fun () -&gt;
-  let prm = Miou.call_cc @@ fun () -&gt; print_endline "Hello World" in
+  let prm = Miou.async @@ fun () -&gt; print_endline "Hello World" in
   Miou.cancel prm
 </code></pre>
 <p>The rules of parentage explained earlier also apply to cancellation. You can
 only cancel your direct children:</p>
 <pre><code class="language-ocaml">let () = Miou.run @@ fun () -&gt;
-  let a = Miou.call_cc @@ fun () -&gt; Miou.yield () in
-  let b = Miou.call_cc @@ fun () -&gt; Miou.cancel a in
+  let a = Miou.async @@ fun () -&gt; Miou.yield () in
+  let b = Miou.async @@ fun () -&gt; Miou.cancel a in
   Miou.await_exn a;
   Miou.await_exn b
 Exception: Miou.Not_a_child.
@@ -1092,7 +1092,7 @@ canceling all its sub-tasks:</p>
 <pre><code class="language-ocaml">let rec infinite () = infinite (Miou.yield ())
 
 let () = Miou.run @@ fun () -&gt;
-  let p = Miou.call_cc @@ fun () -&gt;
+  let p = Miou.async @@ fun () -&gt;
     let q = Miou.call infinite in
     Miou.await_exn q in
   Miou.cancel p
@@ -1105,7 +1105,7 @@ runs despite the cancellation of <code>p1</code>:</p>
 <pre><code class="language-ocaml">let () = Miou.run @@ fun () -&gt;
   let p1 = Miou.call @@ fun () -&gt; Miou.yield () in
   let v = ref false in
-  let p0 = Miou.call_cc @@ fun () -&gt; print_endline "Do p0" in
+  let p0 = Miou.async @@ fun () -&gt; print_endline "Do p0" in
   print_endline "Cancel p1";
   Miou.cancel p1;
   print_endline "p1 cancelled";
@@ -1133,7 +1133,7 @@ regarding allocation and garbage collection is less systematic.</p>
 </code></pre>
 <p>Miou takes care of allocating multiple domains according to your system's
 specifics. These domains will be waiting for tasks, and <code>Miou.call</code> notifies
-them of a new task to perform. Just like <code>Miou.call_cc</code>, <code>Miou.call</code> also
+them of a new task to perform. Just like <code>Miou.async</code>, <code>Miou.call</code> also
 returns a promise, and the same rules apply: you must not forget about your
 children.</p>
 <p>A task in parallel explicitly means that it will run in a different domain than
@@ -1183,11 +1183,11 @@ will never be assigned a task via <code>Miou.call</code>.</p>
 another domain, which waits for <code>dom0</code>, which waits for your first domain - the
 <a href="https://en.wikipedia.org/wiki/Starvation_(computer_science)">starvation problem</a>. Thus, it may happen that <code>dom0</code> is no longer
 involved in the execution of your program and is only waiting for the other
-domains. However, we can involve it using <code>Miou.call_cc</code>:</p>
+domains. However, we can involve it using <code>Miou.async</code>:</p>
 <pre><code class="language-ocaml">let task () : int = (Stdlib.Domain.self () :&gt; int)
 
 let () = Miou.run ~domains:3 @@ fun () -&gt;
-  let prm = Miou.call_cc my_super_task in
+  let prm = Miou.async my_super_task in
   let domains =
     Miou.await prm
     :: Miou.parallel task (List.init 3 (Fun.const ())) in
@@ -1226,11 +1226,11 @@ chapter, it mainly involves using <code>Miou</code> and <code>Miou_unix</code>. 
 function that handles our clients:</p>
 <pre><code class="language-ocaml">let rec echo client =
   let buf = Bytes.create 0x100 in
-  let len = Miou_unix.read client buf 0 (Bytes.length buf) in
+  let len = Miou_unix.read client buf ~off:0 ~len:(Bytes.length buf) in
   if len = 0 then Miou_unix.close client
   else
     let str = Bytes.sub_string buf 0 len in
-    let _ = Miou_unix.write client str 0 len in echo client
+    let _ = Miou_unix.write client str ~off:0 ~len in echo client
 </code></pre>
 <p>A subtlety lies in <code>Miou_unix.write</code>, which expects a <code>string</code> instead of
 <code>bytes</code>. In a concurrent execution, it may happen that <code>buf</code> could be modified
@@ -1254,7 +1254,7 @@ let server () =
   while true do
     clean_up orphans;
     let client, _ = Miou_unix.accept socket in
-    ignore (Miou.call_cc ~orphans (fun () -&gt; echo client))
+    ignore (Miou.async ~orphans (fun () -&gt; echo client))
   done;
   Miou_unix.close socket
 
@@ -1283,11 +1283,11 @@ servers in parallel, each handling several clients concurrently.</p>
 <p>To distribute the implementation of our server across multiple domains, we'll
 use <code>Miou.parallel</code>. We won't forget to involve <code>dom0</code> (referring to our rule
 where <code>dom0</code> would never be assigned a task from other domain) via
-<code>Miou.call_cc</code>:</p>
+<code>Miou.async</code>:</p>
 <pre><code class="language-ocaml">let () = Miou_unix.run @@ fun () -&gt;
   let domains = Stdlib.Domain.recommended_domain_count () - 1 in
   let domains = List.init domains (Fun.const ()) in
-  let prm = Miou.call_cc server in
+  let prm = Miou.async server in
   Miou.await prm :: Miou.parallel server domains
   |&gt; List.iter @@ function
   | Ok () -&gt; ()
@@ -1367,7 +1367,7 @@ client file descriptor to our <code>echo</code> task:</p>
   while true do
     clean_up orphans;
     let client, _ = Miou_unix.Ownership.accept socket in
-    ignore (Miou.call_cc
+    ignore (Miou.async
       ~give:[ Miou_unix.Ownership.resource client ]
       ~orphans (fun () -&gt; echo client))
   done;
@@ -1427,8 +1427,8 @@ iterate through its implementation to:</p>
 the one we need to implement.</p>
 <pre><code class="language-ocaml">let program () =
   Chat.run @@ fun () -&gt;
-  let a = Miou.call_cc @@ fun () -&gt; Chat.sleep 1. in
-  let b = Miou.call_cc @@ fun () -&gt; Chat.sleep 2. in
+  let a = Miou.async @@ fun () -&gt; Chat.sleep 1. in
+  let b = Miou.async @@ fun () -&gt; Chat.sleep 2. in
   Miou.await_all [ a; b ]
   |&gt; List.iter @@ function
   | Ok () -&gt; ()
@@ -1568,7 +1568,7 @@ let select ~block:_ _ =
   Unix.sleepf ts;
   remove_and_signal_older sleepers []
 </code></pre>
-<p>We can now safely replace our <code>Miou.call_cc</code> with <code>Miou.call</code>. We know that each
+<p>We can now safely replace our <code>Miou.async</code> with <code>Miou.call</code>. We know that each
 task will have its own <code>sleepers</code>, and there will be no illegal access between
 domains.</p>
 <h2 id="cancellation-1"><a class="header" href="#cancellation-1">Cancellation</a></h2>
@@ -1795,7 +1795,7 @@ direct parents.</p>
 relationship and executing in parallel), we need to consider how to transfer
 this information correctly (meaning that this transfer would work regardless of
 the execution order of our tasks from both Miou's perspective — for
-<code>Miou.call_cc</code> — and the system's perspective — for <code>Miou.call</code>). It is in these
+<code>Miou.async</code> — and the system's perspective — for <code>Miou.call</code>). It is in these
 cases that Mutexes and Conditions can be useful.</p>
 <h2 id="mutexes"><a class="header" href="#mutexes">Mutexes</a></h2>
 <p>Mutexes allow obtaining exclusive access to manipulate information compared to
@@ -1816,7 +1816,7 @@ let server () =
     clean_up orphans;
     let client, sockaddr = Miou_unix.Ownership.accept socket in
     Format.printf "new client: %a\n%!" pp_sockaddr sockaddr;
-    ignore (Miou.call_cc
+    ignore (Miou.async
       ~give:[ Miou_unix.Ownership.resource clientr 
       ~orphans (fun () -&gt; echo client))
   done;
@@ -1866,7 +1866,7 @@ let accept_or_die fd =
     Miou.Mutex.protect mutex_sigint @@ fun () -&gt;
     Miou.Condition.wait condition mutex_sigint;
     `Die in
-  Miou.await_first [ Miou.call_cc accept; Miou.call_cc or_die ]
+  Miou.await_first [ Miou.async accept; Miou.async or_die ]
   |&gt; function Ok value -&gt; value | Error exn -&gt; raise exn
 
 let server () =
@@ -1879,7 +1879,7 @@ let server () =
     | `Die -&gt; ()
     | `Accept (fd', sockaddr) -&gt;
       printf "new client: %a\n%!" pp_sockaddr sockaddr;
-      ignore (Miou.call_cc
+      ignore (Miou.async
         ~give:[ Miou_unix.Ownership.resource client ]
         ~orphans (fun () -&gt; echo client));
       go orphans in
@@ -1888,16 +1888,16 @@ let server () =
 <p>We then need to "catch" the <code>SIGINT</code> signal. Signals are special in that they
 can execute a task outside of Miou. However, if these tasks have side effects,
 they won't be managed. Thus, Miou offers a way to attach functions to signals
-using <code>Miou.set_signal</code>:</p>
+using <code>Miou.sys_signal</code>:</p>
 <pre><code class="language-ocaml">let stop _signal =
   Miou.Mutex.protect mutex_sigint @@ fun () -&gt;
   Miou.Condition.broadcast condition
 
 let () = Miou_unix.run @@ fun () -&gt;
-  Miou.set_signal Sys.sigint (Sys.Signal_handle stop);
+  ignore (Miou.sys_signal Sys.sigint (Sys.Signal_handle stop));
   let domains = Stdlib.Domain.recommended_domain_count () - 1 in
   let domains = List.init domains (Fun.const ()) in
-  let prm = Miou.call_cc server in
+  let prm = Miou.async server in
   Miou.await prm :: Miou.parallel server domains
   |&gt; List.iter @@ function
   | Ok () -&gt; ()
@@ -1974,7 +1974,7 @@ let accept_or_die fd =
     Miou.Condition.wait condition mutex_sigint;
     `Die in
   let give = [ Miou_unix.Ownership.resource fd ] in
-  Miou.await_first [ Miou.call_cc ~give accept; Miou.call_cc or_die ]
+  Miou.await_first [ Miou.async ~give accept; Miou.async or_die ]
   |&gt; function Ok value -&gt; value | Error exn -&gt; raise exn
 
 let pp_sockaddr ppf = function
@@ -2007,7 +2007,7 @@ let server () =
     | `Die -&gt; terminate orphans
     | `Accept (client, sockaddr) -&gt;
       printf "new client: %a\n%!" pp_sockaddr sockaddr;
-      ignore (Miou.call_cc
+      ignore (Miou.async
         ~give:[ Miou_unix.Ownership.resource client ]
         ~orphans (fun () -&gt; echo client));
       go orphans in
@@ -2018,10 +2018,10 @@ let stop _signal =
   Miou.Condition.broadcast condition
 
 let () = Miou_unix.run @@ fun () -&gt;
-  Miou.set_signal Sys.sigint (Sys.Signal_handle stop);
+  ignore (Miou.sys_signal Sys.sigint (Sys.Signal_handle stop));
   let domains = Stdlib.Domain.recommended_domain_count () - 1 in
   let domains = List.init domains (Fun.const ()) in
-  let prm = Miou.call_cc server in
+  let prm = Miou.async server in
   Miou.await prm :: Miou.parallel server domains
   |&gt; List.iter @@ function
   | Ok () -&gt; ()

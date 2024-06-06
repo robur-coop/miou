@@ -193,7 +193,7 @@ direct parents.</p>
 relationship and executing in parallel), we need to consider how to transfer
 this information correctly (meaning that this transfer would work regardless of
 the execution order of our tasks from both Miou's perspective — for
-<code>Miou.call_cc</code> — and the system's perspective — for <code>Miou.call</code>). It is in these
+<code>Miou.async</code> — and the system's perspective — for <code>Miou.call</code>). It is in these
 cases that Mutexes and Conditions can be useful.</p>
 <h2 id="mutexes"><a class="header" href="#mutexes">Mutexes</a></h2>
 <p>Mutexes allow obtaining exclusive access to manipulate information compared to
@@ -214,7 +214,7 @@ let server () =
     clean_up orphans;
     let client, sockaddr = Miou_unix.Ownership.accept socket in
     Format.printf "new client: %a\n%!" pp_sockaddr sockaddr;
-    ignore (Miou.call_cc
+    ignore (Miou.async
       ~give:[ Miou_unix.Ownership.resource clientr 
       ~orphans (fun () -&gt; echo client))
   done;
@@ -264,7 +264,7 @@ let accept_or_die fd =
     Miou.Mutex.protect mutex_sigint @@ fun () -&gt;
     Miou.Condition.wait condition mutex_sigint;
     `Die in
-  Miou.await_first [ Miou.call_cc accept; Miou.call_cc or_die ]
+  Miou.await_first [ Miou.async accept; Miou.async or_die ]
   |&gt; function Ok value -&gt; value | Error exn -&gt; raise exn
 
 let server () =
@@ -277,7 +277,7 @@ let server () =
     | `Die -&gt; ()
     | `Accept (fd', sockaddr) -&gt;
       printf "new client: %a\n%!" pp_sockaddr sockaddr;
-      ignore (Miou.call_cc
+      ignore (Miou.async
         ~give:[ Miou_unix.Ownership.resource client ]
         ~orphans (fun () -&gt; echo client));
       go orphans in
@@ -286,16 +286,16 @@ let server () =
 <p>We then need to "catch" the <code>SIGINT</code> signal. Signals are special in that they
 can execute a task outside of Miou. However, if these tasks have side effects,
 they won't be managed. Thus, Miou offers a way to attach functions to signals
-using <code>Miou.set_signal</code>:</p>
+using <code>Miou.sys_signal</code>:</p>
 <pre><code class="language-ocaml">let stop _signal =
   Miou.Mutex.protect mutex_sigint @@ fun () -&gt;
   Miou.Condition.broadcast condition
 
 let () = Miou_unix.run @@ fun () -&gt;
-  Miou.set_signal Sys.sigint (Sys.Signal_handle stop);
+  ignore (Miou.sys_signal Sys.sigint (Sys.Signal_handle stop));
   let domains = Stdlib.Domain.recommended_domain_count () - 1 in
   let domains = List.init domains (Fun.const ()) in
-  let prm = Miou.call_cc server in
+  let prm = Miou.async server in
   Miou.await prm :: Miou.parallel server domains
   |&gt; List.iter @@ function
   | Ok () -&gt; ()
@@ -372,7 +372,7 @@ let accept_or_die fd =
     Miou.Condition.wait condition mutex_sigint;
     `Die in
   let give = [ Miou_unix.Ownership.resource fd ] in
-  Miou.await_first [ Miou.call_cc ~give accept; Miou.call_cc or_die ]
+  Miou.await_first [ Miou.async ~give accept; Miou.async or_die ]
   |&gt; function Ok value -&gt; value | Error exn -&gt; raise exn
 
 let pp_sockaddr ppf = function
@@ -405,7 +405,7 @@ let server () =
     | `Die -&gt; terminate orphans
     | `Accept (client, sockaddr) -&gt;
       printf "new client: %a\n%!" pp_sockaddr sockaddr;
-      ignore (Miou.call_cc
+      ignore (Miou.async
         ~give:[ Miou_unix.Ownership.resource client ]
         ~orphans (fun () -&gt; echo client));
       go orphans in
@@ -416,10 +416,10 @@ let stop _signal =
   Miou.Condition.broadcast condition
 
 let () = Miou_unix.run @@ fun () -&gt;
-  Miou.set_signal Sys.sigint (Sys.Signal_handle stop);
+  ignore (Miou.sys_signal Sys.sigint (Sys.Signal_handle stop));
   let domains = Stdlib.Domain.recommended_domain_count () - 1 in
   let domains = List.init domains (Fun.const ()) in
-  let prm = Miou.call_cc server in
+  let prm = Miou.async server in
   Miou.await prm :: Miou.parallel server domains
   |&gt; List.iter @@ function
   | Ok () -&gt; ()

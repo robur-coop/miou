@@ -184,11 +184,11 @@ chapter, it mainly involves using <code>Miou</code> and <code>Miou_unix</code>. 
 function that handles our clients:</p>
 <pre><code class="language-ocaml">let rec echo client =
   let buf = Bytes.create 0x100 in
-  let len = Miou_unix.read client buf 0 (Bytes.length buf) in
+  let len = Miou_unix.read client buf ~off:0 ~len:(Bytes.length buf) in
   if len = 0 then Miou_unix.close client
   else
     let str = Bytes.sub_string buf 0 len in
-    let _ = Miou_unix.write client str 0 len in echo client
+    let _ = Miou_unix.write client str ~off:0 ~len in echo client
 </code></pre>
 <p>A subtlety lies in <code>Miou_unix.write</code>, which expects a <code>string</code> instead of
 <code>bytes</code>. In a concurrent execution, it may happen that <code>buf</code> could be modified
@@ -212,7 +212,7 @@ let server () =
   while true do
     clean_up orphans;
     let client, _ = Miou_unix.accept socket in
-    ignore (Miou.call_cc ~orphans (fun () -&gt; echo client))
+    ignore (Miou.async ~orphans (fun () -&gt; echo client))
   done;
   Miou_unix.close socket
 
@@ -241,11 +241,11 @@ servers in parallel, each handling several clients concurrently.</p>
 <p>To distribute the implementation of our server across multiple domains, we'll
 use <code>Miou.parallel</code>. We won't forget to involve <code>dom0</code> (referring to our rule
 where <code>dom0</code> would never be assigned a task from other domain) via
-<code>Miou.call_cc</code>:</p>
+<code>Miou.async</code>:</p>
 <pre><code class="language-ocaml">let () = Miou_unix.run @@ fun () -&gt;
   let domains = Stdlib.Domain.recommended_domain_count () - 1 in
   let domains = List.init domains (Fun.const ()) in
-  let prm = Miou.call_cc server in
+  let prm = Miou.async server in
   Miou.await prm :: Miou.parallel server domains
   |&gt; List.iter @@ function
   | Ok () -&gt; ()
@@ -325,7 +325,7 @@ client file descriptor to our <code>echo</code> task:</p>
   while true do
     clean_up orphans;
     let client, _ = Miou_unix.Ownership.accept socket in
-    ignore (Miou.call_cc
+    ignore (Miou.async
       ~give:[ Miou_unix.Ownership.resource client ]
       ~orphans (fun () -&gt; echo client))
   done;
