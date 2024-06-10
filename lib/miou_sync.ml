@@ -15,6 +15,10 @@
 
 module Backoff = Miou_backoff
 
+type error = exn * Printexc.raw_backtrace
+
+external to_error : exn * Printexc.raw_backtrace -> error = "%identity"
+
 module Trigger : sig
   type state =
     | Signaled
@@ -91,7 +95,6 @@ module Computation : sig
   val peek : 'a t -> ('a, exn * Printexc.raw_backtrace) result option
   val try_attach : 'a t -> Trigger.t -> bool
   val detach : 'a t -> Trigger.t -> unit
-  val clean : 'a t -> unit
   val await : 'a t -> ('a, exn * Printexc.raw_backtrace) result
   val await_exn : 'a t -> 'a
   val canceller : from:'a t -> into:'b t -> Trigger.t
@@ -146,16 +149,6 @@ end = struct
           detach (Backoff.once backoff) t
 
   let detach t trigger = Trigger.signal trigger; detach Backoff.default t
-
-  let rec clean backoff t =
-    match Atomic.get t with
-    | Returned _ | Cancelled _ -> ()
-    | Continue r as seen ->
-        let after = gc 0 [] r.triggers in
-        if not (Atomic.compare_and_set t seen after) then
-          clean (Backoff.once backoff) t
-
-  let clean t = clean Backoff.default t
 
   let is_running t =
     match Atomic.get t with

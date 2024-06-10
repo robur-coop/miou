@@ -183,7 +183,7 @@ type domain = {
   ; hooks: (unit -> unit) Miou_sequence.t
 }
 
-type 'r continuation = (State.error option, 'r) State.continuation
+type 'r continuation = (Miou_sync.error option, 'r) State.continuation
 
 type pool_elt =
   | Pool_create : 'a t * (unit -> 'a) -> pool_elt
@@ -191,7 +191,7 @@ type pool_elt =
   | Pool_clean : _ t * _ t -> pool_elt
   | Pool_continue : {
         prm: 'r t
-      ; result: State.error option
+      ; result: Miou_sync.error option
       ; k: 'r continuation
     }
       -> pool_elt
@@ -207,7 +207,7 @@ let promise_of_pool_elt = function
 type dom0_elt =
   | Dom0_continue : {
         prm: 'r t
-      ; result: State.error option
+      ; result: Miou_sync.error option
       ; k: 'r continuation
     }
       -> dom0_elt
@@ -478,7 +478,7 @@ module Domain = struct
               add_into_domain domain (Domain_cancel (child, bt))
             else add_into_pool pool (Pool_cancel (child, bt)))
 
-  let canceller pool ~self (child : _ t) =
+  let[@alert "-handler"] canceller pool ~self (child : _ t) =
     let trigger = Trigger.create () in
     miou_assert
       (Trigger.on_signal trigger (pool, self) child propagate_cancellation);
@@ -555,6 +555,7 @@ module Domain = struct
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
     if not (Promise.has_forbidden prm) then Computation.detach prm.state trigger;
     let result = Computation.cancelled prm.state in
+    let result = Option.map to_error result in
     match Domain_uid.to_int prm.runner with
     | 0 -> add_into_dom0 pool (Dom0_continue { prm; result; k })
     | _ when Domain_uid.equal runner domain.uid ->
@@ -570,7 +571,7 @@ module Domain = struct
 
      In other words, await only mentions a change of state towards
      cancellation. *)
-  let await pool domain prm trigger k =
+  let[@alert "-handler"] await pool domain prm trigger k =
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
     miou_assert (Domain_uid.equal runner domain.uid);
     miou_assert (Domain_uid.equal prm.runner domain.uid);
@@ -603,11 +604,13 @@ module Domain = struct
           if not (Trigger.on_signal trigger waiter k resume) then (
             Computation.detach prm.state trigger;
             let result = Computation.cancelled prm.state in
+            let result = Option.map to_error result in
             let state = State.suspended_with k (Get result) in
             add_into_domain domain (Domain_task (prm, state))))
         else
           let () = Trigger.signal trigger in
           let result = Computation.cancelled prm.state in
+          let result = Option.map to_error result in
           let state = State.suspended_with k (Get result) in
           add_into_domain domain (Domain_task (prm, state))
 
@@ -1265,7 +1268,7 @@ let suspend (Syscall (uid, trigger, prm)) =
     invalid_arg "This syscall does not belong to the current domain";
   Atomic.incr domain.syscalls;
   (* [Trigger.await] gives an opportunity to the scheduler to cancel the current
-     continuation. Indeed, we produce a [(State.error, 'a) continuation] and the
+     continuation. Indeed, we produce a [(Sync.error, 'a) continuation] and the
      parent can actually cancel our current promise. In that case, the domain
      will clean our continuation with [discontinue_with]. Even if the scheduler
      wants to cancel/clean our continuation, the finaliser [finally] will be

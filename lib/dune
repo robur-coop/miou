@@ -1,11 +1,11 @@
 (library
- (name backoff)
+ (name miou_backoff)
  (public_name miou.backoff)
  (wrapped false)
  (modules miou_backoff))
 
 (library
- (name sync)
+ (name miou_sync)
  (public_name miou.sync)
  (wrapped false)
  (modules miou_sync)

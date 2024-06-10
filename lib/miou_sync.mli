@@ -13,6 +13,10 @@
    THIS SOFTWARE.
 *)
 
+type error = exn * Printexc.raw_backtrace
+
+val to_error : exn * Printexc.raw_backtrace -> error
+
 module Trigger : sig
   type t
 
@@ -68,12 +72,7 @@ module Trigger : sig
 end
 
 module Computation : sig
-  type 'a state =
-    | Cancelled of exn * Printexc.raw_backtrace
-    | Returned of 'a
-    | Continue of { balance: int; triggers: Trigger.t list }
-
-  type !'a t = private 'a state Atomic.t
+  type !'a t
 
   val create : unit -> 'a t
   (** [create ()] creates a new computation in the running state. *)
@@ -122,8 +121,6 @@ module Computation : sig
   val detach : 'a t -> Trigger.t -> unit
   (** [detach c trigger] {{!Trigger.signal} signals} the trigger and detaches it
       from the computation [c]. *)
-
-  val clean : 'a t -> unit
 
   val await : 'a t -> ('a, exn * Printexc.raw_backtrace) result
   (** [await c] waits for the computation to complete and either returns the
