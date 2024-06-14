@@ -330,10 +330,11 @@ let transmit_fds signals revert tbl fds =
   List.fold_left fold signals fds
 
 let interrupted fd fds = List.exists (( = ) fd) fds
+let buf = Bytes.create 0x1000
 
-let intr fd =
-  let buf = Bytes.create 0x100 in
-  ignore (Unix.read fd buf 0 (Bytes.length buf));
+let intr fd = match Unix.read fd buf 0 (Bytes.length buf) with
+  | _ -> ()
+  | exception Unix.(Unix_error (EAGAIN, _, _)) -> ()
 
 let select uid interrupt ~block cancelled_syscalls =
   let domain = domain () in
@@ -375,13 +376,14 @@ let select uid interrupt ~block cancelled_syscalls =
 
 let interrupt oc () =
   match Unix.single_write oc signal 0 1 with
-  | _ -> ()
+  | n -> assert (n = 1) (* XXX(dinosaure): paranoid mode. *)
   | exception Unix.(Unix_error (EAGAIN, _, _)) -> ()
 
 and signal = Bytes.make 1 '\000'
 
 let events domain =
   let ic, oc = Unix.pipe ~cloexec:true () in
+  Unix.set_nonblock ic;
   Unix.set_nonblock oc;
   let select = select domain ic in
   let t = { Miou.interrupt= interrupt oc; select } in
