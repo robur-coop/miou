@@ -374,12 +374,12 @@ let select uid interrupt ~block cancelled_syscalls =
       let signals = transmit_fds signals domain.revert domain.writers wrs in
       signals
 
+let signal = Bytes.make 1 '\000'
 let interrupt oc () =
   match Unix.single_write oc signal 0 1 with
   | n -> assert (n = 1) (* XXX(dinosaure): paranoid mode. *)
   | exception Unix.(Unix_error (EAGAIN, _, _)) -> ()
 
-and signal = Bytes.make 1 '\000'
 
 let events domain =
   let ic, oc = Unix.pipe ~cloexec:true () in
