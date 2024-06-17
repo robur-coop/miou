@@ -330,9 +330,10 @@ let transmit_fds signals revert tbl fds =
   List.fold_left fold signals fds
 
 let interrupted fd fds = List.exists (( = ) fd) fds
-let buf = Bytes.create 0x1000
 
-let intr fd = match Unix.read fd buf 0 (Bytes.length buf) with
+let intr fd =
+  let buf = Bytes.create 0x100 in
+  match Unix.read fd buf 0 (Bytes.length buf) with
   | _ -> ()
   | exception Unix.(Unix_error (EAGAIN, _, _)) -> ()
 
