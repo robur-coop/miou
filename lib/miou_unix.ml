@@ -18,9 +18,9 @@ let tcpv6 () =
   let fd = Unix.socket Unix.PF_INET6 Unix.SOCK_STREAM 0 in
   Unix.set_nonblock fd; { fd; non_blocking= true }
 
-let bind_and_listen ?(backlog = 64) { fd; _ } sockaddr =
-  Unix.setsockopt fd Unix.SO_REUSEADDR true;
-  Unix.setsockopt fd Unix.SO_REUSEPORT true;
+let bind_and_listen ?(backlog = 64) ?(reuseaddr = true) ?(reuseport = true) { fd; _ } sockaddr =
+  Unix.setsockopt fd Unix.SO_REUSEADDR reuseaddr;
+  Unix.setsockopt fd Unix.SO_REUSEPORT reuseport;
   Unix.bind fd sockaddr;
   Unix.listen fd backlog
 
