@@ -13,7 +13,7 @@
    THIS SOFTWARE.
 *)
 
-type error = exn * Printexc.raw_backtrace
+type error = Picos_exn_bt.t
 
 val to_error : exn * Printexc.raw_backtrace -> error
 
@@ -47,7 +47,7 @@ module Trigger : sig
 
   type _ Effect.t +=
     private
-    | Await : t -> (exn * Printexc.raw_backtrace) option Effect.t
+    | Await : t -> Picos_exn_bt.t option Effect.t
 
   val signal : t -> unit
   (** After [signal t] returns, the trigger has been put into the signaled state

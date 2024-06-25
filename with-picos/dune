@@ -1,0 +1,46 @@
+(rule (copy# ../lib/miou_fmt.ml miou_fmt.ml))
+(rule (copy# ../lib/miou_fmt.mli miou_fmt.mli))
+(rule (copy# ../lib/miou_gen.ml miou_gen.ml))
+(rule (copy# ../lib/miou_gen.mli miou_gen.mli))
+(rule (copy# ../lib/miou_logs.ml miou_logs.ml))
+(rule (copy# ../lib/miou_logs.mli miou_logs.mli))
+(rule (copy# ../lib/miou.ml miou.ml))
+(rule (copy# ../lib/miou.mli miou.mli))
+(rule (copy# ../lib/miou_pqueue.ml miou_pqueue.ml))
+(rule (copy# ../lib/miou_pqueue.mli miou_pqueue.mli))
+(rule (copy# ../lib/miou_queue.ml miou_queue.ml))
+(rule (copy# ../lib/miou_queue.mli miou_queue.mli))
+(rule (copy# ../lib/miou_sequence.ml miou_sequence.ml))
+(rule (copy# ../lib/miou_sequence.mli miou_sequence.mli))
+(rule (copy# ../lib/miou_state.ml miou_state.ml))
+(rule (copy# ../lib/miou_state.mli miou_state.mli))
+(rule (copy# ../lib/miou_unix.ml miou_unix.ml))
+(rule (copy# ../lib/miou_unix.mli miou_unix.mli))
+(rule (copy# ../lib/miou_vector.ml miou_vector.ml))
+(rule (copy# ../lib/miou_vector.mli miou_vector.mli))
+
+(library
+ (name sync_with_picos)
+ (public_name miou-with-picos.sync)
+ (wrapped false)
+ (modules miou_sync)
+ (libraries picos))
+
+(library
+ (name miou_with_picos)
+ (public_name miou-with-picos)
+ (wrapped false)
+ (modules
+  miou_backoff
+  miou_fmt
+  miou
+  miou_gen
+  miou_logs
+  miou_vector
+  miou_pqueue
+  miou_sequence
+  miou_queue
+  miou_state)
+ (instrumentation
+  (backend bisect_ppx))
+ (libraries miou-with-picos.sync))
