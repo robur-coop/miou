@@ -73,6 +73,7 @@ end
 
 module Computation : sig
   type !'a t
+  type packed = Packed : 'a t -> packed
 
   val create : unit -> 'a t
   (** [create ()] creates a new computation in the running state. *)
@@ -128,5 +129,52 @@ module Computation : sig
       cancelled with. *)
 
   val await_exn : 'a t -> 'a
+  (** [await_exn c] waits for the computation to complete and either returns the
+      value of the completed computation or {b raises} the exception the
+      computation was cancelled with. *)
+
   val canceller : from:'a t -> into:'b t -> Trigger.t
+  (** [canceller ~from ~into] creates a triger that propagates cancellation
+      [from] one computation [into] another on {{:Trigger.signal} signal}. The
+      returned trigger is not attached to any computation.
+
+      The returned trigger is usually attached to the computation [from] which
+      cancellation is to be propagated and the trigger should usually also be
+      detached after it is no longer needed.
+
+      The intended use case of [canceller] is as a low level building block of
+      structured concurrency mechanisms. *)
+end
+
+module Fiber : sig
+  type t
+  type 'a computation = 'a Computation.t
+  type _ Effect.t += private Yield : unit Effect.t
+  type _ Effect.t += private Current : t Effect.t
+
+  val yield : unit -> unit
+  (** [yield ()] asks the current fiber to be rescheduled. *)
+
+  val current : unit -> t
+  (** [current ()] returns the current fiber. *)
+
+  val create : forbid:bool -> 'a Computation.t -> t
+
+  val has_forbidden : t -> bool
+  (** [has_forbidden fiber] determines whether the fiber forbids or permits the
+      scheduler from propagating cancellation to it. *)
+
+  val exchange : t -> forbid:bool -> bool
+  (** [exchange fiber ~forbid] sets the bit that tells the scheduler whether to
+      propagate cancellation or not and returns the previous state. *)
+
+  val set : t -> forbid:bool -> unit
+  (** [set fiber ~forbid] sets the bit that tells the scheduler whether to
+      propagate cancellation or not. *)
+
+  val equal : t -> t -> bool
+  (** [eqaul a b] is a physical equality for fibers, i.e. it determines wheter
+      [a] and [b] are one and the same fiber. *)
+
+  val raise_if_errored : t -> unit
 end

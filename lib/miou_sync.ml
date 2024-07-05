@@ -84,6 +84,7 @@ module Computation : sig
     | Continue of { balance: int; triggers: Trigger.t list }
 
   type !'a t = 'a state Atomic.t
+  type packed = Packed : 'a t -> packed
 
   val create : unit -> 'a t
   val try_return : 'a t -> 'a -> bool
@@ -105,6 +106,7 @@ end = struct
     | Continue of { balance: int; triggers: Trigger.t list }
 
   type 'a t = 'a state Atomic.t
+  type packed = Packed : 'a t -> packed
 
   let create () = Atomic.make (Continue { balance= 0; triggers= [] })
 
@@ -217,4 +219,30 @@ end = struct
     match await t with
     | Ok value -> value
     | Error (exn, bt) -> Printexc.raise_with_backtrace exn bt
+end
+
+module Fiber = struct
+  type t = { mutable forbid: bool; computation: Computation.packed }
+  type 'a computation = 'a Computation.t
+  type _ Effect.t += Yield : unit Effect.t
+  type _ Effect.t += Current : t Effect.t
+
+  let yield () = Effect.perform Yield
+  let current () = Effect.perform Current
+  let create ~forbid c = { forbid; computation= Packed c }
+  let has_forbidden { forbid; _ } = forbid
+
+  let exchange t ~forbid =
+    let seen = t.forbid in
+    t.forbid <- forbid;
+    seen
+
+  let set t ~forbid = t.forbid <- forbid
+
+  let raise_if_errored t =
+    if not t.forbid then
+      let (Computation.Packed c) = t.computation in
+      Computation.raise_if_errored c
+
+  let[@inline] equal a b = a == b
 end

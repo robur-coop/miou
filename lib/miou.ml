@@ -12,6 +12,7 @@ module Gen = Miou_gen
 open Miou_sync
 module Trigger = Trigger
 module Computation = Computation
+module Fiber = Fiber
 module Promise_uid = Gen.Make ()
 module Domain_uid = Gen.Make ()
 module Resource_uid = Gen.Make ()
@@ -57,7 +58,7 @@ type resource = Resource : 'a r -> resource [@@unboxed]
 type 'a t = {
     uid: Promise_uid.t
   ; runner: Domain_uid.t
-  ; mutable forbid: bool
+  ; fiber: Fiber.t
   ; state: 'a Computation.t
   ; parent: pack option
   ; children: pack Miou_sequence.t
@@ -66,19 +67,21 @@ type 'a t = {
   ; cleaned: bool Atomic.t
 }
 
-and pack = Pack : 'a t -> pack [@@unboxed]
+and pack = Pack : 'a t -> pack
 
 module Promise = struct
   module Uid = Promise_uid
 
   let create ?parent ~forbid ?resources:(ress = []) runner =
     let resources = Miou_sequence.create () in
+    let state = Computation.create () in
+    let fiber = Fiber.create ~forbid state in
     List.iter Miou_sequence.(add Left resources) ress;
     {
       uid= Promise_uid.gen ()
     ; runner
-    ; forbid
-    ; state= Computation.create ()
+    ; fiber
+    ; state
     ; parent= Option.map (fun prm -> Pack prm) parent
     ; children= Miou_sequence.create ()
     ; resources
@@ -91,19 +94,10 @@ module Promise = struct
       Obj.(reachable_words (repr prm))
 
   let[@coverage off] pp_pack ppf (Pack prm) = pp ppf prm
-  let has_forbidden { forbid; _ } = forbid
+  let has_forbidden { fiber; _ } = Fiber.has_forbidden fiber
   let children_terminated prm = Miou_sequence.is_empty prm.children
   let is_running { state; _ } = Computation.is_running state
   let uid { uid; _ } = uid
-  let set t ~forbid = t.forbid <- forbid
-
-  let raise_if_errored t =
-    if not t.forbid then Computation.raise_if_errored t.state
-
-  let exchange t ~forbid =
-    let seen = t.forbid in
-    t.forbid <- forbid;
-    seen
 
   type nonrec 'a t = 'a t
 end
@@ -247,13 +241,13 @@ type _ Effect.t += Random : Random.State.t Effect.t
 type _ Effect.t += Domains : Domain_uid.t list Effect.t
 type _ Effect.t += Await_cancellation : _ t -> unit Effect.t
 type _ Effect.t += Cancel : Printexc.raw_backtrace * 'a t -> unit Effect.t
-type _ Effect.t += Yield : unit Effect.t
 type _ Effect.t += Transfer : resource -> Trigger.t Effect.t
 
 let[@coverage off] pp_effect : type a. a Effect.t Fmt.t =
  fun ppf -> function
   | Spawn _ -> Fmt.string ppf "Spawn"
   | Self -> Fmt.string ppf "Self"
+  | Fiber.Current -> Fmt.string ppf "Current"
   | Self_domain -> Fmt.string ppf "Self_domain"
   | Get _ -> Fmt.string ppf "Get"
   | Random -> Fmt.string ppf "Random"
@@ -261,7 +255,7 @@ let[@coverage off] pp_effect : type a. a Effect.t Fmt.t =
   | Await_cancellation prm ->
       Fmt.pf ppf "@[<1>(Await_cancellation@ %a)@]" Promise.pp prm
   | Cancel (_, prm) -> Fmt.pf ppf "@[<1>(Cancel@ %a)@]" Promise.pp prm
-  | Yield -> Fmt.string ppf "Yield"
+  | Fiber.Yield -> Fmt.string ppf "Yield"
   | Trigger.Await _ -> Fmt.string ppf "Await"
   | _ -> Fmt.string ppf "#effect"
 
@@ -504,6 +498,7 @@ module Domain = struct
      fun k eff ->
       match eff with
       | Get value -> k (Operation.return value)
+      | Fiber.Current -> k (Operation.return prm.fiber)
       | Self -> k (Operation.return (Pack prm))
       | Self_domain -> k (Operation.return domain)
       | Random -> k (Operation.return domain.g)
@@ -545,7 +540,7 @@ module Domain = struct
           else add_into_pool pool (Pool_transfer (parent, res, trigger));
           k (Operation.return trigger)
       | Trigger.Await _ -> k Operation.interrupt
-      | Yield -> k Operation.yield
+      | Fiber.Yield -> k Operation.yield
       | eff -> k (Operation.perform eff)
     in
     { perform }
@@ -1245,7 +1240,7 @@ let parallel fn tasks =
   in
   go domains [] tasks
 
-let yield () = Effect.perform Yield
+let yield () = Fiber.yield ()
 
 let syscall () =
   let uid = Syscall_uid.gen () in
@@ -1450,37 +1445,42 @@ let protect ~on_cancellation ~finally fn =
       Printexc.raise_with_backtrace exn bt
 
 module Mutex = struct
-  type 'a value = { trigger: Trigger.t; prm: 'a t option }
+  type 'a value = { trigger: Trigger.t; fiber: Fiber.t option }
   type entry = Entry : 'a value -> entry [@@unboxed]
 
   type state =
     | Unlocked
-    | Locked : { prm: _ t option; head: entry list; tail: entry list } -> state
+    | Locked : {
+          fiber: Fiber.t option
+        ; head: entry list
+        ; tail: entry list
+      }
+        -> state
 
   let[@inline never] not_owner () = raise (Sys_error "Mutex: not owner")
   let[@inline never] unlocked () = raise (Sys_error "Mutex: unlocked")
   let[@inline never] owner () = raise (Sys_error "Mutex: owner")
   let create () = Atomic.make Unlocked
-  let locked_nothing = Locked { prm= None; head= []; tail= [] }
+  let locked_nothing = Locked { fiber= None; head= []; tail= [] }
 
-  let rec unlock_as t (self : _ t option) backoff =
+  let rec unlock_as t (self : Fiber.t option) backoff =
     match Atomic.get t with
     | Unlocked -> unlocked ()
     | Locked r as seen ->
         let is_owner =
-          match (self, r.prm) with
+          match (self, r.fiber) with
           | None, _ | _, None -> true
-          | Some a, Some b -> Promise_uid.equal a.uid b.uid
+          | Some a, Some b -> Fiber.equal a b
         in
         if is_owner then begin
           match r.head with
-          | Entry { trigger; prm } :: rest ->
-              let after = Locked { r with prm; head= rest } in
+          | Entry { trigger; fiber } :: rest ->
+              let after = Locked { r with fiber; head= rest } in
               transfer_as t self seen after trigger backoff
           | [] -> begin
               match List.rev r.tail with
-              | Entry { trigger; prm } :: rest ->
-                  let after = Locked { prm; head= rest; tail= [] } in
+              | Entry { trigger; fiber } :: rest ->
+                  let after = Locked { fiber; head= rest; tail= [] } in
                   transfer_as t self seen after trigger backoff
               | [] ->
                   if not (Atomic.compare_and_set t seen Unlocked) then
@@ -1495,20 +1495,20 @@ module Mutex = struct
 
   let[@inline] unlock t =
     try
-      let (Pack self) = Effect.perform Self in
-      unlock_as t (Some self) Backoff.default
+      let fiber = Fiber.current () in
+      unlock_as t (Some fiber) Backoff.default
     with Effect.Unhandled Self -> unlock_as t None Backoff.default
 
   let rec cleanup_as t (Entry value as entry) backoff =
     match Atomic.get t with
     | Locked r as seen ->
         let is_equal =
-          match (r.prm, value.prm) with
+          match (r.fiber, value.fiber) with
           | None, None -> true
-          | Some a, Some b -> Promise_uid.equal a.uid b.uid
+          | Some a, Some b -> Fiber.equal a b
           | _ -> false
         in
-        if is_equal then unlock_as t value.prm backoff
+        if is_equal then unlock_as t value.fiber backoff
         else if r.head != [] then
           match drop_first_or_not_found entry r.head with
           | head ->
@@ -1534,23 +1534,23 @@ module Mutex = struct
         let after =
           match self with
           | None -> locked_nothing
-          | Some _ -> Locked { prm= self; head= []; tail= [] }
+          | Some _ -> Locked { fiber= self; head= []; tail= [] }
         in
         if not (Atomic.compare_and_set t seen after) then
           lock_as t self (Backoff.once backoff)
     | Locked r as seen ->
         let trigger = Trigger.create () in
         let entry =
-          match (self, r.prm) with
-          | _, None -> Entry { trigger; prm= None }
-          | None, Some prm ->
-              let (Pack self) = Effect.perform Self in
-              if Promise_uid.equal self.uid prm.uid = false then
-                Entry { trigger; prm= Some self }
+          match (self, r.fiber) with
+          | _, None -> Entry { trigger; fiber= None }
+          | None, Some fiber ->
+              let self = Fiber.current () in
+              if Fiber.equal self fiber = false then
+                Entry { trigger; fiber= Some self }
               else owner ()
-          | Some self, Some prm ->
-              if Promise_uid.equal self.uid prm.uid = false then
-                Entry { trigger; prm= Some self }
+          | Some self, Some fiber ->
+              if Fiber.equal self fiber = false then
+                Entry { trigger; fiber= Some self }
               else owner ()
         in
         let after =
@@ -1568,16 +1568,16 @@ module Mutex = struct
 
   let[@inline] lock t =
     try
-      let (Pack self) = Effect.perform Self in
-      lock_as t (Some self) Backoff.default
+      let fiber = Fiber.current () in
+      lock_as t (Some fiber) Backoff.default
     with Effect.Unhandled Self -> lock_as t None Backoff.default
 
   let try_lock t =
     try
-      let (Pack prm) = Effect.perform Self in
+      let fiber = Fiber.current () in
       Atomic.get t == Unlocked
       || Atomic.compare_and_set t Unlocked
-           (Locked { prm= Some prm; head= []; tail= [] })
+           (Locked { fiber= Some fiber; head= []; tail= [] })
     with Effect.Unhandled Self ->
       Atomic.get t == Unlocked
       || Atomic.compare_and_set t Unlocked locked_nothing
@@ -1586,11 +1586,11 @@ module Mutex = struct
 
   let protect t fn =
     try
-      let (Pack self) = Effect.perform Self in
-      lock_as t (Some self) Backoff.default;
+      let fiber = Fiber.current () in
+      lock_as t (Some fiber) Backoff.default;
       match fn () with
       | value ->
-          unlock_as t (Some self) Backoff.default;
+          unlock_as t (Some fiber) Backoff.default;
           value
       | exception exn ->
           let bt = Printexc.get_raw_backtrace () in
@@ -1599,7 +1599,7 @@ module Mutex = struct
              that's what's intended). So, [unlock_as] can raise another
              exception [Sys_error "Mutex: unlocked"] but [exn] is more important
              to reraise. *)
-          inhibit (fun () -> unlock_as t (Some self) Backoff.default);
+          inhibit (fun () -> unlock_as t (Some fiber) Backoff.default);
           Printexc.raise_with_backtrace exn bt
     with Effect.Unhandled Self -> (
       lock_as t None Backoff.default;
@@ -1684,7 +1684,7 @@ module Condition = struct
     if not (Atomic.compare_and_set t seen after) then
       cleanup (Backoff.once backoff) trigger t
 
-  let rec wait backoff prm trigger t mutex =
+  let rec wait backoff fiber trigger t mutex =
     let seen = Atomic.get t in
     let after =
       match seen with
@@ -1697,19 +1697,19 @@ module Condition = struct
     if Atomic.compare_and_set t seen after then begin
       let on_cancellation () = cleanup Backoff.default trigger t in
       let finally ~cancelled:_ = () in
-      Mutex.unlock_as mutex (Some prm) Backoff.default;
+      Mutex.unlock_as mutex (Some fiber) Backoff.default;
       protect ~finally ~on_cancellation @@ fun () ->
       let _result = Trigger.await trigger in
-      let forbid = Promise.exchange prm ~forbid:true in
-      Mutex.lock_as mutex (Some prm) Backoff.default;
-      Promise.set prm ~forbid
+      let forbid = Fiber.exchange fiber ~forbid:true in
+      Mutex.lock_as mutex (Some fiber) Backoff.default;
+      Fiber.set fiber ~forbid
     end
-    else wait (Backoff.once backoff) prm trigger t mutex
+    else wait (Backoff.once backoff) fiber trigger t mutex
 
   let wait t mutex =
     let trigger = Trigger.create () in
-    let (Pack self) = Effect.perform Self in
-    wait Backoff.default self trigger t mutex
+    let fiber = Fiber.current () in
+    wait Backoff.default fiber trigger t mutex
 
   type t = state Atomic.t
 end
@@ -1719,7 +1719,7 @@ module Lazy = struct
 
   type 'a state =
     | Fun of (unit -> 'a)
-    | Run : { prm: _ t; triggers: Trigger.t list } -> 'a state
+    | Run : { fiber: Fiber.t; triggers: Trigger.t list } -> 'a state
     | Val of 'a
     | Exn of { exn: exn; trace: Printexc.raw_backtrace }
 
@@ -1740,13 +1740,13 @@ module Lazy = struct
               cleanup t trigger (Backoff.once backoff)
         | exception Not_found -> ())
 
-  let rec force : type a b. a t -> b Promise.t -> Backoff.t -> a =
-   fun t prm backoff ->
+  let rec force : type a. a t -> Fiber.t -> Backoff.t -> a =
+   fun t fiber backoff ->
     match Atomic.get t with
     | Val v -> v
     | Exn r -> Printexc.raise_with_backtrace r.exn r.trace
     | Fun fn as seen ->
-        let after = Run { prm; triggers= [] } in
+        let after = Run { fiber; triggers= [] } in
         if Atomic.compare_and_set t seen after then begin
           let result =
             match fn () with
@@ -1759,11 +1759,11 @@ module Lazy = struct
           | Val _ | Exn _ | Fun _ -> failwith "impossible"
           | Run r ->
               List.iter Trigger.signal r.triggers;
-              force t prm Backoff.default
+              force t fiber Backoff.default
         end
-        else force t prm (Backoff.once backoff)
+        else force t fiber (Backoff.once backoff)
     | Run r as seen ->
-        if Promise.Uid.equal r.prm.uid prm.uid then raise Undefined
+        if Fiber.equal r.fiber fiber then raise Undefined
         else
           let trigger = Trigger.create () in
           let triggers = trigger :: r.triggers in
@@ -1773,18 +1773,18 @@ module Lazy = struct
             let finally ~cancelled:_ = () in
             protect ~on_cancellation ~finally @@ fun () ->
             ignore (Trigger.await trigger);
-            force t prm Backoff.default
+            force t fiber Backoff.default
           end
-          else force t prm (Backoff.once backoff)
+          else force t fiber (Backoff.once backoff)
 
   let force t =
     match Atomic.get t with
     | Val v -> v
     | Exn r -> Printexc.raise_with_backtrace r.exn r.trace
     | Fun _ | Run _ ->
-        let (Pack self) = Effect.perform Self in
-        Promise.raise_if_errored self;
-        force t self Backoff.default
+        let fiber = Fiber.current () in
+        Fiber.raise_if_errored fiber;
+        force t fiber Backoff.default
 end
 
 module Sequence = struct
