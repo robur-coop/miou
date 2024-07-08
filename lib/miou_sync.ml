@@ -226,6 +226,10 @@ module Fiber = struct
   type 'a computation = 'a Computation.t
   type _ Effect.t += Yield : unit Effect.t
   type _ Effect.t += Current : t Effect.t
+  type _ Effect.t +=
+    | Spawn : { forbid : bool
+              ; computation : 'a computation
+              ; mains : (unit -> unit) list } -> unit Effect.t
 
   let yield () = Effect.perform Yield
   let current () = Effect.perform Current
@@ -245,4 +249,7 @@ module Fiber = struct
       Computation.raise_if_errored c
 
   let[@inline] equal a b = a == b
+
+  let spawn ~forbid computation mains =
+    Effect.perform (Spawn { forbid; computation; mains })
 end

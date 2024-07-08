@@ -148,6 +148,10 @@ module Fiber : sig
   type 'a computation = 'a Computation.t
   type _ Effect.t += private Yield : unit Effect.t
   type _ Effect.t += private Current : t Effect.t
+  type _ Effect.t += private
+    | Spawn : { forbid : bool
+              ; computation : 'a computation
+              ; mains : (unit -> unit) list } -> unit Effect.t
 
   val yield : unit -> unit
   (** [yield ()] asks the current fiber to be rescheduled. *)
@@ -174,4 +178,5 @@ module Fiber : sig
       [a] and [b] are one and the same fiber. *)
 
   val raise_if_errored : t -> unit
+  val spawn : forbid:bool -> 'a computation -> (unit -> unit) list -> unit
 end

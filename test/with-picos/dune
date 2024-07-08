@@ -1,0 +1,8 @@
+(executable
+ (name bound_q)
+ (modules bound_q)
+ (libraries miou-with-picos picos.sync))
+
+(cram
+ (package miou-with-picos)
+ (deps bound_q.exe))

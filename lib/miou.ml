@@ -1,6 +1,7 @@
 type impossible = |
 
 external reraise : exn -> 'a = "%reraise"
+external apply : ('a -> 'b) -> 'a -> 'b = "%apply"
 
 module Backoff = Miou_backoff
 module Queue = Miou_queue
@@ -72,9 +73,10 @@ and pack = Pack : 'a t -> pack
 module Promise = struct
   module Uid = Promise_uid
 
-  let create ?parent ~forbid ?resources:(ress = []) runner =
+  let create ?parent ~forbid ?computation ?resources:(ress = []) runner =
     let resources = Miou_sequence.create () in
-    let state = Computation.create () in
+    let state = match computation with
+      | Some c -> c | None -> Computation.create () in
     let fiber = Fiber.create ~forbid state in
     List.iter Miou_sequence.(add Left resources) ress;
     {
@@ -228,7 +230,7 @@ type pool = {
 let get_domain_from_uid pool ~uid =
   List.find (fun domain -> Domain_uid.equal domain.uid uid) pool.domains
 
-type ty = Concurrent | Parallel of Domain_uid.t
+type[@warning "-37"] ty = Concurrent | Parallel of Domain_uid.t
 type 'r waiter = { pool: pool; domain: domain; prm: 'r t }
 
 type _ Effect.t +=
@@ -246,6 +248,7 @@ type _ Effect.t += Transfer : resource -> Trigger.t Effect.t
 let[@coverage off] pp_effect : type a. a Effect.t Fmt.t =
  fun ppf -> function
   | Spawn _ -> Fmt.string ppf "Spawn"
+  | Fiber.Spawn _ -> Fmt.string ppf "Spawn"
   | Self -> Fmt.string ppf "Self"
   | Fiber.Current -> Fmt.string ppf "Current"
   | Self_domain -> Fmt.string ppf "Self_domain"
@@ -505,6 +508,18 @@ module Domain = struct
       | Domains ->
           let domains = List.map (fun { uid; _ } -> uid) pool.domains in
           k (Operation.return domains)
+      | Fiber.Spawn { forbid; computation; mains; } ->
+          let prm' = Promise.create ~parent:prm ~forbid ~computation ~resources:[] domain.uid in
+          canceller pool ~self:prm prm';
+          Miou_sequence.(add Left) prm.children (Pack prm');
+          let fn () =
+            List.iter (Fun.flip apply ()) mains;
+            match Computation.peek computation with
+            | Some (Ok value) -> value
+            | Some (Error (exn, bt)) -> Printexc.raise_with_backtrace exn bt
+            | None -> assert false in
+          add_into_domain domain (Domain_create (prm', fn));
+          k (Operation.return ())
       | Spawn (Concurrent, forbid, resources, fn) ->
           clean_resources prm resources;
           let prm' = Promise.create ~parent:prm ~forbid ~resources domain.uid in
@@ -1033,7 +1048,30 @@ module Ownership = struct
 end
 
 let async ?(give = []) ?orphans fn =
-  let prm = Effect.perform (Spawn (Concurrent, false, give, fn)) in
+  let domain = Effect.perform Self_domain in
+  let Pack self = Effect.perform Self in  
+  Domain.clean_resources self give;
+  let c = Computation.create () in
+  let fn () = ignore (Computation.try_return c (fn ())) in
+  (* XXX(dinosaure): This code is really subtle. It's based on the idea that the
+     first [Domain_create] found is the one added by the scheduler after
+     [Fiber.Spawn]. There may be (given Heapq's order), [Domain_{cancel,clean}]
+     before and we should ignore them (this also assumes that [Heapq.iter]
+     respects the order). If the planets are properly aligned, we can safely
+     transform the new promise into the type expected by the user.
+
+     All this over-convolution between the scheduler, [Fiber.Spawn] and what
+     Miou is trying to present makes it possible to be compatible with Picos. *)
+  Fiber.spawn ~forbid:false c [ fn ];
+  let prm = ref None in
+  let fn (_, elt) = match elt, !prm with
+    | Domain_create (v, _), None ->
+      Logs.debug (fun m -> m "[%a] peeks %a" Domain_uid.pp domain.uid Promise.pp v);
+      prm := Some (Obj.magic v)
+    | _ -> () in
+  Heapq.iter fn domain.tasks;
+  let[@warning "-8"] Some prm = !prm in
+  List.iter Miou_sequence.(add Left prm.resources) give;
   Logs.debug (fun m -> m "%a spawned" Promise.pp prm);
   Option.iter (fun s -> Miou_sequence.(add Left) s prm) orphans;
   prm

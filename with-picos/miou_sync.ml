@@ -42,6 +42,7 @@ module Computation = struct
 end
 
 module Fiber = struct
+  type 'a computation = 'a Computation.t
   include Picos.Fiber
 
   let raise_if_errored t = check t
