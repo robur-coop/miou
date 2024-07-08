@@ -20,10 +20,13 @@ val tcpv4 : unit -> file_descr
 val tcpv6 : unit -> file_descr
 (** [tcpv6 ()] allocates a new IPv6 socket. *)
 
-val bind_and_listen : ?backlog:int -> file_descr -> Unix.sockaddr -> unit
+val bind_and_listen : ?backlog:int -> ?reuseaddr:bool -> ?reuseport:bool -> file_descr -> Unix.sockaddr -> unit
 (** [bind_and_listen fd sockaddr] binds the given socket to the given
     [sockaddr] and set up the given [fd] for receiving connection requests.
-    [backlog] is the maximal number of pending requests. *)
+    [backlog] is the maximal number of pending requests. The optional argument
+    [reuseaddr] (defaults to [true]) sets the [REUSEADDR] socket option on the
+    given [fd]. The optional argument [reuseport] (defaults to [true] sets the
+    [REUSEPORT] socket option on the given [fd]. *)
 
 val accept : ?cloexec:bool -> file_descr -> file_descr * Unix.sockaddr
 (** [accept ?cloexec fd] is a Miou friendly {!Unix.accept} which returns

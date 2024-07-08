@@ -18,9 +18,9 @@ let tcpv6 () =
   let fd = Unix.socket Unix.PF_INET6 Unix.SOCK_STREAM 0 in
   Unix.set_nonblock fd; { fd; non_blocking= true }
 
-let bind_and_listen ?(backlog = 64) { fd; _ } sockaddr =
-  Unix.setsockopt fd Unix.SO_REUSEADDR true;
-  Unix.setsockopt fd Unix.SO_REUSEPORT true;
+let bind_and_listen ?(backlog = 64) ?(reuseaddr = true) ?(reuseport = true) { fd; _ } sockaddr =
+  Unix.setsockopt fd Unix.SO_REUSEADDR reuseaddr;
+  Unix.setsockopt fd Unix.SO_REUSEPORT reuseport;
   Unix.bind fd sockaddr;
   Unix.listen fd backlog
 
@@ -331,12 +331,13 @@ let transmit_fds signals revert tbl fds =
 
 let interrupted fd fds = List.exists (( = ) fd) fds
 
-let intr fd interrupted =
+let intr fd =
   let buf = Bytes.create 0x100 in
-  ignore (Unix.read fd buf 0 (Bytes.length buf));
-  ignore (Atomic.fetch_and_add interrupted (-1))
+  match Unix.read fd buf 0 (Bytes.length buf) with
+  | _ -> ()
+  | exception Unix.(Unix_error (EAGAIN, _, _)) -> ()
 
-let select uid (interrupt, p) ~block cancelled_syscalls =
+let select uid interrupt ~block cancelled_syscalls =
   let domain = domain () in
   clean domain cancelled_syscalls;
   let rds = file_descrs domain.readers in
@@ -367,25 +368,26 @@ let select uid (interrupt, p) ~block cancelled_syscalls =
       if interrupted interrupt rds then begin
         Logs.debug (fun m ->
             m "[%a] interrupted by Miou" Miou.Domain.Uid.pp uid);
-        intr interrupt p
+        intr interrupt
       end;
       let signals = collect domain [] in
       let signals = transmit_fds signals domain.revert domain.readers rds in
       let signals = transmit_fds signals domain.revert domain.writers wrs in
       signals
 
-let rec interrupt oc interrupted () =
-  if Atomic.get interrupted = 0 then
-    if Unix.single_write oc signal 0 1 = 0 then interrupt oc interrupted ()
-    else ignore (Atomic.fetch_and_add interrupted 1)
+let signal = Bytes.make 1 '\000'
+let interrupt oc () =
+  match Unix.single_write oc signal 0 1 with
+  | n -> assert (n = 1) (* XXX(dinosaure): paranoid mode. *)
+  | exception Unix.(Unix_error (EAGAIN, _, _)) -> ()
 
-and signal = Bytes.make 1 '\000'
 
 let events domain =
   let ic, oc = Unix.pipe ~cloexec:true () in
-  let interrupted = Atomic.make 0 in
-  let select = select domain (ic, interrupted) in
-  let t = { Miou.interrupt= interrupt oc interrupted; select } in
+  Unix.set_nonblock ic;
+  Unix.set_nonblock oc;
+  let select = select domain ic in
+  let t = { Miou.interrupt= interrupt oc; select } in
   let close _ = Unix.close ic; Unix.close oc in
   Gc.finalise close t; t
 
