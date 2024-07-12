@@ -34,7 +34,7 @@
  (public_name miou.unix)
  (wrapped false)
  (modules miou_unix)
- (libraries unix miou))
+ (libraries unix miou-with-picos))
 
 (documentation
  (package miou)
