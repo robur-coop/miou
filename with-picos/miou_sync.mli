@@ -71,6 +71,7 @@ end
 
 module Computation : sig
   type !'a t
+  type packed = Packed : 'a t -> packed
 
   val create : unit -> 'a t
   (** [create ()] creates a new computation in the running state. *)
@@ -179,4 +180,5 @@ module Fiber : sig
 
   val raise_if_errored : t -> unit
   val spawn : forbid:bool -> 'a computation -> (unit -> unit) list -> unit
+  val get_computation : t -> Computation.packed
 end

@@ -252,4 +252,6 @@ module Fiber = struct
 
   let spawn ~forbid computation mains =
     Effect.perform (Spawn { forbid; computation; mains })
+
+  let get_computation { computation; _ } = computation
 end

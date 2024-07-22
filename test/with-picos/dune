@@ -3,6 +3,11 @@
  (modules bound_q)
  (libraries miou-with-picos picos.sync))
 
+(test
+ (name test_structured)
+ (modules test_structured)
+ (libraries alcotest miou-with-picos picos.mpscq picos.structured picos.sync))
+
 (cram
  (package miou-with-picos)
  (deps bound_q.exe))

@@ -182,4 +182,5 @@ module Fiber : sig
 
   val raise_if_errored : t -> unit
   val spawn : forbid:bool -> 'a computation -> (unit -> unit) list -> unit
+  val get_computation : t -> Computation.packed
 end

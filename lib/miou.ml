@@ -98,8 +98,39 @@ module Promise = struct
   let[@coverage off] pp_pack ppf (Pack prm) = pp ppf prm
   let has_forbidden { fiber; _ } = Fiber.has_forbidden fiber
   let children_terminated prm = Miou_sequence.is_empty prm.children
-  let is_running { state; _ } = Computation.is_running state
   let uid { uid; _ } = uid
+
+  let is_running { fiber; _ } =
+    let Computation.Packed c = Fiber.get_computation fiber in
+    Computation.is_running c
+
+  let try_cancel { fiber; _ } =
+    let Computation.Packed c = Fiber.get_computation fiber in
+    Computation.try_cancel c
+
+  let cancelled { fiber; _ } =
+    let Computation.Packed c = Fiber.get_computation fiber in
+    Computation.cancelled c
+
+  let try_return { fiber; _ } value =
+    let Computation.Packed c = Fiber.get_computation fiber in
+    Computation.try_return (Obj.magic c) value
+
+  let detach { fiber; _ } t =
+    let Computation.Packed c = Fiber.get_computation fiber in
+    Computation.detach c t
+
+  let try_attach { fiber; _ } t =
+    let Computation.Packed c = Fiber.get_computation fiber in
+    Computation.try_attach c t
+
+  let await { fiber; _ } =
+    let Computation.Packed c = Fiber.get_computation fiber in
+    Obj.magic (Computation.await c)
+
+  let peek { fiber; _ } =
+    let Computation.Packed c = Fiber.get_computation fiber in
+    Obj.magic (Computation.peek c)
 
   type nonrec 'a t = 'a t
 end
@@ -425,9 +456,9 @@ module Domain = struct
         Miou_sequence.drop prm.resources;
         let f (Pack prm) = cancel pool domain ~backtrace:bt prm in
         Miou_sequence.iter ~f prm.children;
-        ignore (Computation.try_cancel prm.state (exn, bt));
+        ignore (Promise.try_cancel prm (exn, bt));
         interrupt_parent pool prm;
-        miou_assert (Option.is_some (Computation.cancelled prm.state))
+        miou_assert (Option.is_some (Promise.cancelled prm))
     | State.Finished (Ok value) ->
         if Miou_sequence.is_empty prm.resources = false then begin
           let f (Resource { uid; value; finaliser }) =
@@ -450,15 +481,15 @@ module Domain = struct
             m "[%a] %a finished correctly" Domain_uid.pp domain.uid Promise.pp
               prm);
         interrupt_parent pool prm;
-        ignore (Computation.try_return prm.state value)
+        ignore (Promise.try_return prm value)
 
   let propagate_cancellation trigger (pool, possibly_cancelled) child =
-    match Computation.cancelled possibly_cancelled.state with
-    | None -> Computation.detach possibly_cancelled.state trigger
+    match Promise.cancelled possibly_cancelled with
+    | None -> Promise.detach possibly_cancelled trigger
     | Some (exn, bt) -> (
         let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
         let cancelled = possibly_cancelled in
-        ignore (Computation.try_cancel child.state (exn, bt));
+        ignore (Promise.try_cancel child (exn, bt));
         match (Domain_uid.to_int child.runner, Domain_uid.to_int runner) with
         | 0, 0 -> add_into_domain pool.dom0 (Domain_cancel (child, bt))
         | 0, _ -> miou_assert false
@@ -479,8 +510,8 @@ module Domain = struct
     let trigger = Trigger.create () in
     miou_assert
       (Trigger.on_signal trigger (pool, self) child propagate_cancellation);
-    miou_assert (Computation.try_attach self.state trigger);
-    miou_assert (Computation.try_attach child.state trigger)
+    miou_assert (Promise.try_attach self trigger);
+    miou_assert (Promise.try_attach child trigger)
 
   let clean_resources prm resources =
     let to_delete = ref [] in
@@ -563,8 +594,9 @@ module Domain = struct
   let resume : type r. Trigger.t -> r waiter -> r continuation -> unit =
    fun trigger { pool; domain; prm } k ->
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
-    if not (Promise.has_forbidden prm) then Computation.detach prm.state trigger;
-    let result = Computation.cancelled prm.state in
+    Logs.debug (fun m -> m "[%a] resumes %a" Domain_uid.pp runner Promise.pp prm);
+    if not (Promise.has_forbidden prm) then Promise.detach prm trigger;
+    let result = Promise.cancelled prm in
     let result = Option.map to_error result in
     match Domain_uid.to_int prm.runner with
     | 0 -> add_into_dom0 pool (Dom0_continue { prm; result; k })
@@ -595,6 +627,7 @@ module Domain = struct
         if not (Trigger.on_signal trigger waiter k resume) then
           let state = State.suspended_with k (Get None) in
           add_into_domain domain (Domain_task (prm, state))
+        else Logs.warn (fun m -> m "[%a] forgotten trigger" Domain_uid.pp domain.uid)
     | false ->
         (* In that case, we must propagate the cancellation if [prm.state] has
            ended abnormally. We try to attach tghe trigger to the compuatation
@@ -610,16 +643,19 @@ module Domain = struct
              has been resolved/cancelled or the trigger has been signalled. In
              these cases, we make sure that the trigger really has been
              signalled and we continue [k] with the state of the promise. *)
-        if Computation.try_attach prm.state trigger then (
+        if Promise.try_attach prm trigger then (
           if not (Trigger.on_signal trigger waiter k resume) then (
-            Computation.detach prm.state trigger;
-            let result = Computation.cancelled prm.state in
+            Logs.debug (fun m -> m "[%a] trigger signaled (born into %a)" Domain_uid.pp domain.uid Promise.pp prm);
+            Promise.detach prm trigger;
+            let result = Promise.cancelled prm in
             let result = Option.map to_error result in
             let state = State.suspended_with k (Get result) in
-            add_into_domain domain (Domain_task (prm, state))))
+            add_into_domain domain (Domain_task (prm, state)))
+          else Logs.debug (fun m -> m "[%a] trigger born into %a attached to resume" Domain_uid.pp domain.uid Promise.pp prm))
         else
+          let () = Logs.debug (fun m -> m "[%a] computation cancelled" Domain_uid.pp domain.uid) in
           let () = Trigger.signal trigger in
-          let result = Computation.cancelled prm.state in
+          let result = Promise.cancelled prm in
           let result = Option.map to_error result in
           let state = State.suspended_with k (Get result) in
           add_into_domain domain (Domain_task (prm, state))
@@ -671,7 +707,7 @@ module Domain = struct
   let once pool domain = function
     | Domain_tick _ -> .
     | Domain_create (prm, fn) -> (
-        match Computation.cancelled prm.state with
+        match Promise.cancelled prm with
         | None ->
             let state = State.make fn () in
             handle pool domain prm state
@@ -693,7 +729,7 @@ module Domain = struct
         await pool domain prm trigger k
     | Domain_task (prm, state) -> (
         let perform = perform pool domain prm in
-        match Computation.cancelled prm.state with
+        match Promise.cancelled prm with
         | None ->
             (* It is normally safe to run our continuation here without someone
                else doing it. So we shouldn't get the
@@ -717,7 +753,7 @@ module Domain = struct
         miou_assert (Domain_uid.equal prm.runner (Domain_uid.of_int 0));
         miou_assert (Domain_uid.equal domain.uid (Domain_uid.of_int 0));
         let perform = perform pool domain prm in
-        match Computation.cancelled prm.state with
+        match Promise.cancelled prm with
         | None ->
             let state = State.run ~quanta:domain.quanta ~perform state in
             handle_signal ~signal domain prm state
@@ -728,7 +764,7 @@ module Domain = struct
         Logs.debug (fun m ->
             m "[%a] cancels computation %a" Domain_uid.pp domain.uid Promise.pp
               prm);
-        ignore (Computation.try_cancel prm.state (Cancelled, bt));
+        ignore (Promise.try_cancel prm (Cancelled, bt));
         Logs.debug (fun m ->
             m "[%a] clean-up continuation of %a" Domain_uid.pp domain.uid
               Promise.pp prm);
@@ -774,7 +810,7 @@ module Domain = struct
       let bt = Printexc.get_raw_backtrace () in
       (* TODO(dinosaure): we actually loose [exn] (and replace it then by
          [Cancelled]). *)
-      ignore (Computation.try_cancel prm.state (exn, bt));
+      ignore (Promise.try_cancel prm (exn, bt));
       add_into_domain domain (Domain_cancel (prm, bt))
 
   let synchronize_dom0_tasks pool =
@@ -1098,7 +1134,7 @@ let await prm =
     raise_notrace Not_a_child;
   let finally () = clean_children ~self prm in
   Fun.protect ~finally @@ fun () ->
-  match Computation.await prm.state with
+  match Promise.await prm with
   | Ok _ as value -> Option.fold ~none:value ~some:Result.error prm.cancelled
   | Error (exn, bt) ->
       let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
@@ -1126,12 +1162,12 @@ let await_one prms =
     Computation.try_capture c @@ fun () ->
     let t = Trigger.create () in
     let take_one_and_detach_rest unattached attached =
-      List.iter (fun prm -> Computation.detach prm.state t) attached;
+      List.iter (fun prm -> Promise.detach prm t) attached;
       let _, terminated =
         List.partition Promise.is_running (attached @ unattached)
       in
       let filter prm =
-        if Result.is_ok (Option.get (Computation.peek prm.state)) then
+        if Result.is_ok (Option.get (Promise.peek prm)) then
           Either.Left prm
         else Either.Right prm
       in
@@ -1140,20 +1176,20 @@ let await_one prms =
         | [], prms | prms, _ ->
             let n = Random.State.int g (List.length prms) in
             let prm = List.nth prms n in
-            (Computation.await prm.state, prm)
+            (Promise.await prm, prm)
       in
       clean_children ~self prm; result
     in
     let rec try_attach_all attached = function
       | prm :: prms ->
           let attached = prm :: attached in
-          if Computation.try_attach prm.state t then
+          if Promise.try_attach prm t then
             try_attach_all attached prms
           else take_one_and_detach_rest prms attached
       | [] -> (
           match Trigger.await t with
           | Some (exn, bt) ->
-              List.iter (fun prm -> Computation.detach prm.state t) attached;
+              List.iter (fun prm -> Promise.detach prm t) attached;
               Error (exn, bt)
           | None -> take_one_and_detach_rest [] prms)
     in
@@ -1183,13 +1219,13 @@ let await_first prms =
     Computation.try_capture c @@ fun () ->
     let t = Trigger.create () in
     let take_one_and_cancel_rest unattached attached =
-      List.iter (fun prm -> Computation.detach prm.state t) attached;
+      List.iter (fun prm -> Promise.detach prm t) attached;
       let in_progress, terminated =
         List.partition Promise.is_running (attached @ unattached)
       in
       List.iter (cancel ~self ~backtrace:bt) in_progress;
       let filter prm =
-        if Result.is_ok (Option.get (Computation.peek prm.state)) then
+        if Result.is_ok (Option.get (Promise.peek prm)) then
           Either.Left prm
         else Either.Right prm
       in
@@ -1200,13 +1236,13 @@ let await_first prms =
                 m "[%a] only cancelled tasks are done" Domain_uid.pp self.runner);
             let n = Random.State.int g (List.length prms) in
             let prm = List.nth prms n in
-            (Computation.await prm.state, prm)
+            (Promise.await prm, prm)
         | prms, _ ->
             Logs.debug (fun m ->
                 m "[%a] few tasks are completed" Domain_uid.pp self.runner);
             let n = Random.State.int g (List.length prms) in
             let prm = List.nth prms n in
-            (Computation.await prm.state, prm)
+            (Promise.await prm, prm)
       in
       let exclude (prm' : _ t) =
         if Promise_uid.equal prm.uid prm'.uid = false then
@@ -1219,13 +1255,13 @@ let await_first prms =
     let rec try_attach_all attached = function
       | prm :: prms ->
           let attached = prm :: attached in
-          if Computation.try_attach prm.state t then
+          if Promise.try_attach prm t then
             try_attach_all attached prms
           else take_one_and_cancel_rest prms attached
       | [] -> (
           match Trigger.await t with
           | Some (exn, bt) ->
-              List.iter (fun prm -> Computation.detach prm.state t) attached;
+              List.iter (fun prm -> Promise.detach prm t) attached;
               Error (exn, bt)
           | None ->
               Logs.debug (fun m ->
@@ -1337,7 +1373,7 @@ let care : type a. a orphans -> a t option option =
   else
     let exception Orphan of a t Miou_sequence.node in
     let f ({ Miou_sequence.data= prm; _ } as node) =
-      if Computation.is_running prm.state = false then
+      if Promise.is_running prm = false then
         raise_notrace (Orphan node)
     in
     try
@@ -1410,12 +1446,12 @@ let run ?(quanta = quanta) ?(g = Random.State.make_self_init ())
   let pool, domains = Pool.create ~quanta ~dom0 ~domains ~events () in
   let result =
     try
-      while Computation.is_running prm0.state && !(pool.fail) = false do
+      while Promise.is_running prm0 && !(pool.fail) = false do
         transfer_dom0_tasks pool;
         transfer_dom0_signals pool;
         Domain.run pool dom0
       done;
-      if not !(pool.fail) then Option.get (Computation.peek prm0.state)
+      if not !(pool.fail) then Option.get (Promise.peek prm0)
       else Error (Failure "A domain failed", Printexc.get_callstack max_int)
     with exn ->
       Logs.err (fun m ->
