@@ -85,17 +85,17 @@ let test_error_in_promise_terminates () =
 
 let () =
   [
-    ( "Bundle",
-      [
+    ( "Bundle"
+    , [
         Alcotest.test_case "fork after terminate" `Quick
-          test_fork_after_terminate;
-        Alcotest.test_case "fork after escape" `Quick test_fork_after_escape;
-        Alcotest.test_case "exception in child terminates" `Quick
-          test_exception_in_child_terminates;
-        Alcotest.test_case "block raises when forbidden" `Quick
-          test_block_raises;
-        Alcotest.test_case "error in promise terminates" `Quick
-          test_error_in_promise_terminates;
-      ] );
+          test_fork_after_terminate
+      ; Alcotest.test_case "fork after escape" `Quick test_fork_after_escape
+      ; Alcotest.test_case "exception in child terminates" `Quick
+          test_exception_in_child_terminates
+      ; Alcotest.test_case "block raises when forbidden" `Quick
+          test_block_raises
+      ; Alcotest.test_case "error in promise terminates" `Quick
+          test_error_in_promise_terminates
+      ] )
   ]
   |> Alcotest.run "Picos_structured"
