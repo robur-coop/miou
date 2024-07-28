@@ -151,10 +151,15 @@ module Fiber : sig
   type 'a computation = 'a Computation.t
   type _ Effect.t += private Yield : unit Effect.t
   type _ Effect.t += private Current : t Effect.t
-  type _ Effect.t += private
-    | Spawn : { forbid : bool
-              ; computation : 'a computation
-              ; mains : (unit -> unit) list } -> unit Effect.t
+
+  type _ Effect.t +=
+    private
+    | Spawn : {
+          forbid: bool
+        ; computation: 'a computation
+        ; mains: (unit -> unit) list
+      }
+        -> unit Effect.t
 
   val yield : unit -> unit
   (** [yield ()] asks the current fiber to be rescheduled. *)

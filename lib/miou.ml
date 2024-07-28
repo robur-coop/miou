@@ -66,6 +66,7 @@ type 'a t = {
   ; resources: resource Miou_sequence.t
   ; mutable cancelled: (exn * Printexc.raw_backtrace) option
   ; cleaned: bool Atomic.t
+  ; mutable result: 'a option
 }
 
 and pack = Pack : 'a t -> pack
@@ -75,8 +76,9 @@ module Promise = struct
 
   let create ?parent ~forbid ?computation ?resources:(ress = []) runner =
     let resources = Miou_sequence.create () in
-    let state = match computation with
-      | Some c -> c | None -> Computation.create () in
+    let state =
+      match computation with Some c -> c | None -> Computation.create ()
+    in
     let fiber = Fiber.create ~forbid state in
     List.iter Miou_sequence.(add Left resources) ress;
     {
@@ -89,6 +91,7 @@ module Promise = struct
     ; resources
     ; cancelled= None
     ; cleaned= Atomic.make false
+    ; result= None
     }
 
   let[@coverage off] pp ppf ({ uid; runner; _ } as prm) =
@@ -101,36 +104,44 @@ module Promise = struct
   let uid { uid; _ } = uid
 
   let is_running { fiber; _ } =
-    let Computation.Packed c = Fiber.get_computation fiber in
+    let (Computation.Packed c) = Fiber.get_computation fiber in
     Computation.is_running c
 
   let try_cancel { fiber; _ } =
-    let Computation.Packed c = Fiber.get_computation fiber in
+    let (Computation.Packed c) = Fiber.get_computation fiber in
     Computation.try_cancel c
 
   let cancelled { fiber; _ } =
-    let Computation.Packed c = Fiber.get_computation fiber in
+    let (Computation.Packed c) = Fiber.get_computation fiber in
     Computation.cancelled c
 
   let try_return { fiber; _ } value =
-    let Computation.Packed c = Fiber.get_computation fiber in
+    let (Computation.Packed c) = Fiber.get_computation fiber in
     Computation.try_return (Obj.magic c) value
 
   let detach { fiber; _ } t =
-    let Computation.Packed c = Fiber.get_computation fiber in
+    let (Computation.Packed c) = Fiber.get_computation fiber in
     Computation.detach c t
 
   let try_attach { fiber; _ } t =
-    let Computation.Packed c = Fiber.get_computation fiber in
+    let (Computation.Packed c) = Fiber.get_computation fiber in
     Computation.try_attach c t
 
-  let await { fiber; _ } =
-    let Computation.Packed c = Fiber.get_computation fiber in
-    Obj.magic (Computation.await c)
+  let await ({ fiber; _ } as prm) =
+    let (Computation.Packed c) = Fiber.get_computation fiber in
+    ignore (Computation.await c);
+    match prm.result with
+    | Some value -> Ok value
+    | None ->
+        let err = Option.get (cancelled prm) in
+        Error err
 
-  let peek { fiber; _ } =
-    let Computation.Packed c = Fiber.get_computation fiber in
-    Obj.magic (Computation.peek c)
+  let peek ({ fiber; _ } as prm) =
+    let (Computation.Packed c) = Fiber.get_computation fiber in
+    match Computation.peek c with
+    | None -> None
+    | Some (Ok _) -> Some (Ok (Option.get prm.result))
+    | Some (Error err) -> Some (Error err)
 
   type nonrec 'a t = 'a t
 end
@@ -261,7 +272,7 @@ type pool = {
 let get_domain_from_uid pool ~uid =
   List.find (fun domain -> Domain_uid.equal domain.uid uid) pool.domains
 
-type[@warning "-37"] ty = Concurrent | Parallel of Domain_uid.t
+type ty = Concurrent | Parallel of Domain_uid.t [@@warning "-37"]
 type 'r waiter = { pool: pool; domain: domain; prm: 'r t }
 
 type _ Effect.t +=
@@ -343,6 +354,10 @@ let transfer_dom0_signals pool =
     let elts = Queue.(to_list (transfer signals)) in
     let f (Signal_retrieved (signal, fn)) =
       let prm = Promise.create ~forbid:true pool.dom0.uid in
+      let fn signal =
+        prm.result <- Some (fn signal);
+        Option.get prm.result
+      in
       let state = State.make fn signal in
       Domain_signal (prm, signal, state)
     in
@@ -539,16 +554,22 @@ module Domain = struct
       | Domains ->
           let domains = List.map (fun { uid; _ } -> uid) pool.domains in
           k (Operation.return domains)
-      | Fiber.Spawn { forbid; computation; mains; } ->
-          let prm' = Promise.create ~parent:prm ~forbid ~computation ~resources:[] domain.uid in
+      | Fiber.Spawn { forbid; computation; mains } ->
+          let prm' =
+            Promise.create ~parent:prm ~forbid ~computation ~resources:[]
+              domain.uid
+          in
           canceller pool ~self:prm prm';
           Miou_sequence.(add Left) prm.children (Pack prm');
           let fn () =
             List.iter (Fun.flip apply ()) mains;
             match Computation.peek computation with
-            | Some (Ok value) -> value
+            | Some (Ok value) ->
+                prm'.result <- Some value;
+                value
             | Some (Error (exn, bt)) -> Printexc.raise_with_backtrace exn bt
-            | None -> assert false in
+            | None -> assert false
+          in
           add_into_domain domain (Domain_create (prm', fn));
           k (Operation.return ())
       | Spawn (Concurrent, forbid, resources, fn) ->
@@ -556,6 +577,10 @@ module Domain = struct
           let prm' = Promise.create ~parent:prm ~forbid ~resources domain.uid in
           canceller pool ~self:prm prm';
           Miou_sequence.(add Left) prm.children (Pack prm');
+          let fn () =
+            prm'.result <- Some (fn ());
+            Option.get prm'.result
+          in
           add_into_domain domain (Domain_create (prm', fn));
           k (Operation.return prm')
       | Spawn (Parallel runner, forbid, resources, fn) ->
@@ -563,6 +588,10 @@ module Domain = struct
           let prm' = Promise.create ~parent:prm ~forbid ~resources runner in
           canceller pool ~self:prm prm';
           Miou_sequence.(add Left) prm.children (Pack prm');
+          let fn () =
+            prm'.result <- Some (fn ());
+            Option.get prm'.result
+          in
           add_into_pool pool (Pool_create (prm', fn));
           k (Operation.return prm')
       | Cancel (backtrace, child) ->
@@ -594,7 +623,8 @@ module Domain = struct
   let resume : type r. Trigger.t -> r waiter -> r continuation -> unit =
    fun trigger { pool; domain; prm } k ->
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
-    Logs.debug (fun m -> m "[%a] resumes %a" Domain_uid.pp runner Promise.pp prm);
+    Logs.debug (fun m ->
+        m "[%a] resumes %a" Domain_uid.pp runner Promise.pp prm);
     if not (Promise.has_forbidden prm) then Promise.detach prm trigger;
     let result = Promise.cancelled prm in
     let result = Option.map to_error result in
@@ -627,7 +657,9 @@ module Domain = struct
         if not (Trigger.on_signal trigger waiter k resume) then
           let state = State.suspended_with k (Get None) in
           add_into_domain domain (Domain_task (prm, state))
-        else Logs.warn (fun m -> m "[%a] forgotten trigger" Domain_uid.pp domain.uid)
+        else
+          Logs.warn (fun m ->
+              m "[%a] forgotten trigger" Domain_uid.pp domain.uid)
     | false ->
         (* In that case, we must propagate the cancellation if [prm.state] has
            ended abnormally. We try to attach tghe trigger to the compuatation
@@ -643,17 +675,25 @@ module Domain = struct
              has been resolved/cancelled or the trigger has been signalled. In
              these cases, we make sure that the trigger really has been
              signalled and we continue [k] with the state of the promise. *)
-        if Promise.try_attach prm trigger then (
+        if Promise.try_attach prm trigger then
           if not (Trigger.on_signal trigger waiter k resume) then (
-            Logs.debug (fun m -> m "[%a] trigger signaled (born into %a)" Domain_uid.pp domain.uid Promise.pp prm);
+            Logs.debug (fun m ->
+                m "[%a] trigger signaled (born into %a)" Domain_uid.pp
+                  domain.uid Promise.pp prm);
             Promise.detach prm trigger;
             let result = Promise.cancelled prm in
             let result = Option.map to_error result in
             let state = State.suspended_with k (Get result) in
             add_into_domain domain (Domain_task (prm, state)))
-          else Logs.debug (fun m -> m "[%a] trigger born into %a attached to resume" Domain_uid.pp domain.uid Promise.pp prm))
+          else
+            Logs.debug (fun m ->
+                m "[%a] trigger born into %a attached to resume" Domain_uid.pp
+                  domain.uid Promise.pp prm)
         else
-          let () = Logs.debug (fun m -> m "[%a] computation cancelled" Domain_uid.pp domain.uid) in
+          let () =
+            Logs.debug (fun m ->
+                m "[%a] computation cancelled" Domain_uid.pp domain.uid)
+          in
           let () = Trigger.signal trigger in
           let result = Promise.cancelled prm in
           let result = Option.map to_error result in
@@ -1085,7 +1125,7 @@ end
 
 let async ?(give = []) ?orphans fn =
   let domain = Effect.perform Self_domain in
-  let Pack self = Effect.perform Self in  
+  let (Pack self) = Effect.perform Self in
   Domain.clean_resources self give;
   let c = Computation.create () in
   let fn () = ignore (Computation.try_return c (fn ())) in
@@ -1100,13 +1140,16 @@ let async ?(give = []) ?orphans fn =
      Miou is trying to present makes it possible to be compatible with Picos. *)
   Fiber.spawn ~forbid:false c [ fn ];
   let prm = ref None in
-  let fn (_, elt) = match elt, !prm with
+  let fn (_, elt) =
+    match (elt, !prm) with
     | Domain_create (v, _), None ->
-      Logs.debug (fun m -> m "[%a] peeks %a" Domain_uid.pp domain.uid Promise.pp v);
-      prm := Some (Obj.magic v)
-    | _ -> () in
+        Logs.debug (fun m ->
+            m "[%a] peeks %a" Domain_uid.pp domain.uid Promise.pp v);
+        prm := Some (Obj.magic v)
+    | _ -> ()
+  in
   Heapq.iter fn domain.tasks;
-  let[@warning "-8"] Some prm = !prm in
+  let[@warning "-8"] (Some prm) = !prm in
   List.iter Miou_sequence.(add Left prm.resources) give;
   Logs.debug (fun m -> m "%a spawned" Promise.pp prm);
   Option.iter (fun s -> Miou_sequence.(add Left) s prm) orphans;
@@ -1167,8 +1210,7 @@ let await_one prms =
         List.partition Promise.is_running (attached @ unattached)
       in
       let filter prm =
-        if Result.is_ok (Option.get (Promise.peek prm)) then
-          Either.Left prm
+        if Result.is_ok (Option.get (Promise.peek prm)) then Either.Left prm
         else Either.Right prm
       in
       let result, prm =
@@ -1183,8 +1225,7 @@ let await_one prms =
     let rec try_attach_all attached = function
       | prm :: prms ->
           let attached = prm :: attached in
-          if Promise.try_attach prm t then
-            try_attach_all attached prms
+          if Promise.try_attach prm t then try_attach_all attached prms
           else take_one_and_detach_rest prms attached
       | [] -> (
           match Trigger.await t with
@@ -1225,8 +1266,7 @@ let await_first prms =
       in
       List.iter (cancel ~self ~backtrace:bt) in_progress;
       let filter prm =
-        if Result.is_ok (Option.get (Promise.peek prm)) then
-          Either.Left prm
+        if Result.is_ok (Option.get (Promise.peek prm)) then Either.Left prm
         else Either.Right prm
       in
       let result, prm =
@@ -1255,8 +1295,7 @@ let await_first prms =
     let rec try_attach_all attached = function
       | prm :: prms ->
           let attached = prm :: attached in
-          if Promise.try_attach prm t then
-            try_attach_all attached prms
+          if Promise.try_attach prm t then try_attach_all attached prms
           else take_one_and_cancel_rest prms attached
       | [] -> (
           match Trigger.await t with
@@ -1373,8 +1412,7 @@ let care : type a. a orphans -> a t option option =
   else
     let exception Orphan of a t Miou_sequence.node in
     let f ({ Miou_sequence.data= prm; _ } as node) =
-      if Promise.is_running prm = false then
-        raise_notrace (Orphan node)
+      if Promise.is_running prm = false then raise_notrace (Orphan node)
     in
     try
       Miou_sequence.iter_node ~f orphans;
@@ -1442,6 +1480,10 @@ let run ?(quanta = quanta) ?(g = Random.State.make_self_init ())
   let dom0 = Domain_uid.of_int 0 in
   let dom0 = Domain.create ~quanta ~events g dom0 in
   let prm0 = Promise.create ~forbid:false dom0.uid in
+  let fn () =
+    prm0.result <- Some (fn ());
+    Option.get prm0.result
+  in
   Domain.add_into_domain dom0 (Domain_create (prm0, fn));
   let pool, domains = Pool.create ~quanta ~dom0 ~domains ~events () in
   let result =

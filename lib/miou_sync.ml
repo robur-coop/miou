@@ -226,10 +226,14 @@ module Fiber = struct
   type 'a computation = 'a Computation.t
   type _ Effect.t += Yield : unit Effect.t
   type _ Effect.t += Current : t Effect.t
+
   type _ Effect.t +=
-    | Spawn : { forbid : bool
-              ; computation : 'a computation
-              ; mains : (unit -> unit) list } -> unit Effect.t
+    | Spawn : {
+          forbid: bool
+        ; computation: 'a computation
+        ; mains: (unit -> unit) list
+      }
+        -> unit Effect.t
 
   let yield () = Effect.perform Yield
   let current () = Effect.perform Current
