@@ -13,7 +13,7 @@
    THIS SOFTWARE.
 *)
 
-type error = exn * Printexc.raw_backtrace
+type error = Picos_exn_bt.t
 
 val to_error : exn * Printexc.raw_backtrace -> error
 
@@ -45,9 +45,7 @@ module Trigger : sig
       @raise Invalid_argument if the trigger was in the awaiting state, which
       means that multiple concurrent calls of [await] are being made. *)
 
-  type _ Effect.t +=
-    private
-    | Await : t -> (exn * Printexc.raw_backtrace) option Effect.t
+  type _ Effect.t += private Await : t -> Picos_exn_bt.t option Effect.t
 
   val signal : t -> unit
   (** After [signal t] returns, the trigger has been put into the signaled state

@@ -1211,3 +1211,16 @@ module Lazy : sig
       @raise Undefined in case the suspension is currently being forced by the
       current prommise. *)
 end
+
+(**/**)
+
+type pack = Pack : 'a Promise.t -> pack
+type _ Effect.t += private Self : pack Effect.t
+type _ Effect.t += private Domains : Domain.Uid.t list Effect.t
+type _ Effect.t += private Transfer : Ownership.t -> Trigger.t Effect.t
+type _ Effect.t += private Random : Random.State.t Effect.t
+
+type _ Effect.t +=
+  private
+  | Cancel : Printexc.raw_backtrace * 'a t -> unit Effect.t
+(* type _ Effect.t += private Self_domain : domain Effect.t *)

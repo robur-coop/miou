@@ -15,6 +15,10 @@
 
 module Backoff = Miou_backoff
 
+type error = exn * Printexc.raw_backtrace
+
+external to_error : exn * Printexc.raw_backtrace -> error = "%identity"
+
 module Trigger : sig
   type state =
     | Signaled
@@ -80,6 +84,7 @@ module Computation : sig
     | Continue of { balance: int; triggers: Trigger.t list }
 
   type !'a t = 'a state Atomic.t
+  type packed = Packed : 'a t -> packed
 
   val create : unit -> 'a t
   val try_return : 'a t -> 'a -> bool
@@ -91,7 +96,6 @@ module Computation : sig
   val peek : 'a t -> ('a, exn * Printexc.raw_backtrace) result option
   val try_attach : 'a t -> Trigger.t -> bool
   val detach : 'a t -> Trigger.t -> unit
-  val clean : 'a t -> unit
   val await : 'a t -> ('a, exn * Printexc.raw_backtrace) result
   val await_exn : 'a t -> 'a
   val canceller : from:'a t -> into:'b t -> Trigger.t
@@ -102,6 +106,7 @@ end = struct
     | Continue of { balance: int; triggers: Trigger.t list }
 
   type 'a t = 'a state Atomic.t
+  type packed = Packed : 'a t -> packed
 
   let create () = Atomic.make (Continue { balance= 0; triggers= [] })
 
@@ -146,16 +151,6 @@ end = struct
           detach (Backoff.once backoff) t
 
   let detach t trigger = Trigger.signal trigger; detach Backoff.default t
-
-  let rec clean backoff t =
-    match Atomic.get t with
-    | Returned _ | Cancelled _ -> ()
-    | Continue r as seen ->
-        let after = gc 0 [] r.triggers in
-        if not (Atomic.compare_and_set t seen after) then
-          clean (Backoff.once backoff) t
-
-  let clean t = clean Backoff.default t
 
   let is_running t =
     match Atomic.get t with
@@ -224,4 +219,43 @@ end = struct
     match await t with
     | Ok value -> value
     | Error (exn, bt) -> Printexc.raise_with_backtrace exn bt
+end
+
+module Fiber = struct
+  type t = { mutable forbid: bool; computation: Computation.packed }
+  type 'a computation = 'a Computation.t
+  type _ Effect.t += Yield : unit Effect.t
+  type _ Effect.t += Current : t Effect.t
+
+  type _ Effect.t +=
+    | Spawn : {
+          forbid: bool
+        ; computation: 'a computation
+        ; mains: (unit -> unit) list
+      }
+        -> unit Effect.t
+
+  let yield () = Effect.perform Yield
+  let current () = Effect.perform Current
+  let create ~forbid c = { forbid; computation= Packed c }
+  let has_forbidden { forbid; _ } = forbid
+
+  let exchange t ~forbid =
+    let seen = t.forbid in
+    t.forbid <- forbid;
+    seen
+
+  let set t ~forbid = t.forbid <- forbid
+
+  let raise_if_errored t =
+    if not t.forbid then
+      let (Computation.Packed c) = t.computation in
+      Computation.raise_if_errored c
+
+  let[@inline] equal a b = a == b
+
+  let spawn ~forbid computation mains =
+    Effect.perform (Spawn { forbid; computation; mains })
+
+  let get_computation { computation; _ } = computation
 end
