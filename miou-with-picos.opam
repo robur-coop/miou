@@ -16,4 +16,5 @@ depends: [
   "ocaml"             {>= "5.0.0"}
   "dune"              {>= "2.8.0"}
   "picos"             {= "0.4.0"}
+  "alcotest"          {with-test}
 ]
