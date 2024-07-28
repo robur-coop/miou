@@ -1034,10 +1034,29 @@ module Ownership = struct
         | exception _ -> Miou_sequence.remove node)
 end
 
+type 'a orphans = {
+    orphans: 'a t Miou_sequence.t
+  ; owner: Promise_uid.t option Atomic.t
+}
+
+let rec add_into_orphans :
+    type a. ?backoff:Backoff.t -> self:'x t -> a t -> a orphans -> unit =
+ fun ?(backoff = Backoff.default) ~self prm ({ orphans; owner } as v) ->
+  match Atomic.get owner with
+  | None ->
+      if Atomic.compare_and_set owner None (Some self.uid) then
+        Miou_sequence.(add Left) orphans prm
+      else add_into_orphans ~backoff:(Backoff.once backoff) ~self prm v
+  | Some uid ->
+      if Promise_uid.equal uid self.uid then
+        Miou_sequence.(add Left) orphans prm
+      else invalid_arg "The given orphans is owned by another promise"
+
 let async ?(give = []) ?orphans fn =
+  let (Pack self) = Effect.perform Self in
   let prm = Effect.perform (Spawn (Concurrent, false, give, fn)) in
+  Option.iter (add_into_orphans ~self prm) orphans;
   Logs.debug (fun m -> m "%a spawned" Promise.pp prm);
-  Option.iter (fun s -> Miou_sequence.(add Left) s prm) orphans;
   prm
 
 let call ?(give = []) ?orphans fn =
@@ -1051,7 +1070,7 @@ let call ?(give = []) ?orphans fn =
     | lst -> List.nth lst (Random.State.int g (List.length lst))
   in
   let prm = Effect.perform (Spawn (Parallel runner, false, give, fn)) in
-  Option.iter (fun s -> Miou_sequence.(add Left) s prm) orphans;
+  Option.iter (add_into_orphans ~self prm) orphans;
   prm
 
 let await prm =
@@ -1289,13 +1308,10 @@ let signal (Syscall (_uid, trigger, prm)) =
   Signal (trigger, prm)
 
 let uid (Syscall (uid, _, _)) = uid
+let orphans () = { orphans= Miou_sequence.create (); owner= Atomic.make None }
+let length orphans = Miou_sequence.length orphans.orphans
 
-type 'a orphans = 'a t Miou_sequence.t
-
-let orphans () = Miou_sequence.create ()
-let length = Miou_sequence.length
-
-let care : type a. a orphans -> a t option option =
+let domain_safe_care : type a. a t Miou_sequence.t -> a t option option =
  fun orphans ->
   if Miou_sequence.is_empty orphans then None
   else
@@ -1310,6 +1326,22 @@ let care : type a. a orphans -> a t option option =
     with Orphan node ->
       let prm = Miou_sequence.data node in
       Miou_sequence.remove node; Some (Some prm)
+
+let rec care :
+    type a. ?backoff:Backoff.t -> self:'x t -> a orphans -> a t option option =
+ fun ?(backoff = Backoff.default) ~self ({ orphans; owner } as v) ->
+  match Atomic.get owner with
+  | None ->
+      if Atomic.compare_and_set owner None (Some self.uid) then
+        domain_safe_care orphans
+      else care ~backoff:(Backoff.once backoff) ~self v
+  | Some uid ->
+      if Promise_uid.equal self.uid uid then domain_safe_care orphans
+      else invalid_arg "The given orphans is owned by another promise"
+
+let care orphans =
+  let (Pack self) = Effect.perform Self in
+  care ~self orphans
 
 module Hook = struct
   type t = { uid: Domain.Uid.t; node: (unit -> unit) Miou_sequence.node }

@@ -20,7 +20,13 @@ val tcpv4 : unit -> file_descr
 val tcpv6 : unit -> file_descr
 (** [tcpv6 ()] allocates a new IPv6 socket. *)
 
-val bind_and_listen : ?backlog:int -> ?reuseaddr:bool -> ?reuseport:bool -> file_descr -> Unix.sockaddr -> unit
+val bind_and_listen :
+     ?backlog:int
+  -> ?reuseaddr:bool
+  -> ?reuseport:bool
+  -> file_descr
+  -> Unix.sockaddr
+  -> unit
 (** [bind_and_listen fd sockaddr] binds the given socket to the given
     [sockaddr] and set up the given [fd] for receiving connection requests.
     [backlog] is the maximal number of pending requests. The optional argument
