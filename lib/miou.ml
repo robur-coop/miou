@@ -1037,19 +1037,24 @@ end
 type 'a orphans = {
     orphans: 'a t Miou_sequence.t
   ; owner: Promise_uid.t option Atomic.t
+  ; length: int Atomic.t
 }
 
 let rec add_into_orphans :
     type a. ?backoff:Backoff.t -> self:'x t -> a t -> a orphans -> unit =
- fun ?(backoff = Backoff.default) ~self prm ({ orphans; owner } as v) ->
+ fun ?(backoff = Backoff.default) ~self prm ({ orphans; owner; length } as v) ->
   match Atomic.get owner with
   | None ->
-      if Atomic.compare_and_set owner None (Some self.uid) then
-        Miou_sequence.(add Left) orphans prm
+      if Atomic.compare_and_set owner None (Some self.uid) then begin
+        Miou_sequence.(add Left) orphans prm;
+        Atomic.incr length
+      end
       else add_into_orphans ~backoff:(Backoff.once backoff) ~self prm v
   | Some uid ->
-      if Promise_uid.equal uid self.uid then
-        Miou_sequence.(add Left) orphans prm
+      if Promise_uid.equal uid self.uid then begin
+        Miou_sequence.(add Left) orphans prm;
+        Atomic.incr length
+      end
       else invalid_arg "The given orphans is owned by another promise"
 
 let async ?(give = []) ?orphans fn =
@@ -1308,11 +1313,19 @@ let signal (Syscall (_uid, trigger, prm)) =
   Signal (trigger, prm)
 
 let uid (Syscall (uid, _, _)) = uid
-let orphans () = { orphans= Miou_sequence.create (); owner= Atomic.make None }
-let length orphans = Miou_sequence.length orphans.orphans
 
-let domain_safe_care : type a. a t Miou_sequence.t -> a t option option =
- fun orphans ->
+let orphans () =
+  {
+    orphans= Miou_sequence.create ()
+  ; owner= Atomic.make None
+  ; length= Atomic.make 1
+  }
+
+let length orphans = Atomic.get orphans.length
+
+let domain_safe_care :
+    type a. a t Miou_sequence.t -> int Atomic.t -> a t option option =
+ fun orphans length ->
   if Miou_sequence.is_empty orphans then None
   else
     let exception Orphan of a t Miou_sequence.node in
@@ -1325,18 +1338,18 @@ let domain_safe_care : type a. a t Miou_sequence.t -> a t option option =
       Some None
     with Orphan node ->
       let prm = Miou_sequence.data node in
-      Miou_sequence.remove node; Some (Some prm)
+      Miou_sequence.remove node; Atomic.decr length; Some (Some prm)
 
 let rec care :
     type a. ?backoff:Backoff.t -> self:'x t -> a orphans -> a t option option =
- fun ?(backoff = Backoff.default) ~self ({ orphans; owner } as v) ->
+ fun ?(backoff = Backoff.default) ~self ({ orphans; owner; length } as v) ->
   match Atomic.get owner with
   | None ->
       if Atomic.compare_and_set owner None (Some self.uid) then
-        domain_safe_care orphans
+        domain_safe_care orphans length
       else care ~backoff:(Backoff.once backoff) ~self v
   | Some uid ->
-      if Promise_uid.equal self.uid uid then domain_safe_care orphans
+      if Promise_uid.equal self.uid uid then domain_safe_care orphans length
       else invalid_arg "The given orphans is owned by another promise"
 
 let care orphans =
