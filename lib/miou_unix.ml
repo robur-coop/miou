@@ -18,7 +18,8 @@ let tcpv6 () =
   let fd = Unix.socket Unix.PF_INET6 Unix.SOCK_STREAM 0 in
   Unix.set_nonblock fd; { fd; non_blocking= true }
 
-let bind_and_listen ?(backlog = 64) ?(reuseaddr = true) ?(reuseport = true) { fd; _ } sockaddr =
+let bind_and_listen ?(backlog = 64) ?(reuseaddr = true) ?(reuseport = true)
+    { fd; _ } sockaddr =
   Unix.setsockopt fd Unix.SO_REUSEADDR reuseaddr;
   Unix.setsockopt fd Unix.SO_REUSEPORT reuseport;
   Unix.bind fd sockaddr;
@@ -376,11 +377,11 @@ let select uid interrupt ~block cancelled_syscalls =
       signals
 
 let signal = Bytes.make 1 '\000'
+
 let interrupt oc () =
   match Unix.single_write oc signal 0 1 with
   | n -> assert (n = 1) (* XXX(dinosaure): paranoid mode. *)
   | exception Unix.(Unix_error (EAGAIN, _, _)) -> ()
-
 
 let events domain =
   let ic, oc = Unix.pipe ~cloexec:true () in

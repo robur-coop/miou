@@ -340,7 +340,7 @@
       Exception: Miou.Still_has_children.
     ]}
     
-    {4 Rule 2, only await for direct children.}
+    {4:rule-2 Rule 2, only await for direct children.}
     
     You can only await for your direct children. Transferring a promise to
     another task so that it can await for it is illegal:
@@ -675,7 +675,14 @@ val care : 'a orphans -> 'a t option option
     must {i consume} the result of the promise with {!val:await}. Otherwise,
     Miou will raises the uncatchable [Still_has_children] exception. If [care]
     returns [None], no children left behind, you can forget the {!type:orphans}
-    value safely. *)
+    value safely.
+
+    @raise Invalid_argument [orphans] are necessarily attached to a promise,
+    keeping the children of that promise in an orphanage. So, if [care] is used
+    elsewhere than in the promise, an exception is raised to warn the user of a
+    misuse of [care]. Indeed, the child returned by care can only be awaited
+    ({!await}) by its direct parent (in reference to
+    {{!section:rule-2}our second rule}). *)
 
 val length : _ orphans -> int
 (** [length orphans] returns the number of remaining tasks. *)
@@ -687,7 +694,24 @@ val async :
 (** [async fn] (for Call with Current Continuation) returns a promise
     {!type:t} representing the state of the task given as an argument. The task
     will be executed {b concurrently} with the other tasks in the current
-    domain. *)
+    domain.
+
+    @raise Invalid_argument a promise can only be attached to an orphan if the
+    latter is owned by the parent promise. For the example, this code doesn't
+    work because we're trying to attach 2 promises that don't have the same
+    direct parent:
+
+    {[
+      # Miou.run @@ fun () ->
+        let orphans = Miou.orphans () in
+        let prm =
+          Miou.async ~orphans @@ fun () ->
+          let prm = Miou.async ~orphans (Fun.const ()) in
+          Miou.await_exn prm
+        in
+        Miou.await_exn prm ;;
+      Exception: Invalid_argument "The given orphans is owned by another promise".
+    ]} *)
 
 val call : ?give:Ownership.t list -> ?orphans:'a orphans -> (unit -> 'a) -> 'a t
 (** [call fn] returns a promise {!type:t} representing the state of the task
@@ -726,7 +750,11 @@ val call : ?give:Ownership.t list -> ?orphans:'a orphans -> (unit -> 'a) -> 'a t
     @raise No_domain_available if no domain is available to execute the task in
     parallel or if the function is executed by the only domain available in
     parallel (it is impossible to assign a task to [dom0] from the other
-    domains). *)
+    domains).
+
+    @raise Invalid_argument like {!val:async}, if the promise should be
+    associated with an [orphan], the orphan should be owned by the direct
+    parent. *)
 
 val parallel : ('a -> 'b) -> 'a list -> ('b, exn) result list
 (** [parallel fn lst] is the {i fork-join} model: it is a way of setting up and

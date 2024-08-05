@@ -801,6 +801,24 @@ let test40 =
   let rec until_its value = if prgm () = value then until_its value in
   until_its true; until_its false; Test.check true
 
+let test41 =
+  let description = {text|Ownership of orphans|text} in
+  Test.test ~title:"text41" ~description @@ fun () ->
+  let prgm () =
+    Miou.run @@ fun () ->
+    let orphans = Miou.orphans () in
+    let prm =
+      Miou.async ~orphans @@ fun () ->
+      let prm = Miou.async ~orphans (Fun.const ()) in
+      Miou.await_exn prm
+    in
+    Miou.await_exn prm
+  in
+  match Miou.run prgm with
+  | _ -> Test.check false
+  | exception Invalid_argument str ->
+      Test.check (str = "The given orphans is owned by another promise")
+
 let () =
   let tests =
     [
@@ -808,7 +826,7 @@ let () =
     ; test10; test11; test12; test13; test14; test15; test16; test17; test18
     ; test19; test20; test21; test22; test23; test24; test25; test26; test27
     ; test28; test29; test30; test31; test32; test33; test34; test35; test36
-    ; test37; test38; test39; test40
+    ; test37; test38; test39; test40; test41
     ]
   in
   let ({ Test.directory } as runner) =
