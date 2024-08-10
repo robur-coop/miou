@@ -808,6 +808,7 @@ module Domain = struct
     uid
 
   let available () = List.length (Effect.perform Domains)
+  let all () = Effect.perform Domains
 end
 
 module Clatch = struct
@@ -1064,15 +1065,28 @@ let async ?(give = []) ?orphans fn =
   Logs.debug (fun m -> m "%a spawned" Promise.pp prm);
   prm
 
-let call ?(give = []) ?orphans fn =
+let call ?pin ?(give = []) ?orphans fn =
   let domains = Effect.perform Domains in
   if domains = [] then raise No_domain_available;
   let (Pack self) = Effect.perform Self in
-  let g = Effect.perform Random in
   let runner =
-    match List.filter (Fun.negate (Domain_uid.equal self.runner)) domains with
-    | [] -> raise No_domain_available
-    | lst -> List.nth lst (Random.State.int g (List.length lst))
+    match pin with
+    | Some runner ->
+        if
+          Domain_uid.equal self.runner runner
+          || not (List.exists (Domain_uid.equal runner) domains)
+        then
+          Fmt.invalid_arg
+            "The given domain to pin your task does not exist or is the actual \
+             domain";
+        runner
+    | None -> (
+        let g = Effect.perform Random in
+        match
+          List.filter (Fun.negate (Domain_uid.equal self.runner)) domains
+        with
+        | [] -> raise No_domain_available
+        | lst -> List.nth lst (Random.State.int g (List.length lst)))
   in
   let prm = Effect.perform (Spawn (Parallel runner, false, give, fn)) in
   Option.iter (add_into_orphans ~self prm) orphans;

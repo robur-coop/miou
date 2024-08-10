@@ -488,6 +488,7 @@ module Domain : sig
 
   val self : unit -> Uid.t
   val available : unit -> int
+  val all : unit -> Uid.t list
 end
 
 type 'a t
@@ -713,7 +714,12 @@ val async :
       Exception: Invalid_argument "The given orphans is owned by another promise".
     ]} *)
 
-val call : ?give:Ownership.t list -> ?orphans:'a orphans -> (unit -> 'a) -> 'a t
+val call :
+     ?pin:Domain.Uid.t
+  -> ?give:Ownership.t list
+  -> ?orphans:'a orphans
+  -> (unit -> 'a)
+  -> 'a t
 (** [call fn] returns a promise {!type:t} representing the state of the task
     given as an argument. The task will be run in parallel: the domain used to
     run the task is different from the domain with the promise. This assertion
