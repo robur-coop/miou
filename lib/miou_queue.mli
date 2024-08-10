@@ -14,6 +14,10 @@ val dequeue : 'a t -> 'a
 (** [dequeue q] removes and returns the first element in queue [q], or raises
     {!exception:Empty} if the queue is empty. *)
 
+val peek : 'a t -> 'a
+(** [peek q] returns the first element in queue [q], or raises
+    {!exception:Empty} if the queue is empty. The queue itself is unchanged. *)
+
 val is_empty : 'a t -> bool
 (** Return [true] if the given queue is empty, [false] otherwise. *)
 

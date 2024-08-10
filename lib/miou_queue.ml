@@ -72,6 +72,10 @@ let dequeue t =
   in
   go ()
 
+let peek t =
+  let p = Atomic.get t.head in
+  match Atomic.get p.next with None -> raise Empty | Some next -> next.value
+
 let create () =
   let dummy = { value= Obj.magic (); next= Atomic.make None; count= 0 } in
   let t = { tail= Atomic.make dummy; head= Atomic.make dummy } in
