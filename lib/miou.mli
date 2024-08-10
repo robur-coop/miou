@@ -454,6 +454,7 @@ module Fmt = Miou_fmt
 module Trigger = Miou_sync.Trigger
 module Computation = Miou_sync.Computation
 module Queue = Miou_queue
+module Backoff = Miou_backoff
 
 module Sequence : sig
   type 'a t
