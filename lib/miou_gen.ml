@@ -4,7 +4,7 @@ module Make () = struct
   let null = 0
   let pp = Format.pp_print_int
   let compare a b = a - b
-  let equal a b = a == b
+  let equal = Int.equal
 
   external of_int : int -> t = "%identity"
   external to_int : t -> int = "%identity"
