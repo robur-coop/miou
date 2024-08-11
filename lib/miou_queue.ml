@@ -107,8 +107,7 @@ let length t =
   let head, tail = snapshot t in
   tail.count - head.count
 
-let iter ~f t =
-  let head, tail = snapshot t in
+let iter ~f (head, tail) =
   let rec go prev =
     if prev != tail then
       match Atomic.get prev.next with
@@ -117,18 +116,13 @@ let iter ~f t =
   in
   go head
 
-let rec drop ~f t =
-  let head, tail = snapshot t in
-  if Atomic.compare_and_set t.head head tail then (
-    let rec go prev =
-      if prev != tail then
-        match Atomic.get prev.next with
-        | None -> ()
-        | Some next -> f next.value; go next
-    in
-    go head;
-    tail.value <- Obj.magic ())
-  else drop ~f t
+let rec drop t =
+  let ((head, tail) as snapshot) = snapshot t in
+  if Atomic.compare_and_set t.head head tail
+  then snapshot else drop t
+
+let drop ~f t = iter ~f (drop t)
+let iter ~f t = iter ~f (snapshot t)
 
 let to_list t =
   let res = ref [] in
