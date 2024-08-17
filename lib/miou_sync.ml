@@ -52,8 +52,8 @@ end = struct
     | Awaiting (fn, x, y) as seen ->
         if Atomic.compare_and_set t seen Signaled then fn t x y else signal t
 
-  let is_signaled t = Atomic.get t == Signaled
-  let is_initial t = Atomic.get t == Initial
+  let is_signaled t = Atomic.get t = Signaled
+  let is_initial t = Atomic.get t = Initial
   let[@inline never] awaiting () = invalid_arg "Trigger: already awaiting"
 
   let rec on_signal t x y fn =
