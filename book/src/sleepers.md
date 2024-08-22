@@ -104,7 +104,7 @@ with our `our_select` function. Fortunately, Miou offers this possibility of
 injecting such a function via `Miou.run`:
 ```ocaml
 type select = block:bool -> uid list -> signal list
-type events = { select: select; interrupt: unit -> unit }
+type events = { select: select; interrupt: unit -> unit; finaliser: unit -> unit }
 
 val run : ?events:(Domain.Uid.t -> events) -> (unit -> 'a) -> 'a
 ```
@@ -144,7 +144,7 @@ let select ~block:_ _ =
   Unix.sleepf ts;
   remove_and_signal_older sleepers []
 
-let events _ = { Miou.select; interrupt= ignore }
+let events _ = { Miou.select; interrupt= ignore; finaliser= ignore }
 let run fn = Miou.run ~events fn
 ```
 
@@ -351,9 +351,15 @@ let buf = Bytes.make 1 '\000'
 
 let events _ =
   let ic, oc = Unix.pipe () in
+  let finaliser () = Unix.close ic; Unix.close oc in
   let interrupt () = ignore (Unix.write oc buf 0 (Bytes.length buf)) in
-  { Miou.select= select ic; interrupt }
+  { Miou.select= select ic; interrupt; finaliser }
 ```
+
+Note that the `Unix.pipe` function creates 2 file-descriptors that must be freed
+at the end. Miou proposes a mechanism using the “finaliser” function: as soon as
+a domain finishes its work, this function will be called to release
+(`Unix.close`) the resources allocated to create our events value per domain.
 
 And there you have it! We can now allow Miou to interrupt a `select` in the case
 of cancellation. Interruption occurs quite frequently and is not limited to

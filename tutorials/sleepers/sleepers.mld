@@ -91,7 +91,7 @@ can run this code:
 {[
 let dummy _ =
   let select ~block:_ _cancelled_syscalls = [] in
-  { Miou.select; Miou.interrupt= ignore }
+  { Miou.select; Miou.interrupt= ignore; Miou.finaliser= ignore }
 
 let () = Miou.(run ~events:dummy @@ fun () -> sleep 1.; ())
 ]}
@@ -387,11 +387,19 @@ let select interrupt ~block cancelled =
 
 let events _ =
   let ic, oc = Unix.pipe ~cloexec:true () in
+  let finaliser () = Unix.close ic; Unix.close oc in
   let rec interrupt () =
     if Unix.write oc (Bytes.make 1 '\000') 0 1 = 0 then interrupt ()
   in
-  { Miou.select= select ic; interrupt }
+  { Miou.select= select ic; interrupt; finaliser }
 ]}
+
+The allocation of two file descriptors using a [Unix.pipe] must also be
+associated with a “finaliser” closing these two file descriptors. In addition to
+[interrupt], Miou requires a [finaliser] function that will be called as soon as
+the domain that allocated the two file-descriptors shuts down. This allows the
+user to release the resources he has allocated to build the events value per
+domain.
 
 {4 The [block] argument.}
 
