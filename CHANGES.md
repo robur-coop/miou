@@ -1,3 +1,25 @@
+### v0.3.0 (2024-08-22)
+
+- Set the internal pipe used to interrupt a domain to a non-blocking mode and
+  remove the usage of an atomic which protect how we fill the pipe
+  (@haesbaert, @dinosaure, #28)
+- Expose option to reuse addr/port when we `Miou_unix.bind_and_listen`
+  (@ada2k, @dinosaure, #27)
+- Protect an illegal access to the orphan from a possibly parallel task which
+  does not own the orphan value
+  (@poytypic, @dinosaure, #31, #32)
+- Be able to pin a specific domain when we want to launch a parallel task
+  (@dinosaure, #34)
+- Expose the `Miou.Backoff` module which can be useful for users
+  (@dinosaure, #35)
+- Fix or improve (from the maintainance point-of-view) the `Miou.Queue` module
+  and some internal parts of Miou about the usage of atomics
+  (@dinosaure, @polytypic, #36, #33)
+- Prefer to require a `finaliser` function for the `events` value and actually
+  close the internal `Unix.pipe` used to interrupt domain than to use
+  `Gc.finaliser` and possibly leak file-descriptors
+  (spotted by @hannesm, @dinosaure, #37)
+
 ### v0.2.0 (2024-06-04)
 
 - Don't try to abusively fill the pipe to interrupt a domain
