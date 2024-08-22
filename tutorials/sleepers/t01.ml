@@ -37,7 +37,7 @@ let select ~block:_ _ =
         sleepers;
       !cs
 
-let events _ = { select; interrupt= ignore }
+let events _ = { select; interrupt= ignore; finaliser= ignore }
 
 let () =
   let t0 = Unix.gettimeofday () in

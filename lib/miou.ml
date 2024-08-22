@@ -137,7 +137,12 @@ type syscall = Syscall : Syscall_uid.t * Trigger.t * _ t -> syscall
 type signal = Signal : Trigger.t * _ t -> signal
 type uid = Syscall_uid.t
 type select = block:bool -> uid list -> signal list
-type events = { select: select; interrupt: unit -> unit }
+
+type events = {
+    select: select
+  ; interrupt: unit -> unit
+  ; finaliser: unit -> unit
+}
 
 type domain_elt =
   | Domain_transfer : _ t * resource * Trigger.t -> domain_elt
@@ -895,6 +900,7 @@ module Pool = struct
         Logs.debug (fun m -> m "[%a] exits" Domain_uid.pp domain.uid);
         decr pool.domains_counter;
         Condition.signal pool.condition_all_idle;
+        domain.events.finaliser ();
         Mutex.unlock pool.mutex
     | exn ->
         Mutex.lock pool.mutex;
@@ -903,6 +909,7 @@ module Pool = struct
         decr pool.domains_counter;
         Condition.broadcast pool.condition_pending_work;
         Condition.signal pool.condition_all_idle;
+        domain.events.finaliser ();
         Mutex.unlock pool.mutex;
         reraise exn
 
@@ -1410,7 +1417,7 @@ let () =
 
 let dummy_events =
   let select ~block:_ _ = raise No_select_provided in
-  { select; interrupt= Fun.const () }
+  { select; interrupt= Fun.const (); finaliser= Fun.const () }
 
 let sys_signal signal = function
   | (Sys.Signal_default | Sys.Signal_ignore) as behavior ->
@@ -1448,6 +1455,7 @@ let run ?(quanta = quanta) ?(g = Random.State.make_self_init ())
       Error (exn, bt)
   in
   Pool.kill pool;
+  dom0.events.finaliser ();
   List.iter Stdlib.Domain.join domains;
   match result with
   | Ok value -> value

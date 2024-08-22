@@ -75,7 +75,8 @@ let events _ =
   let rec interrupt () =
     if Unix.write oc (Bytes.make 1 '\000') 0 1 = 0 then interrupt ()
   in
-  { Miou.select= select ic; interrupt }
+  let finaliser () = Unix.close ic; Unix.close oc in
+  { Miou.select= select ic; interrupt; finaliser }
 
 let () =
   let t0 = Unix.gettimeofday () in

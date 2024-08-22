@@ -388,8 +388,7 @@ let events domain =
   Unix.set_nonblock ic;
   Unix.set_nonblock oc;
   let select = select domain ic in
-  let t = { Miou.interrupt= interrupt oc; select } in
-  let close _ = Unix.close ic; Unix.close oc in
-  Gc.finalise close t; t
+  let finaliser () = Unix.close ic; Unix.close oc in
+  { Miou.interrupt= interrupt oc; select; finaliser }
 
 let run ?g ?domains fn = Miou.run ~events ?g ?domains fn

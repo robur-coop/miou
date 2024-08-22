@@ -389,7 +389,7 @@ module Miouc = struct
     let value = Atomic.make false in
     let select = select uid value in
     let interrupt () = Atomic.set value true in
-    { Miou.interrupt; select }
+    { Miou.interrupt; select; finaliser= Fun.const () }
 
   let run ?g ?domains fn = Miou.run ~events ?g ?domains fn
 
@@ -511,7 +511,7 @@ let test28 =
   let select ~block:_ _ =
     match !global with Some value -> [ Miou.signal value ] | None -> []
   in
-  let events _ = { Miou.interrupt= ignore; select } in
+  let events _ = { Miou.interrupt= ignore; select; finaliser= Fun.const () } in
   let prgm () =
     Miou.run ~events @@ fun () ->
     let p = Miou.syscall () in

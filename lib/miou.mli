@@ -1104,7 +1104,12 @@ val uid : syscall -> uid
 (** [uid syscall] returns the unique ID of the syscall. *)
 
 type select = block:bool -> uid list -> signal list
-type events = { select: select; interrupt: unit -> unit }
+
+type events = {
+    select: select
+  ; interrupt: unit -> unit
+  ; finaliser: unit -> unit
+}
 
 val run :
      ?quanta:int
