@@ -156,11 +156,22 @@ type domain_elt =
 module Domain_elt = struct
   type t = int * domain_elt
 
-  let to_int = function Domain_clean _ -> 1 | Domain_cancel _ -> 2 | _ -> 3
+  let to_int elt tick =
+    (* TODO(dinosaure): a limit exists here about the number of ticks. When we
+       overflow, the order is probably broken. we should fix that! *)
+    let low =
+      match elt with Domain_clean _ -> 1 | Domain_cancel _ -> 2 | _ -> 3
+    in
+    (tick lsl 2) lor low
 
-  let compare (t0, a) (t1, b) =
-    let value = to_int a - to_int b in
-    if value = 0 then Int.compare t0 t1 else value
+  let[@inline always] select_int choose_b a b =
+    let mask = (-choose_b lor choose_b) asr Sys.int_size in
+    a land lnot mask lor (b land mask)
+
+  let compare (a, _) (b, _) =
+    let elt_ord = (a land 0b11) - (b land 0b11) in
+    let tik_ord = (a lsr 2) - (b lsr 2) in
+    select_int elt_ord tik_ord elt_ord
 
   let dummy = (0, Domain_tick (Obj.magic ()))
 end
@@ -296,7 +307,7 @@ let add_into_domain domain elt =
   let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
   miou_assert (Domain_uid.equal runner domain.uid);
   let tick = Atomic.fetch_and_add domain.tick 1 in
-  Heapq.insert (tick, elt) domain.tasks
+  Heapq.insert (Domain_elt.to_int elt tick, elt) domain.tasks
 
 let transfer_dom0_tasks pool =
   if not (Queue.is_empty pool.to_dom0) then
