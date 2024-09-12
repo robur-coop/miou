@@ -786,11 +786,12 @@ module Domain = struct
   let unblock_awaits_with_system_events pool (domain : domain) =
     if (Stdlib.Domain.self () :> int) == 0 then synchronize_dom0_tasks pool;
     let block = Heapq.size domain.tasks = 0 in
-    let cancelled = Queue.(to_list (transfer domain.cancelled_syscalls)) in
+    let cancelled =
+      if Queue.is_empty domain.cancelled_syscalls = false then
+        Queue.(to_list (transfer domain.cancelled_syscalls))
+      else []
+    in
     let syscalls = domain.events.select ~block cancelled in
-    Logs.debug (fun m ->
-        m "[%a] handles %d signal(s)" Domain_uid.pp domain.uid
-          (List.length syscalls));
     List.iter (signal_system_events domain) syscalls
 
   let system_events_suspended domain = Atomic.get domain.syscalls > 0
