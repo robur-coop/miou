@@ -391,12 +391,12 @@ module Domain = struct
   let add_into_domain = add_into_domain
 
   let add_into_pool pool elt =
-    Mutex.lock pool.mutex;
     let direction =
       match elt with
       | Pool_cancel _ -> Miou_sequence.Left
       | _ -> Miou_sequence.Right
     in
+    Mutex.lock pool.mutex;
     Miou_sequence.add direction pool.tasks elt;
     Condition.broadcast pool.condition_pending_work;
     Mutex.unlock pool.mutex;
