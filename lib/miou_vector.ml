@@ -44,7 +44,7 @@ let init ~dummy:(dummy: 'a) (n: int) (f: (int) -> 'a) : 'a t =
 
 let length (a: 'a t) : int = a.size
 
-let get (a: 'a t) (i2: int) : 'a = (a.data).(i2)
+let[@inline always] get ({ data; _ }: 'a t) (i2: int) : 'a = Array.unsafe_get data i2
 
 let set (a: 'a t) (n: int) (x: 'a) : unit = (a.data).(n) <- x
 
