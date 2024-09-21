@@ -237,6 +237,19 @@ type pool = {
    [{ pool with ... }]) to includes spawned domains. To continue sharing mutable
    values when copying, we need to use [ref] rather than [mutable]. *)
 
+(* NOTE(dinosaure): The [tasks_is_empty] variable is used to determine whether
+   domains should re-observe the shared heap (via [worker]) to consume a task
+   intended for them or continue with the tasks they have to do according to
+   their internal heap.
+
+   This means that we don't have to use the system mutex too much and that the
+   domain only resynchronises with the shared heap when necessary - i.e. when
+   there is a task waiting to be assigned to a domain.
+
+   The value is atomic because it must be observed by several domains. Although
+   its modification (Atomic.set) is protected by the mutex, its observation is
+   not (so a domain could observe ‘while’ the variable is being modified). *)
+
 let get_domain_from_uid pool ~uid =
   List.find (fun domain -> Domain_uid.equal domain.uid uid) pool.domains
 
