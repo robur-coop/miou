@@ -1,7 +1,27 @@
 (** {1 The Unix layer of Miou.}
 
     This module offers a re-implementation of the I/O according to Miou's
-    model. It manages possible suspensions due to I/O *)
+    model. This module is essentially concerned with reading and writing
+    [Unix.file_descr] from sockets, pipes, fifos, terminals (and
+    pseudo-terminals) and probably devices. For all these types of [file_descr],
+    reading/writing can block (waiting for bytes or waiting for the system's
+    internal buffer to be free).
+
+    This is not {i generally} the case for files and folders where
+    [read]/[write] does not block. So, as far as files/folders are concerned,
+    there is no point in using the suspend/resume mechanisms offered by Miou.
+    These mechanisms (and the use of [Unix.select]) could actually degrade
+    performance. It is therefore advisable to use the [Unix] module directly
+    rather than [Miou_unix] for files/folders.
+
+    It should be noted, however, that reading/writing files can take a long
+    time. So, in a cooperative context (with [Miou.async]), it may be worthwhile
+    to increase the availability of other tasks to run with [Miou.yield] - so
+    associate a [Miou.yield] with these operations. However, in the case of
+    parallelization ([Miou.call]), it is not necessary to cooperate with the
+    other tasks as they run in parallel. In this sense, and depending on the
+    design of your application, these operations should, or should not, be
+    associated with a [Miou.yield]. *)
 
 type file_descr
 (** Type of file-descriptors. *)
