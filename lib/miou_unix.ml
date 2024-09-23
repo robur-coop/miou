@@ -25,12 +25,33 @@ let bind_and_listen ?(backlog = 64) ?(reuseaddr = true) ?(reuseport = true)
   Unix.bind fd sockaddr;
   Unix.listen fd backlog
 
-module File_descrs = Hashtbl.Make (struct
-  type t = Unix.file_descr
+module File_descrs = struct
+  type 'a t = { mutable contents: (Unix.file_descr * 'a) list }
 
-  let equal a b = Int.equal (Obj.magic a) (Obj.magic b)
-  let hash v = Obj.magic v land max_int
-end)
+  let find tbl fd = List.assq fd tbl.contents
+
+  let remove tbl fd =
+    let contents =
+      List.fold_left
+        (fun acc (k, v) -> if k == fd then acc else (k, v) :: acc)
+        [] tbl.contents
+    in
+    tbl.contents <- contents
+
+  let iter f tbl = List.iter (fun (k, v) -> f k v) tbl.contents
+
+  let replace tbl fd v' =
+    let contents =
+      List.fold_left
+        (fun acc (k, v) -> if k == fd then (k, v') :: acc else (k, v) :: acc)
+        [] tbl.contents
+    in
+    tbl.contents <- contents
+
+  let add tbl k v = tbl.contents <- (k, v) :: tbl.contents
+  let clear tbl = tbl.contents <- []
+  let create _ = { contents= [] }
+end
 
 type elt = { time: float; syscall: Miou.syscall; mutable cancelled: bool }
 
