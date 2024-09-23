@@ -456,6 +456,11 @@ module Computation = Miou_sync.Computation
 module Queue = Miou_queue
 module Backoff = Miou_backoff
 
+external reraise : exn -> 'a = "%reraise"
+(** [reraise exn] raises the exception [exn]. Unlike [raise exn], [reraise exn]
+    preserves the existing exception backtrace and even adds a "Re-raised at"
+    entry with the call location. *)
+
 module Sequence : sig
   type 'a t
   type 'a node
