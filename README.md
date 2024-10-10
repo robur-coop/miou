@@ -93,9 +93,9 @@ by Miou is that between a child and its parent.
 If a task fails (with an exception), all its sub-tasks also end.
 
 ```ocaml
-let prgm () = Miouu.run @@ fun () ->
+let prgm () = Miou_unix.run @@ fun () ->
   let p = Miou.async @@ fun () ->
-    let q = Miou.async @@ fun () -> sleep 1. in
+    let q = Miou.async @@ fun () -> Miou_unix.sleep 1. in
     raise (Failure "p") in
   Miou.await p
 
