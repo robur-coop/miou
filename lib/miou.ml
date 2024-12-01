@@ -810,6 +810,10 @@ module Domain = struct
     in
     Miou_sequence.iter_node ~f:apply domain.hooks
 
+  let[@inline always] no_transfer pool =
+    ((Stdlib.Domain.self () :> int) == 0 && Queue.is_empty pool.to_dom0)
+    || (Stdlib.Domain.self () :> int) != 0
+
   let rec run pool (domain : domain) =
     run_hooks domain;
     match Heapq.extract_min_exn domain.tasks with
@@ -822,7 +826,10 @@ module Domain = struct
         once pool domain elt;
         if system_events_suspended domain then
           unblock_awaits_with_system_events pool domain;
-        if Heapq.is_empty domain.tasks = false && Atomic.get pool.tasks_is_empty
+        if
+          Heapq.is_empty domain.tasks = false
+          && Atomic.get pool.tasks_is_empty
+          && no_transfer pool
         then run pool domain
 
   let self () =

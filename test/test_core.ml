@@ -819,6 +819,18 @@ let test41 =
   | exception Invalid_argument str ->
       Test.check (str = "The given orphans is owned by another promise")
 
+let test42 =
+  let description = {text|Transfer parallel task to dom0|text} in
+  Test.test ~title:"test42" ~description @@ fun () ->
+  Miou.run @@ fun () ->
+  let prm0 =
+    Miou.async @@ fun () ->
+    let rec go () = go (Miou.yield ()) in
+    go ()
+  in
+  let prm1 = Miou.call @@ fun () -> Miou.yield () in
+  Miou.await_exn prm1; Miou.cancel prm0; Test.check true
+
 let () =
   let tests =
     [
@@ -826,7 +838,7 @@ let () =
     ; test10; test11; test12; test13; test14; test15; test16; test17; test18
     ; test19; test20; test21; test22; test23; test24; test25; test26; test27
     ; test28; test29; test30; test31; test32; test33; test34; test35; test36
-    ; test37; test38; test39; test40; test41
+    ; test37; test38; test39; test40; test41; test42
     ]
   in
   let ({ Test.directory } as runner) =
