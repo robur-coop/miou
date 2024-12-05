@@ -314,7 +314,7 @@ module Trace = struct
   let event : type a. a Runtime_events.User.t -> (unit -> a) -> unit =
    fun k fn -> if trace then Runtime_events.User.write k (fn ())
 
-  let spawn k (prm : _ t) =
+  let spawn (prm : _ t) =
     let parent =
       match prm.parent with
       | None -> Promise_uid.(to_int null)
@@ -322,9 +322,7 @@ module Trace = struct
     in
     let runner = Domain_uid.to_int prm.runner in
     let uid = Promise_uid.to_int prm.uid in
-    event spawn @@ fun () ->
-    let resources = Miou_sequence.length prm.resources in
-    { k; resources; uid; parent; runner }
+    event spawn @@ fun () -> { uid; parent; runner }
 
   let await (prm : _ t) =
     let runner = Domain_uid.to_int prm.runner in
@@ -572,7 +570,7 @@ module Domain = struct
           let prm' = Promise.create ~parent:prm ~forbid ~resources domain.uid in
           canceller pool ~self:prm prm';
           Miou_sequence.(add Left) prm.children (Pack prm');
-          Trace.spawn `Concurrent prm';
+          Trace.spawn prm';
           add_into_domain domain (Domain_create (prm', fn));
           k (Operation.return prm')
       | Spawn (Parallel runner, forbid, resources, fn) ->
@@ -580,7 +578,7 @@ module Domain = struct
           let prm' = Promise.create ~parent:prm ~forbid ~resources runner in
           canceller pool ~self:prm prm';
           Miou_sequence.(add Left) prm.children (Pack prm');
-          Trace.spawn `Parallel prm';
+          Trace.spawn prm';
           add_into_pool pool (Pool_create (prm', fn));
           k (Operation.return prm')
       | Cancel (backtrace, child) ->

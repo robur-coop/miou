@@ -1,3 +1,4 @@
+(*
 module Location = struct
   type t = Nowhere | Simple of { line: int; start: int; stop: int }
 
@@ -109,9 +110,13 @@ module Callstack = struct
     let filename, location =
       match Printexc.Slot.location slot with
       | None -> (None, Location.Nowhere)
-      | Some { filename; line_number; start_char; end_char; _ } ->
+      | Some location ->
+          let filename = location.filename
+          and line = location.line_number
+          and start = location.start_char
+          and stop = location.end_char in
           ( Some filename
-          , Simple { line= line_number; start= start_char; stop= end_char } )
+          , Simple { line; start; stop } )
     in
     { name; filename; location }
 
@@ -122,29 +127,22 @@ module Callstack = struct
     | Some [| _current |] -> [||]
     | Some bt -> Array.map to_entry Array.(sub bt 1 (length bt - 1))
 end
+*)
 
-type k = [ `Parallel | `Concurrent ]
-type spawn = { k: k; resources: int; uid: int; parent: int; runner: int }
+type spawn = { uid: int; parent: int; runner: int }
 
 let spawn_type =
-  let encode buf { k; resources; uid; parent; runner } =
-    let hdr = match k with `Parallel -> 0x80 | `Concurrent -> 0x0 in
-    let resources = min resources 0x7f in
-    let hdr = hdr lor resources in
-    Bytes.set_int8 buf 0 hdr;
-    Bytes.set_int64_le buf 1 (Int64.of_int uid);
-    Bytes.set_int64_le buf 9 (Int64.of_int parent);
-    Bytes.set_int64_le buf 17 (Int64.of_int runner);
-    25
+  let encode buf { uid; parent; runner } =
+    Bytes.set_int64_le buf 0 (Int64.of_int uid);
+    Bytes.set_int64_le buf 8 (Int64.of_int parent);
+    Bytes.set_int64_le buf 16 (Int64.of_int runner);
+    24
   in
   let decode buf _size =
-    let hdr = Bytes.get_int8 buf 0 in
-    let k = match hdr land 0x80 with 0 -> `Concurrent | _ -> `Parallel in
-    let resources = hdr land 0x7f in
-    let uid = Int64.to_int (Bytes.get_int64_le buf 1) in
-    let parent = Int64.to_int (Bytes.get_int64_le buf 9) in
-    let runner = Int64.to_int (Bytes.get_int64_le buf 17) in
-    { k; resources; uid; parent; runner }
+    let uid = Int64.to_int (Bytes.get_int64_le buf 0) in
+    let parent = Int64.to_int (Bytes.get_int64_le buf 8) in
+    let runner = Int64.to_int (Bytes.get_int64_le buf 16) in
+    { uid; parent; runner }
   in
   Runtime_events.Type.register ~encode ~decode
 
@@ -163,15 +161,123 @@ let task_type =
   in
   Runtime_events.Type.register ~encode ~decode
 
-type Runtime_events.User.tag += Spawn | Cancel | Await | Resume | Cancelled
+type resource = int
 
-let spawn = Runtime_events.User.register "miou.spawn" Spawn spawn_type
-let cancel = Runtime_events.User.register "miou.cancel" Cancel task_type
-let await = Runtime_events.User.register "miou.await" Await task_type
-let resume = Runtime_events.User.register "miou.resume" Resume task_type
+let resource_and_task_type =
+  let encode buf (uid, task) =
+    Bytes.set_int64_le buf 0 (Int64.of_int uid);
+    Bytes.set_int64_le buf 8 (Int64.of_int task.uid);
+    Bytes.set_int64_le buf 16 (Int64.of_int task.runner);
+    24
+  in
+  let decode buf _size =
+    let uid = Bytes.get_int64_le buf 0 in
+    let task_uid = Bytes.get_int64_le buf 8 in
+    let task_runner = Bytes.get_int64_le buf 16 in
+    let task =
+      { uid= Int64.to_int task_uid; runner= Int64.to_int task_runner }
+    in
+    (Int64.to_int uid, task)
+  in
+  Runtime_events.Type.register ~encode ~decode
 
-let cancelled =
-  Runtime_events.User.register "miou.cancelled" Cancelled task_type
+type syscall = int
+
+let syscall_and_task_type =
+  let encode buf (uid, task) =
+    Bytes.set_int64_le buf 0 (Int64.of_int uid);
+    Bytes.set_int64_le buf 8 (Int64.of_int task.uid);
+    Bytes.set_int64_le buf 16 (Int64.of_int task.runner);
+    24
+  in
+  let decode buf _size =
+    let uid = Bytes.get_int64_le buf 0 in
+    let task_uid = Bytes.get_int64_le buf 8 in
+    let task_runner = Bytes.get_int64_le buf 16 in
+    let task =
+      { uid= Int64.to_int task_uid; runner= Int64.to_int task_runner }
+    in
+    (Int64.to_int uid, task)
+  in
+  Runtime_events.Type.register ~encode ~decode
+
+type error =
+  | Still_has_children
+  | Not_a_child of { child: task }
+  | Not_owner of resource
+  | Resource_leaked of resource
+
+let task_and_error_type =
+  let encode buf (task, error) =
+    Bytes.set_int64_le buf 0 (Int64.of_int task.uid);
+    Bytes.set_int64_le buf 8 (Int64.of_int task.runner);
+    match error with
+    | Still_has_children -> Bytes.set_uint8 buf 16 0; 17
+    | Not_a_child { child= { uid; runner } } ->
+        Bytes.set_uint8 buf 16 1;
+        Bytes.set_int64_le buf 17 (Int64.of_int uid);
+        Bytes.set_int64_le buf 25 (Int64.of_int runner);
+        33
+    | Not_owner uid ->
+        Bytes.set_uint8 buf 16 2;
+        Bytes.set_int64_le buf 17 (Int64.of_int uid);
+        25
+    | Resource_leaked uid ->
+        Bytes.set_uint8 buf 16 3;
+        Bytes.set_int64_le buf 17 (Int64.of_int uid);
+        25
+  in
+  let decode buf _size =
+    let task_uid = Bytes.get_int64_le buf 0 in
+    let task_runner = Bytes.get_int64_le buf 8 in
+    let task =
+      { uid= Int64.to_int task_uid; runner= Int64.to_int task_runner }
+    in
+    match Bytes.get_uint8 buf 16 with
+    | 0 -> (task, Still_has_children)
+    | 1 ->
+        let child_uid = Bytes.get_int64_le buf 17 in
+        let child_runner = Bytes.get_int64_le buf 25 in
+        let child =
+          { uid= Int64.to_int child_uid; runner= Int64.to_int child_runner }
+        in
+        (task, Not_a_child { child })
+    | 2 ->
+        let uid = Bytes.get_int64_le buf 17 in
+        (task, Not_owner (Int64.to_int uid))
+    | 3 ->
+        let uid = Bytes.get_int64_le buf 17 in
+        (task, Resource_leaked (Int64.to_int uid))
+    | _ -> invalid_arg "Miou_runtime_event: invalid type of error"
+  in
+  Runtime_events.Type.register ~encode ~decode
+
+type Runtime_events.User.tag +=
+  | Spawn
+  | Cancel
+  | Await
+  | Resume
+  | Cancelled
+  | Yield
+  | Suspend
+  | Unblock
+  | Attach
+  | Detach
+  | Abort
+
+open Runtime_events
+
+let spawn = User.register "miou.spawn" Spawn spawn_type
+let cancel = User.register "miou.cancel" Cancel task_type
+let await = User.register "miou.await" Await task_type
+let resume = User.register "miou.resume" Resume task_type
+let cancelled = User.register "miou.cancelled" Cancelled task_type
+let yield = User.register "miou.yield" Yield task_type
+let suspend = User.register "miou.suspend" Suspend syscall_and_task_type
+let unblock = User.register "miou.unblock" Unblock syscall_and_task_type
+let attach = User.register "miou.attach" Attach resource_and_task_type
+let detach = User.register "miou.detach" Detach resource_and_task_type
+let abort = User.register "miou.abort" Abort task_and_error_type
 
 type event =
   | Spawn of spawn
@@ -179,8 +285,14 @@ type event =
   | Await of task
   | Resume of task
   | Cancelled of task
+  | Yield of task
+  | Suspend of syscall * task
+  | Unblock of syscall * task
+  | Attach of resource * task
+  | Detach of resource * task
+  | Abort of task * error
 
-let add_callbacks ~fn x =
+let add_callbacks ~fn callbacks =
   let create_spawn ring_id ts ev spawn =
     match Runtime_events.User.tag ev with
     | Spawn -> fn ring_id ts (Spawn spawn)
@@ -192,8 +304,32 @@ let add_callbacks ~fn x =
     | Await -> fn ring_id ts (Await task)
     | Resume -> fn ring_id ts (Resume task)
     | Cancelled -> fn ring_id ts (Cancelled task)
+    | Yield -> fn ring_id ts (Yield task)
     | _ -> ()
   in
-  x
+  let from_syscall_and_task ring_id ts ev (syscall, task) =
+    match Runtime_events.User.tag ev with
+    | Suspend -> fn ring_id ts (Suspend (syscall, task))
+    | Unblock -> fn ring_id ts (Unblock (syscall, task))
+    | _ -> ()
+  in
+  let from_resource_and_task ring_id ts ev (resource, task) =
+    match Runtime_events.User.tag ev with
+    | Attach -> fn ring_id ts (Attach (resource, task))
+    | Detach -> fn ring_id ts (Detach (resource, task))
+    | _ -> ()
+  in
+  let from_task_and_error ring_id ts ev (task, error) =
+    match Runtime_events.User.tag ev with
+    | Abort -> fn ring_id ts (Abort (task, error))
+    | _ -> ()
+  in
+  callbacks
   |> Runtime_events.Callbacks.add_user_event spawn_type create_spawn
   |> Runtime_events.Callbacks.add_user_event task_type from_task
+  |> Runtime_events.Callbacks.add_user_event syscall_and_task_type
+       from_syscall_and_task
+  |> Runtime_events.Callbacks.add_user_event resource_and_task_type
+       from_resource_and_task
+  |> Runtime_events.Callbacks.add_user_event task_and_error_type
+       from_task_and_error
