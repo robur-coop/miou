@@ -1,10 +1,5 @@
 # An echo server with Miou
 
-Passer de notre petit scheduler à Miou est assez simple. Mise à part la règle
-de ne pas oublier ses enfants que nous avons introduit dans le chapitre précédent,
-il s'agit principalement d'utiliser `Miou` et `Miou_unix`. Prennons la fonction
-`echo` qui gère nos clients:
-
 Moving from our custom scheduler to Miou is quite straightforward. Apart from
 the rule of not forgetting our children that we introduced in the previous
 chapter, it mainly involves using `Miou` and `Miou_unix`. Let's take the `echo`
