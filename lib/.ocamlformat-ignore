@@ -1,0 +1,4 @@
+# ocamlformat is disabled in this file, but `dune build @fmt` still fails.
+# Disabling ocamlformat here is a temporary workaround.
+# Issue reported: https://github.com/ocaml-ppx/ocamlformat/issues/2641
+miou_vector.mli
