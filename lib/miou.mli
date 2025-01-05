@@ -332,7 +332,7 @@
       Exception: Miou.Still_has_children.
     ]}
 
-    {4:rule-2 Rule 2, only await for direct children.}
+    {4:rule_2 Rule 2, only await for direct children.}
 
     You can only await for your direct children. Transferring a promise to
     another task so that it can await for it is illegal:
@@ -682,7 +682,7 @@ val care : 'a orphans -> 'a t option option
       that promise in an orphanage. So, if [care] is used elsewhere than in the
       promise, an exception is raised to warn the user of a misuse of [care].
       Indeed, the child returned by care can only be awaited ({!await}) by its
-      direct parent (in reference to {{!section:rule-2}our second rule}). *)
+      direct parent (in reference to {{!section:rule_2}our second rule}). *)
 
 val length : _ orphans -> int
 (** [length orphans] returns the number of remaining tasks. *)
