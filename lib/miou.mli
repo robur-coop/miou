@@ -1143,8 +1143,8 @@ val protect :
     [finally] raises an exception, then the exception {!Fun.Finally_raised} is
     raised instead. In the case of a cancellation, it invokes [finally ()] and
     then [on_cancellation ()] before the deletion of [fn ()]. If
-    [on_cancellation ()] raises an exception, then the exception
-    {!On_cancellation_raised} is raised instead.
+    [on_cancellation ()] raises an exception, then the "uncatchable" exception
+    [On_cancellation_raised] is raised instead.
 
     [on_cancellation] must {b not} use any effects. Using effects suspends
     execution and, in the case of cancellation, anything after the effect will
