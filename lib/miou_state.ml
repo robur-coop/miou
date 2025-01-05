@@ -25,8 +25,8 @@ let effc eff k = Suspended (k, eff)
 
 let handler_continue =
   let open Effect.Shallow in
-  let effc :
-      type c. c Effect.t -> ((c, 'a) Effect.Shallow.continuation -> 'b) option =
+  let effc : type c.
+      c Effect.t -> ((c, 'a) Effect.Shallow.continuation -> 'b) option =
    fun eff -> Some (effc eff)
   in
   { retc; exnc; effc }
@@ -37,8 +37,8 @@ let continue_with : ('c, 'a) continuation -> 'c -> 'a t =
 let handler_discontinue exn_and_bt =
   let open Effect.Shallow in
   let const _ = Finished (Error exn_and_bt) in
-  let effc :
-      type c. c Effect.t -> ((c, 'a) Effect.Shallow.continuation -> 'b) option =
+  let effc : type c.
+      c Effect.t -> ((c, 'a) Effect.Shallow.continuation -> 'b) option =
    fun _ -> Some const
   and retc = const
   and exnc = const in
@@ -89,14 +89,14 @@ let once : type a. perform:perform -> a t -> a t =
   | Suspended (fn, e) as state ->
       let k : type c. (c, a) continuation -> c Operation.t -> a t =
        fun fn -> function
-        | Return v -> continue_with fn v
-        | Fail (exn, bt) -> discontinue_with ~backtrace:bt fn exn
-        | Interrupt -> state
-        | Continue e -> suspended_with fn e
-        | Perform eff ->
-            let v = Effect.perform eff in
-            unhandled_with fn v
-        | Yield -> continue_with fn ()
+         | Return v -> continue_with fn v
+         | Fail (exn, bt) -> discontinue_with ~backtrace:bt fn exn
+         | Interrupt -> state
+         | Continue e -> suspended_with fn e
+         | Perform eff ->
+             let v = Effect.perform eff in
+             unhandled_with fn v
+         | Yield -> continue_with fn ()
       in
       perform.perform (k fn) e
 
@@ -111,14 +111,14 @@ let run : type a. quanta:int -> perform:perform -> a t -> a t =
   let exception Yield of a t in
   let k : type c. (c, a) continuation -> c Operation.t -> a t =
    fun fn -> function
-    | Return v -> continue_with fn v
-    | Fail (exn, bt) -> discontinue_with ~backtrace:bt fn exn
-    | Continue e -> suspended_with fn e
-    | Perform e ->
-        let v = Effect.perform e in
-        unhandled_with fn v
-    | Interrupt -> raise_notrace Break
-    | Yield -> raise_notrace (Yield (continue_with fn ()))
+     | Return v -> continue_with fn v
+     | Fail (exn, bt) -> discontinue_with ~backtrace:bt fn exn
+     | Continue e -> suspended_with fn e
+     | Perform e ->
+         let v = Effect.perform e in
+         unhandled_with fn v
+     | Interrupt -> raise_notrace Break
+     | Yield -> raise_notrace (Yield (continue_with fn ()))
   in
   let quanta = ref quanta and state = ref state in
   try

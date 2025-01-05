@@ -20,8 +20,8 @@ module Trigger : sig
   (** [create ()] allocates a new trigger in the initial state. *)
 
   val is_initial : t -> bool
-  (** [is_initial t] dtermines whether the trigger [t] is in the initial
-      state. *)
+  (** [is_initial t] dtermines whether the trigger [t] is in the initial state.
+  *)
 
   val is_signaled : t -> bool
   (** [is_signaled t] determines whether the trigger [t] is in the signaled
@@ -30,16 +30,17 @@ module Trigger : sig
   val await : t -> (exn * Printexc.raw_backtrace) option
   (** [await t] waits for the trigger to be {!signal}ed.
 
-      The return value is [None] in case the trigger was signaled before
-      [await] or we resumed the underlying continuation normally. Otherwise,
-      the return value is [Some (exn, bt)], which indicates that the underlying
+      The return value is [None] in case the trigger was signaled before [await]
+      or we resumed the underlying continuation normally. Otherwise, the return
+      value is [Some (exn, bt)], which indicates that the underlying
       continuation has been cancelled and the caller should raise the exception.
       In either case, the caller is responsible for cleaning up. Usually this
       means making sure that no references to the trigger remain to avoid space
       leak.
 
-      @raise Invalid_argument if the trigger was in the awaiting state, which
-      means that multiple concurrent calls of [await] are being made. *)
+      @raise Invalid_argument
+        if the trigger was in the awaiting state, which means that multiple
+        concurrent calls of [await] are being made. *)
 
   type _ Effect.t +=
     private
@@ -62,9 +63,10 @@ module Trigger : sig
       Otherwise, the return value is [false], which means that the trigger was
       already in the signaled state.
 
-      @raise Invalid_argument if the trigger was in the awaiting state, which
-      means that either the owner or creator of the trigger made concurrent
-      calls to {!val:await} or the handler called [on_signal] more than once. *)
+      @raise Invalid_argument
+        if the trigger was in the awaiting state, which means that either the
+        owner or creator of the trigger made concurrent calls to {!val:await} or
+        the handler called [on_signal] more than once. *)
 end
 
 module Computation : sig
@@ -106,8 +108,8 @@ module Computation : sig
       cancelled. *)
 
   val raise_if_errored : 'a t -> unit
-  (** [raise_if_errored] raises the exception the computation was cancelled
-      with if it was errored. *)
+  (** [raise_if_errored] raises the exception the computation was cancelled with
+      if it was errored. *)
 
   val peek : 'a t -> ('a, exn * Printexc.raw_backtrace) result option
   (** [peek c] returns the result of the computation [c] or [None] in case the

@@ -25,7 +25,7 @@ val max_wait_log : int
 (** Logarithm of the maximum allowed value for wait. *)
 
 val create : ?lower_wait_log:int -> ?upper_wait_log:int -> unit -> t
-(** [create] creates a backoff value.  [upper_wait_log], [lower_wait_log]
+(** [create] creates a backoff value. [upper_wait_log], [lower_wait_log]
     override the logarithmic upper and lower bound on the number of spins
     executed by {!once}. *)
 

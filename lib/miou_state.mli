@@ -1,13 +1,13 @@
 type ('a, 'b) continuation
 (** The type of continuations. [('a, 'b) continuation] is the state of a
-    function [_ -> 'b]. ['a] is the type of the value to {i continue}
-    the continuation. The user can also {i discontinue} with an exception
-    the continuation. *)
+    function [_ -> 'b]. ['a] is the type of the value to {i continue} the
+    continuation. The user can also {i discontinue} with an exception the
+    continuation. *)
 
 type error = exn * Printexc.raw_backtrace
 (** The type of errors. A continuation can raise or be cancelled by an
-    exception. We keep the backtrace (where the exception comes from) with
-    the exception raised/used. *)
+    exception. We keep the backtrace (where the exception comes from) with the
+    exception raised/used. *)
 
 (** The type of function states.
 
@@ -72,8 +72,8 @@ val run : quanta:int -> perform:perform -> 'a t -> 'a t
     nothing), even though there may be a few {i quanta} left, the function
     returns the last state obtained.
 
-    The same applies to {!val:yield}, except that the continuation has
-    burnt itself out. In other words, {!val:yield} is equivalent to
+    The same applies to {!val:yield}, except that the continuation has burnt
+    itself out. In other words, {!val:yield} is equivalent to
     [send (); interrupt] but costs only one {i quanta}. *)
 
 (**/**)
