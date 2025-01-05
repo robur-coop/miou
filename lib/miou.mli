@@ -420,8 +420,8 @@
     The advantage of making suspension points local to domains is that the
     domain is solely responsible for these points and there are no inter-domain
     transfer mechanisms for managing system events. For the example,
-    {!module:Domain.DLS} can be used for a table of current events in each
-    domain.
+    {!module:Stdlib.Domain.DLS} can be used for a table of current events in
+    each domain.
 
     {[
       let get, set =
@@ -1172,7 +1172,7 @@ module Mutex : sig
       will restart. The mutex must have been previously locked by the thread
       that calls {!val:unlock}.
 
-      @raise Sysy_error
+      @raise Sys_error
         was not raised when unlocking an unlocked mutex or when unlocking a
         mutex from a different task. *)
 

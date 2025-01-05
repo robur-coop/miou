@@ -28,9 +28,9 @@
     Vectors provide an efficient implementation of stacks, with a
     better locality of reference than list-based implementations (such
     as standard library {!Stack}). A stack interface is provided,
-    similar to that of {!Stack} (though {!Vector.push} have arguments
+    similar to that of {!Stack} (though {!push} have arguments
     in the other way round). Inserting [n] elements with
-    {!Vector.push} has overall complexity O(n) i.e. each insertion has
+    {!push} has overall complexity O(n) i.e. each insertion has
     amortized constant time complexity. *)
 
 (*@ use List *)
@@ -219,7 +219,7 @@ val map : dummy:'b -> 'a t -> ('a -> 'b) -> 'b t
       ensures  forall i. 0 <= i < length a1.view -> a2.view[i] = f a1.view[i] *)
 
 val mapi : dummy:'b -> 'a t -> (int -> 'a -> 'b) -> 'b t
-(** Same as {!Vector.map}, but the
+(** Same as {!map}, but the
    function is applied to the index of the element as first argument,
    and the element itself as second argument.
 
@@ -264,7 +264,7 @@ val iter : ('a -> unit) -> 'a t -> unit
 *)
 
 val iteri : (int -> 'a -> unit) -> 'a t -> unit
-(** Same as {!Vector.iter}, but the
+(** Same as {!iter}, but the
    function is applied to the index of the element as first argument,
    and the element itself as second argument. *)
 (*@ iteri f a
@@ -272,7 +272,7 @@ val iteri : (int -> 'a -> unit) -> 'a t -> unit
 
 (** {2 Stack interface}
 
-    Contrary to standard library's {Stack}, module {Vector} uses less space
+    Contrary to standard library's {!Stack}, module [Vector] uses less space
     (between N and 2N words, instead of 3N) and has better data locality. *)
 
 val push: 'a t -> 'a -> unit
