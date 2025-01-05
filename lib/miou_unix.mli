@@ -56,7 +56,7 @@ val bind_and_listen :
 
 val accept : ?cloexec:bool -> file_descr -> file_descr * Unix.sockaddr
 (** [accept ?cloexec fd] is a Miou friendly {!Unix.accept} which returns file
-    descritptors in non-blocking mode. *)
+    descriptors in non-blocking mode. *)
 
 val connect : file_descr -> Unix.sockaddr -> unit
 (** [connect fd sockaddr] is a Miou friendly {!val:Unix.connect}. The function

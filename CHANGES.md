@@ -7,12 +7,12 @@
   (@ada2k, @dinosaure, #27)
 - Protect an illegal access to the orphan from a possibly parallel task which
   does not own the orphan value
-  (@poytypic, @dinosaure, #31, #32)
+  (@polytypic, @dinosaure, #31, #32)
 - Be able to pin a specific domain when we want to launch a parallel task
   (@dinosaure, #34)
 - Expose the `Miou.Backoff` module which can be useful for users
   (@dinosaure, #35)
-- Fix or improve (from the maintainance point-of-view) the `Miou.Queue` module
+- Fix or improve (from the maintenance point-of-view) the `Miou.Queue` module
   and some internal parts of Miou about the usage of atomics
   (@dinosaure, @polytypic, #36, #33)
 - Prefer to require a `finaliser` function for the `events` value and actually

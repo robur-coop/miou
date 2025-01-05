@@ -76,7 +76,7 @@ let () = Miou.run @@ fun () ->
   let p0 = Miou.async @@ fun () -> 42 in
   let p1 = Miou.async @@ fun () -> Miou.await_exn p0 in
   Miou.await_exn p1
-Esxception: Miou.Not_a_child
+Exception: Miou.Not_a_child
 ```
 
 This rule dictates that passing values from one task to another requires
@@ -139,7 +139,7 @@ let prgm () =
 let rec until_its n =
   match prgm () with
   | Ok n' when n = n' -> ()
-  | _ -> untils_its n
+  | _ -> until_its n
 
 let () =
   until_its 1;
@@ -195,7 +195,7 @@ system resources through the API it can offer).
 I/O and the resources of a system. Mutexes, conditions or semaphores can also
 suspend the execution of a program. Our documentation and tutorials explain
 those cases that we consider *marginal* in the interest of internalizing
-suspension mecanism rather than exporting it to the user (but which are equally
+suspension mechanism rather than exporting it to the user (but which are equally
 important in the design of an application).
 
 ## Genesis

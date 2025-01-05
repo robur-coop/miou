@@ -20,7 +20,7 @@ module Trigger : sig
   (** [create ()] allocates a new trigger in the initial state. *)
 
   val is_initial : t -> bool
-  (** [is_initial t] dtermines whether the trigger [t] is in the initial state.
+  (** [is_initial t] determines whether the trigger [t] is in the initial state.
   *)
 
   val is_signaled : t -> bool

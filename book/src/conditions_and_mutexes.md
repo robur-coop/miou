@@ -47,7 +47,7 @@ let server () =
     let client, sockaddr = Miou_unix.Ownership.accept socket in
     Format.printf "new client: %a\n%!" pp_sockaddr sockaddr;
     ignore (Miou.async
-      ~give:[ Miou_unix.Ownership.resource clientr 
+      ~give:[ Miou_unix.Ownership.resource client ]
       ~orphans (fun () -> echo client))
   done;
   Miou_unix.Ownership.close socket
@@ -154,11 +154,11 @@ new connection.
 
 If we try this code, it may not work, and Miou might complain with the
 `Not_owner` exception. This is because our `accept` task does not own the
-file-descritptor; we need to pass it the resource via the `give` parameter.
+file-descriptor; we need to pass it the resource via the `give` parameter.
 
 It's worth noting that this ownership is exclusive. Once we've performed
 `Miou_unix.Ownership.accept`, we need to:
-1) transfer the file-descritptor back to the parent (so it can transfer it to
+1) transfer the file-descriptor back to the parent (so it can transfer it to
    the next `accept`).
 2) transfer the new file-descriptor to the parent that was created in our
    `accept` task so that it can transfer it to our `echo` task.

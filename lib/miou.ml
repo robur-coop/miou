@@ -606,7 +606,7 @@ module Domain = struct
           add_into_domain domain (Domain_task (prm, state))
     | false ->
         (* In that case, we must propagate the cancellation if [prm.state] has
-           ended abnormally. We try to attach tghe trigger to the compuatation
+           ended abnormally. We try to attach the trigger to the computation
            [prm.state]. Two situations are possible:
            - if we can attach the trigger, this means that the promise has not
              yet been cancelled/resolved. However, between attachment and
