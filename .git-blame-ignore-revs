@@ -1,0 +1,5 @@
+# The commit upgrading to ocamlformat.0.27.0
+d5573222c8d0992f218f4f745b48b19cb3d8ea1f
+
+# This commit fixed fmt with ocamlformat.0.26.2
+96cdd169a39958fb134fe8a48c14035759900098
