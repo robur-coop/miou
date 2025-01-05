@@ -601,8 +601,8 @@ module Ownership : sig
         let with_timeout ~give sec fn =
           Miou.await_first
             [
-              ( Miou.async @@ fun () ->
-                Miou_unix.sleep sec; raise Timeout; Miou.async ~give fn )
+              (Miou.async @@ fun () -> Miou_unix.sleep sec; raise Timeout)
+            ; Miou.async ~give fn
             ]
 
         let connect socket sockaddr =
