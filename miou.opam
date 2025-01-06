@@ -27,3 +27,4 @@ depends: [
   "dns-client"        {with-test}
   "mtime"             {with-test & >= "2.0.0"}
 ]
+x-maintenance-intent: [ "(latest)" ]
