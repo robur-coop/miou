@@ -154,10 +154,7 @@ let rec unsafe_read ({ fd; non_blocking } as file_descr) off len buf =
     blocking_read fd; go ()
 
 let read file_descr ?(off = 0) ?len buf =
-  let len = match len with
-    | None -> Bytes.length buf - off
-    | Some len -> len
-  in
+  let len = match len with None -> Bytes.length buf - off | Some len -> len in
   if off < 0 || len < 0 || off > Bytes.length buf - len then
     invalid_arg "Miou_unix.read";
   unsafe_read file_descr off len buf
@@ -169,10 +166,7 @@ let rec really_read_go file_descr off len buf =
     really_read_go file_descr (off + len') (len - len') buf
 
 let really_read file_descr ?(off = 0) ?len buf =
-  let len = match len with
-    | None -> Bytes.length buf - off
-    | Some len -> len
-  in
+  let len = match len with None -> Bytes.length buf - off | Some len -> len in
   if off < 0 || len < 0 || off > Bytes.length buf - len then
     invalid_arg "Miou_unix.really_read";
   if len > 0 then really_read_go file_descr off len buf
@@ -199,9 +193,8 @@ let rec unsafe_write ({ fd; non_blocking } as file_descr) off len str =
     blocking_write fd; go ()
 
 let write file_descr ?(off = 0) ?len str =
-  let len = match len with
-    | None -> String.length str - off
-    | Some len -> len
+  let len =
+    match len with None -> String.length str - off | Some len -> len
   in
   if off < 0 || len < 0 || off > String.length str - len then
     invalid_arg "Miou_unix.write";
