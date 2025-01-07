@@ -125,7 +125,7 @@ val get: 'a t -> int -> 'a
       ensures  x = a.view[i] *)
 
 val set: 'a t -> int -> 'a -> unit
-(** [set a n x] modifies aector [a] in place, replacing
+(** [set a n x] modifies vector [a] in place, replacing
     element number [n] with [x].
 
     Raise [Invalid_argument "Vector.set"]

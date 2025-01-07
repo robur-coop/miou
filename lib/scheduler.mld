@@ -2,7 +2,7 @@
 
 This short tutorial shows you how to create a simple scheduler in OCaml with
 effects. We'd like to warn the reader that certain choices have been made to
-suit our purposes: in other words, as opposed to Tatcher, there {b are}
+suit our purposes: in other words, as opposed to Thatcher, there {b are}
 alternatives in implementing a scheduler. This tutorial is not {i absolutist} in
 what it explains.
 
@@ -193,7 +193,7 @@ We still need to define a few last elements for our scheduler so that the user
 can interact with it:
 - of course, there's the effect that will create a task
 - but also a promise as a {i witness} to the task's progress
-- from this promise, we can have a last interation, awaiting task completion
+- from this promise, we can have a last interaction, awaiting task completion
 
 Finally, a last type allows us to manipulate tasks independently of the type of
 their results.
@@ -276,8 +276,8 @@ consisting of 3 functions:
 + our effects installer
 
 {[
-let spawn fn = Effet.perform (Spawn fn)
-let await prm = Effet.perform (Await prm)
+let spawn fn = Effect.perform (Spawn fn)
+let await prm = Effect.perform (Await prm)
 
 let my_function =
   let prm = spawn @@ fun () -> print_endline "Hello" in

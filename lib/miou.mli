@@ -201,7 +201,7 @@
         Miou.both prm0 prm1
 
       (* [my_long_computation] should have multiple cooperative points to let
-         the other task (our [server]) to accept incoming TCP/IP connexions. *)
+         the other task (our [server]) to accept incoming TCP/IP connections. *)
     ]}
 
     In other words, your application is "more" available to handle events than
@@ -962,7 +962,7 @@ val cancel : 'a t -> unit
 
 val yield : unit -> unit
 (** [yield ()] reschedules tasks and give an opportunity to carry out the tasks
-    that have been on hold the longest. For intance:
+    that have been on hold the longest. For instance:
 
     {[
       # Miou.run @@ fun () ->
@@ -1064,7 +1064,7 @@ end
 
     Finally, Miou informs the monitor of any points that have been cancelled, so
     that the associated events can no longer be monitored (this could involve
-    cleaning up the table of active file-descritpors).
+    cleaning up the table of active file-descriptors).
 
     {3 Tutorial.}
 
@@ -1128,7 +1128,7 @@ val sys_signal : int -> Sys.signal_behavior -> Sys.signal_behavior
     - [Signal_handle fn] calls [fn] (in the [dom0])
 
     [signal] is provided to be able to execute Miou's tasks when we receive a
-    signal from the system. The [dom0] takes the responsability to execute the
+    signal from the system. The [dom0] takes the responsibility to execute the
     given [fn]. *)
 
 val protect :
@@ -1252,6 +1252,6 @@ module Lazy : sig
       been forced the computation is skipped and stored result is reproduced.
 
       @raise Undefined
-        in case the suspension is currently being forced by the current
-        prommise. *)
+        in case the suspension is currently being forced by the current promise.
+  *)
 end
