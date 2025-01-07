@@ -28,3 +28,4 @@ depends: [
   "mtime"             {with-test & >= "2.0.0"}
   "ocamlformat"       {with-dev-setup & = "0.27.0"}
 ]
+x-maintenance-intent: [ "(latest)" ]
