@@ -1074,8 +1074,8 @@ type 'a orphans = {
   ; length: int Atomic.t
 }
 
-let rec add_into_orphans :
-    type a. ?backoff:Backoff.t -> self:'x t -> a t -> a orphans -> unit =
+let rec add_into_orphans : type a.
+    ?backoff:Backoff.t -> self:'x t -> a t -> a orphans -> unit =
  fun ?(backoff = Backoff.default) ~self prm ({ orphans; owner; length } as v) ->
   match Atomic.get owner with
   | None ->
@@ -1370,8 +1370,8 @@ let orphans () =
 
 let length orphans = Atomic.get orphans.length
 
-let domain_safe_care :
-    type a. a t Miou_sequence.t -> int Atomic.t -> a t option option =
+let domain_safe_care : type a.
+    a t Miou_sequence.t -> int Atomic.t -> a t option option =
  fun orphans length ->
   if Miou_sequence.is_empty orphans then None
   else
@@ -1387,8 +1387,8 @@ let domain_safe_care :
       let prm = Miou_sequence.data node in
       Miou_sequence.remove node; Atomic.decr length; Some (Some prm)
 
-let rec care :
-    type a. ?backoff:Backoff.t -> self:'x t -> a orphans -> a t option option =
+let rec care : type a.
+    ?backoff:Backoff.t -> self:'x t -> a orphans -> a t option option =
  fun ?(backoff = Backoff.default) ~self ({ orphans; owner; length } as v) ->
   match Atomic.get owner with
   | None ->

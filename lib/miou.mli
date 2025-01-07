@@ -24,18 +24,14 @@
       let handler =
         let retc = Fun.id in
         let exnc = raise in
-        let effc
-          : type c. c Effect.t -> ((c, 'a) continuation -> 'a) option
-          = function
-          | Hello ->
-            Some (fun k -> continue k (print_endline "Hello"))
-          | _ -> None in
+        let effc : type c. c Effect.t -> ((c, 'a) continuation -> 'a) option =
+          function
+          | Hello -> Some (fun k -> continue k (print_endline "Hello"))
+          | _ -> None
+        in
         { retc; exnc; effc }
 
-      let my_function () =
-        Effect.perform Hello;
-        print_endline "World"
-
+      let my_function () = Effect.perform Hello; print_endline "World"
       let () = match_with my_function () handler
     ]}
 
@@ -49,20 +45,13 @@
     {[
       exception Hello
 
-      let my_function () =
-        raise Hello;
-        print_endline "World"
-
-      let () =
-        try my_function ()
-        with Hello k ->
-          print_endline "Hello";
-          k ()
+      let my_function () = raise Hello; print_endline "World"
+      let () = try my_function () with Hello k -> print_endline "Hello"; k ()
     ]}
 
     Miou defines several effects that allow the user to interact with Miou's
-    "task manager". Miou's effects manager is installed using {!val:run}. So,
-    if you want to use Miou, you should always start with {!val:run}:
+    "task manager". Miou's effects manager is installed using {!val:run}. So, if
+    you want to use Miou, you should always start with {!val:run}:
 
     {[
       val my_program : unit -> unit
@@ -73,8 +62,8 @@
     {3 A task manager.}
 
     Miou is a task manager. In other words, it manages a list of to-do tasks
-    (which you can add to with {!val:async}/{!val:call}) and allows the user
-    to manage these tasks. When a task is created, Miou gives the user a
+    (which you can add to with {!val:async}/{!val:call}) and allows the user to
+    manage these tasks. When a task is created, Miou gives the user a
     representation of the task: a promise {!type:t}.
 
     From this promise, the user can:
@@ -84,12 +73,11 @@
     Here's an example where a list of tasks are initiated and awaited.
     Interaction (task creation and awaiting) with Miou takes place via effects.
     Miou manages the execution order of these tasks and attempts to finish them
-    all in order to terminate your program. 
+    all in order to terminate your program.
 
     {[
       let digest filename =
-        Miou.async @@ fun () ->
-        (filename, Digest.file filename)
+        Miou.async @@ fun () -> (filename, Digest.file filename)
 
       let my_program filenames =
         (* 1) we create a list of tasks *)
@@ -98,12 +86,12 @@
         (* 3) we wait these tasks *)
         let results = List.map Miou.await_exn prms in
         (* 4) we print results *)
-        List.iter (fun (filename, hash) ->
-          Format.printf "%s: %s\n%!" filename (Digest.to_hex hash))
+        List.iter
+          (fun (filename, hash) ->
+            Format.printf "%s: %s\n%!" filename (Digest.to_hex hash))
           results
 
-      let () = Miou.run @@ fun () ->
-        my_program ["file01.ml"; "file02.ml"]
+      let () = Miou.run @@ fun () -> my_program [ "file01.ml"; "file02.ml" ]
     ]}
 
     Miou suggests a {{!page:scheduler}little exercise} to implement a task
@@ -151,14 +139,14 @@
     {3 Preemption and cooperation}
 
     OCaml offers only a fundamentally cooperative model for executing these
-    tasks. Indeed, there are no mechanisms in OCaml to force the suspension of
-    a given task. However, a given task can suspend itself in order to cooperate
+    tasks. Indeed, there are no mechanisms in OCaml to force the suspension of a
+    given task. However, a given task can suspend itself in order to cooperate
     with other tasks on a limited resource such as a particular domain.
 
     Miou offers a way of creating tasks (see {!val:async}) that are more
     precisely called {i fibers}. These fibers must cooperate with each other to
     share the domain on which they run. This means that a fiber should not have
-    exclusive domain control when other fibers are waiting to be executed. 
+    exclusive domain control when other fibers are waiting to be executed.
 
     {[
       # Miou.run @@ fun () ->
@@ -185,8 +173,8 @@
     The problem with cooperation is that it does not take into account the
     irruption of external elements such as system events. Miou's objective is to
     be able to {i interrupt} your application as soon as these events occur: in
-    other words, to {b preempt} the interruption of your tasks when these
-    events occur.
+    other words, to {b preempt} the interruption of your tasks when these events
+    occur.
 
     {4 Availability.}
 
@@ -201,14 +189,16 @@
     that your application can handle this event as a priority.
 
     {[
-      let _, _ = Miou.run @@ fun () ->
+      let _, _ =
+        Miou.run @@ fun () ->
         let rec server () =
           let socket = accept () in
           let _ = Miou.call (handler socket) in
-          server () in
+          server ()
+        in
         let prm0 = Miou.async server in
         let prm1 = Miou.async my_long_computation in
-        Miou.both prm0 prm1 ;;
+        Miou.both prm0 prm1
 
       (* [my_long_computation] should have multiple cooperative points to let
          the other task (our [server]) to accept incoming TCP/IP connexions. *)
@@ -219,7 +209,7 @@
     services (such as an HTTP server) where the availability to handle such
     events is more important than prioritizing the calculation requested by a
     client.
- 
+
     {4 Cooperation and effects.}
 
     And therein lies the crux of the problem: how do you preempt in a
@@ -299,16 +289,18 @@
         let fds = Hashtbl.to_seq_keys global |> List.of_seq in
         match Unix.select fds [] [] 0.1 with
         | fds, _, _ ->
-          let signals = List.map (fun fd ->
-              let syscall = Hashtbl.find global fd in
-              let signal = Miou.signal syscall in
-              Hashtbl.remove global fd; signal)
-            fds in
-          signals
+            let signals =
+              List.map
+                (fun fd ->
+                  let syscall = Hashtbl.find global fd in
+                  let signal = Miou.signal syscall in
+                  Hashtbl.remove global fd; signal)
+                fds
+            in
+            signals
 
       let run fn =
-        let events _domain =
-          { Miou.select; interrupt= Fun.const () } in
+        let events _domain = { Miou.select; interrupt= Fun.const () } in
         Miou.run ~events fn
     ]}
 
@@ -319,8 +311,8 @@
     + or the ability to wait only for system events
     + or the ability to interrupt such an observation
 
-    We recommend reading the chapter on {{!section:system}system events}
-    and its tutorial on {!page:sleepers}.
+    We recommend reading the chapter on {{!section:system}system events} and its
+    tutorial on {!page:sleepers}.
 
     {3 User task management.}
 
@@ -330,21 +322,21 @@
     its use.
 
     {4 Rule 1, await for all your tasks.}
-    
+
     It is forbidden to forget your children. The creation of a task necessarily
     implies that the developer {!val:await}s or {!val:cancel}s the task
     afterwards:
-    
+
     {[
       # Miou.run @@ fun () -> Miou.async (Fun.const ()) ;;
       Exception: Miou.Still_has_children.
     ]}
-    
+
     {4:rule-2 Rule 2, only await for direct children.}
-    
+
     You can only await for your direct children. Transferring a promise to
     another task so that it can await for it is illegal:
-    
+
     {[
       # Miou.run @@ fun () ->
         let p = Miou.async (Fun.const ()) in
@@ -357,16 +349,16 @@
     should transmit to each other. To answer this question, users will have to
     find their own mechanisms ({!module:Mutex}, {!module:Condition}, {i ipc},
     etc.) to share results between tasks that are not directly related.
-    
+
     {4 Rule 3, a task can only be awaited or cancelled.}
-    
+
     Miou only allows you to await for or cancel a task. It is also impossible to
     detach a task. For more information on this subject, we recommend reading
     the {!section:orphans} section and our following rule:
     {{!section:background}background tasks}.
-    
+
     {4 Rule 4, a task only finishes after its children have finished.}
-    
+
     By extension, as soon as a task is finished, all its children are finished
     too. The same applies to cancellation. If you cancel a task, you also cancel
     its children.
@@ -402,7 +394,8 @@
     However, you can involve [dom0] in the calculations with {!val:async}.
 
     {[
-      let () = Miou.run ~domains:3 @@ fun () ->
+      let () =
+        Miou.run ~domains:3 @@ fun () ->
         let prm = Miou.async server in
         Miou.parallel server (List.init 3 (Fun.const ()))
         |> List.iter (function Ok () -> () | Error exn -> raise exn);
@@ -436,7 +429,7 @@
         let dom = Stdlib.Domain.DLS.new_key make in
         let get () = Stdlib.Domain.DLS.get dom in
         let set value = Stdlib.Domain.DLS.set dom value in
-        get, set
+        (get, set)
 
       let miou_read fd buf off len =
         let syscall = Miou.syscall () in
@@ -445,8 +438,7 @@
         set tbl;
         Miou.suspend syscall;
         Unix.read fd buf off len
-    ]}
-*)
+    ]} *)
 
 module Pqueue = Miou_pqueue
 module Logs = Miou_logs
@@ -539,8 +531,7 @@ module Ownership : sig
       released).
 
       The aim of this module is to ensure that when a task is completed, all
-      resources have been released.
-  *)
+      resources have been released. *)
 
   type t
   (** The type of resources. *)
@@ -609,8 +600,10 @@ module Ownership : sig
 
         let with_timeout ~give sec fn =
           Miou.await_first
-            [ Miou.async @@ fun () -> Miou_unix.sleep sec; raise Timeout
-            ; Miou.async ~give fn ] ;;
+            [
+              (Miou.async @@ fun () -> Miou_unix.sleep sec; raise Timeout)
+            ; Miou.async ~give fn
+            ]
 
         let connect socket sockaddr =
           let t = Miou_unix.Ownership.resource socket in
@@ -674,8 +667,8 @@ type 'a orphans
 (** The type of orphan collectors. *)
 
 val orphans : unit -> 'a orphans
-(** [orphans ()] makes a new orphan collectors which can used by {!val:call}
-    and {!val:async}. *)
+(** [orphans ()] makes a new orphan collectors which can used by {!val:call} and
+    {!val:async}. *)
 
 val care : 'a orphans -> 'a t option option
 (** [care orphans] returns a {i ready-to-await} promise or [Some None]. The user
@@ -684,12 +677,12 @@ val care : 'a orphans -> 'a t option option
     returns [None], no children left behind, you can forget the {!type:orphans}
     value safely.
 
-    @raise Invalid_argument [orphans] are necessarily attached to a promise,
-    keeping the children of that promise in an orphanage. So, if [care] is used
-    elsewhere than in the promise, an exception is raised to warn the user of a
-    misuse of [care]. Indeed, the child returned by care can only be awaited
-    ({!await}) by its direct parent (in reference to
-    {{!section:rule-2}our second rule}). *)
+    @raise Invalid_argument
+      [orphans] are necessarily attached to a promise, keeping the children of
+      that promise in an orphanage. So, if [care] is used elsewhere than in the
+      promise, an exception is raised to warn the user of a misuse of [care].
+      Indeed, the child returned by care can only be awaited ({!await}) by its
+      direct parent (in reference to {{!section:rule-2}our second rule}). *)
 
 val length : _ orphans -> int
 (** [length orphans] returns the number of remaining tasks. *)
@@ -698,15 +691,14 @@ val length : _ orphans -> int
 
 val async :
   ?give:Ownership.t list -> ?orphans:'a orphans -> (unit -> 'a) -> 'a t
-(** [async fn] (for Call with Current Continuation) returns a promise
-    {!type:t} representing the state of the task given as an argument. The task
-    will be executed {b concurrently} with the other tasks in the current
-    domain.
+(** [async fn] (for Call with Current Continuation) returns a promise {!type:t}
+    representing the state of the task given as an argument. The task will be
+    executed {b concurrently} with the other tasks in the current domain.
 
-    @raise Invalid_argument a promise can only be attached to an orphan if the
-    latter is owned by the parent promise. For the example, this code doesn't
-    work because we're trying to attach 2 promises that don't have the same
-    direct parent:
+    @raise Invalid_argument
+      a promise can only be attached to an orphan if the latter is owned by the
+      parent promise. For the example, this code doesn't work because we're
+      trying to attach 2 promises that don't have the same direct parent:
 
     {[
       # Miou.run @@ fun () ->
@@ -732,25 +724,29 @@ val call :
     is always true:
 
     {[
-      let () = Miou.run @@ fun () ->
-        let p = Miou.call @@ fun () ->
+      let () =
+        Miou.run @@ fun () ->
+        let p =
+          Miou.call @@ fun () ->
           let u = Miou.Domain.self () in
           let q = Miou.call @@ fun () -> Miou.Domain.self () in
-          (u, Miou.await_exn q) in
+          (u, Miou.await_exn q)
+        in
         let u, v = Miou.await_exn p in
-        assert (v <> u) ;;
+        assert (v <> u)
     ]}
 
     Sequential calls to {!val:call} do not guarantee that different domains are
     always chosen. This code {b may} be true.
 
     {[
-      let () = Miou.run @@ fun () ->
+      let () =
+        Miou.run @@ fun () ->
         let p = Miou.call @@ fun () -> Miou.Domain.self () in
         let q = Miou.call @@ fun () -> Miou.Domain.self () in
         let u = Miou.await_exn p in
         let v = Miou.await_exn q in
-        assert (u = v);
+        assert (u = v)
     ]}
 
     To ensure that tasks are properly allocated to all domains, you need to use
@@ -759,14 +755,14 @@ val call :
     {b NOTE}: {!val:call} will never run a task on {i dom0} (the main domain).
     Only the other domains can manage tasks in parallel.
 
-    @raise No_domain_available if no domain is available to execute the task in
-    parallel or if the function is executed by the only domain available in
-    parallel (it is impossible to assign a task to [dom0] from the other
-    domains).
+    @raise No_domain_available
+      if no domain is available to execute the task in parallel or if the
+      function is executed by the only domain available in parallel (it is
+      impossible to assign a task to [dom0] from the other domains).
 
-    @raise Invalid_argument like {!val:async}, if the promise should be
-    associated with an [orphan], the orphan should be owned by the direct
-    parent. *)
+    @raise Invalid_argument
+      like {!val:async}, if the promise should be associated with an [orphan],
+      the orphan should be owned by the direct parent. *)
 
 val parallel : ('a -> 'b) -> 'a list -> ('b, exn) result list
 (** [parallel fn lst] is the {i fork-join} model: it is a way of setting up and
@@ -793,8 +789,8 @@ val parallel : ('a -> 'b) -> 'a list -> ('b, exn) result list
       let sort ~compare (arr, lo, hi) =
         if hi - lo >= 2 then begin
           let mi = (lo + hi) / 2 in
-          ignore (Miou.parallel (sort ~compare)
-            [ (arr, lo, mi); (arr, mi, hi) ]);
+          ignore
+            (Miou.parallel (sort ~compare) [ (arr, lo, mi); (arr, mi, hi) ]);
           merge ~compare arr lo mi hi
         end
     ]}
@@ -812,7 +808,8 @@ val parallel : ('a -> 'b) -> 'a list -> ('b, exn) result list
     {[
       val server : unit -> unit
 
-      let () = Miou.run ~domains:3 @@ fun () ->
+      let () =
+        Miou.run ~domains:3 @@ fun () ->
         let p = Miou.async server in
         Miou.parallel server (List.init 3 (Fun.const ()))
         |> List.iter (function Ok () -> () | Error exn -> raise exn);
@@ -879,7 +876,7 @@ val await_one : 'a t list -> ('a, exn) result
       - : int = 1
     ]}
 
-    If several tasks finish "at the same time" (as is the case in our example 
+    If several tasks finish "at the same time" (as is the case in our example
     above), we prioritise the tasks that finished well and choose one at random.
 
     @raise Invalid_argument if the promise list is empty. *)
@@ -887,8 +884,8 @@ val await_one : 'a t list -> ('a, exn) result
 val await_first : 'a t list -> ('a, exn) result
 (** [await_first prms] awaits for a task to finish (by exception or normally)
     and cancels all the others. If several tasks finish "at the same time",
-    normally completed tasks are preferred to failed ones. This function can
-    be useful for timeouts:
+    normally completed tasks are preferred to failed ones. This function can be
+    useful for timeouts:
 
     {[
       # exception Timeout ;;
@@ -913,9 +910,9 @@ exception Cancelled
 (** Used when a task is cancelled by {!val:cancel}. *)
 
 val cancel : 'a t -> unit
-(** [cancel prm] {i asynchronously} cancels the given promise [prm]. Miou
-    allows the forgetting of a cancelled promise and the forgetting of its
-    children. For instance, this code is valid (despite the second one):
+(** [cancel prm] {i asynchronously} cancels the given promise [prm]. Miou allows
+    the forgetting of a cancelled promise and the forgetting of its children.
+    For instance, this code is valid (despite the second one):
 
     {[
       # Miou.run @@ fun () ->
@@ -1097,9 +1094,9 @@ val syscall : unit -> syscall
     suspension point via {!val:suspend}. *)
 
 val suspend : syscall -> unit
-(** [suspend syscall] creates an user's defined suspension point. Miou will
-    keep it internally and only the user is able to {i resume} it via
-    {!type:events} (and the [select] field) and a {!type:signal}. *)
+(** [suspend syscall] creates an user's defined suspension point. Miou will keep
+    it internally and only the user is able to {i resume} it via {!type:events}
+    (and the [select] field) and a {!type:signal}. *)
 
 val signal : syscall -> signal
 (** [signal syscall] creates a {!type:signal} value which can be used by Miou to
@@ -1175,12 +1172,13 @@ module Mutex : sig
       will restart. The mutex must have been previously locked by the thread
       that calls {!val:unlock}.
 
-      @raise Sysy_error was not raised when unlocking an unlocked mutex or when
-      unlocking a mutex from a different task. *)
+      @raise Sysy_error
+        was not raised when unlocking an unlocked mutex or when unlocking a
+        mutex from a different task. *)
 
   val lock : t -> unit
-  (** Lock the given mutex. Only one task can have the mutex locked at a time.
-      A task that attempts to lock a mutex already locked by another thread will
+  (** Lock the given mutex. Only one task can have the mutex locked at a time. A
+      task that attempts to lock a mutex already locked by another thread will
       suspend until the other thread unlocks the mutex. *)
 
   val try_lock : t -> bool
@@ -1241,8 +1239,8 @@ module Lazy : sig
   (** Represents a deferred computation of suspension. *)
 
   val from_val : 'a -> 'a t
-  (** [from_val value] returns an already forced suspension whose result is
-      the given [value]. *)
+  (** [from_val value] returns an already forced suspension whose result is the
+      given [value]. *)
 
   val from_fun : (unit -> 'a) -> 'a t
   (** [from_fun fn] returns a suspension. *)
@@ -1253,6 +1251,7 @@ module Lazy : sig
       suspension and reproduces its result. In case the suspension has already
       been forced the computation is skipped and stored result is reproduced.
 
-      @raise Undefined in case the suspension is currently being forced by the
-      current prommise. *)
+      @raise Undefined
+        in case the suspension is currently being forced by the current
+        prommise. *)
 end

@@ -25,14 +25,14 @@ val create : unit -> 'a t
 (** [create ()] creates a new empty sequence. *)
 
 val take : direction -> 'a t -> 'a
-(** [take direction t] takes an element of [t] from the specified
-    [direction]. *)
+(** [take direction t] takes an element of [t] from the specified [direction].
+*)
 
 val peek_node : direction -> 'a t -> 'a node
 
 val add : direction -> 'a t -> 'a -> unit
-(** [add direction t] adds a new element into [t] to the specified
-    [direction]. *)
+(** [add direction t] adds a new element into [t] to the specified [direction].
+*)
 
 val drop : 'a t -> unit
 (** Removes all nodes from the given sequence. The nodes are not actually
