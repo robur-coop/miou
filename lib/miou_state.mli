@@ -16,7 +16,7 @@ type error = exn * Printexc.raw_backtrace
     In the case of a suspension, the user can "continue" the execution via what
     is expected by the associated effect. Note that {!val:once} can only be used
     {b once} on a given value {!type:t} (otherwise, an exception
-    {!exception:Continuation_already_resumed} is raised by OCaml). *)
+    {!exception:Effect.Continuation_already_resumed} is raised by OCaml). *)
 type 'a t = private
   | Finished of ('a, error) result
   | Suspended : ('a, 'b) continuation * 'a Effect.t -> 'b t
@@ -60,8 +60,9 @@ val once : perform:perform -> 'a t -> 'a t
 val fail : backtrace:Printexc.raw_backtrace -> exn:exn -> 'a t -> 'a t
 (** [fail ~exn state] discontinues the given state with the given exception. It
     always return [Finished (Error exn)]. If the given state was already resumed
-    elsewhere, this function traps the exception [Continuation_already_resumed]
-    and return [Finished (Error exn)]. *)
+    elsewhere, this function traps the exception
+    {!exception:Effect.Continuation_already_resumed} and return
+    [Finished (Error exn)]. *)
 
 val pure : ('a, error) result -> 'a t
 (** [pure value] returns [Finished value]. *)
@@ -72,8 +73,8 @@ val run : quanta:int -> perform:perform -> 'a t -> 'a t
     nothing), even though there may be a few {i quanta} left, the function
     returns the last state obtained.
 
-    The same applies to {!val:yield}, except that the continuation has burnt
-    itself out. In other words, {!val:yield} is equivalent to
+    The same applies to {!val:Operation.yield}, except that the continuation has
+    burnt itself out. In other words, {!val:Operation.yield} is equivalent to
     [send (); interrupt] but costs only one {i quanta}. *)
 
 (**/**)

@@ -332,7 +332,7 @@
       Exception: Miou.Still_has_children.
     ]}
 
-    {4:rule-2 Rule 2, only await for direct children.}
+    {4:rule_2 Rule 2, only await for direct children.}
 
     You can only await for your direct children. Transferring a promise to
     another task so that it can await for it is illegal:
@@ -420,8 +420,8 @@
     The advantage of making suspension points local to domains is that the
     domain is solely responsible for these points and there are no inter-domain
     transfer mechanisms for managing system events. For the example,
-    {!module:Domain.DLS} can be used for a table of current events in each
-    domain.
+    {!module:Stdlib.Domain.DLS} can be used for a table of current events in
+    each domain.
 
     {[
       let get, set =
@@ -682,7 +682,7 @@ val care : 'a orphans -> 'a t option option
       that promise in an orphanage. So, if [care] is used elsewhere than in the
       promise, an exception is raised to warn the user of a misuse of [care].
       Indeed, the child returned by care can only be awaited ({!await}) by its
-      direct parent (in reference to {{!section:rule-2}our second rule}). *)
+      direct parent (in reference to {{!section:rule_2}our second rule}). *)
 
 val length : _ orphans -> int
 (** [length orphans] returns the number of remaining tasks. *)
@@ -1143,8 +1143,8 @@ val protect :
     [finally] raises an exception, then the exception {!Fun.Finally_raised} is
     raised instead. In the case of a cancellation, it invokes [finally ()] and
     then [on_cancellation ()] before the deletion of [fn ()]. If
-    [on_cancellation ()] raises an exception, then the exception
-    {!On_cancellation_raised} is raised instead.
+    [on_cancellation ()] raises an exception, then the "uncatchable" exception
+    [On_cancellation_raised] is raised instead.
 
     [on_cancellation] must {b not} use any effects. Using effects suspends
     execution and, in the case of cancellation, anything after the effect will
@@ -1172,7 +1172,7 @@ module Mutex : sig
       will restart. The mutex must have been previously locked by the thread
       that calls {!val:unlock}.
 
-      @raise Sysy_error
+      @raise Sys_error
         was not raised when unlocking an unlocked mutex or when unlocking a
         mutex from a different task. *)
 

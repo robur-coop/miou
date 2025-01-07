@@ -69,10 +69,10 @@ val read : file_descr -> ?off:int -> ?len:int -> bytes -> int
     [0]). It returns the actual number of characters read, between 0 and [len]
     (inclusive).
 
-    @raise Unix_error
+    @raise Unix.Unix_error
       raised by the system call {!val:Unix.read}. The function handles
-      {!val:Unix.EINTR}, {!val:Unix.EAGAIN} and {!val:Unix.EWOULDBLOCK}
-      exceptions and redo the system call.
+      {!constructor:Unix.EINTR}, {!constructor:Unix.EAGAIN} and
+      {!constructor:Unix.EWOULDBLOCK} exceptions and redo the system call.
 
     @raise Invalid_argument
       if [off] and [len] do not designate a valid range of [buf] *)
@@ -83,10 +83,10 @@ val really_read : file_descr -> ?off:int -> ?len:int -> bytes -> unit
     in byte sequence [buf], starting at position [off] in [buf] (defaults to
     [0]). If [len = 0], [really_read] does nothing.
 
-    @raise Unix_error
+    @raise Unix.Unix_error
       raised by the system call {!val:Unix.read}. The function handles
-      {!val:Unix.EINTR}, {!val:Unix.EAGAIN} and {!val:Unix.EWOULDBLOCK}
-      exceptions and redo the system call.
+      {!constructor:Unix.EINTR}, {!constructor:Unix.EAGAIN} and
+      {!constructor:Unix.EWOULDBLOCK} exceptions and redo the system call.
 
     @raise End_of_file
       if {!val:Unix.read} returns [0] before [len] characters have been read.
@@ -99,10 +99,10 @@ val write : file_descr -> ?off:int -> ?len:int -> string -> unit
     [String.length str - off]) from byte sequence [buf], starting at offset
     [off] (defaults to [0]), to the given file-descriptor [fd].
 
-    @raise Unix_error
+    @raise Unix.Unix_error
       raised by the system call {!val:Unix.read}. The function handles
-      {!val:Unix.EINTR}, {!val:Unix.EAGAIN} and {!val:Unix.EWOULDBLOCK}
-      exceptions and redo the system call.
+      {!constructor:Unix.EINTR}, {!constructor:Unix.EAGAIN} and
+      {!constructor:Unix.EWOULDBLOCK} exceptions and redo the system call.
 
     @raise Invalid_argument
       if [off] and [len] do not designate a valid range of [buf] *)
