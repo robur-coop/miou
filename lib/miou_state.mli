@@ -73,8 +73,8 @@ val run : quanta:int -> perform:perform -> 'a t -> 'a t
     nothing), even though there may be a few {i quanta} left, the function
     returns the last state obtained.
 
-    The same applies to {!val:Miou.yield}, except that the continuation has
-    burnt itself out. In other words, {!val:Miou.yield} is equivalent to
+    The same applies to {!val:Operation.yield}, except that the continuation has
+    burnt itself out. In other words, {!val:Operation.yield} is equivalent to
     [send (); interrupt] but costs only one {i quanta}. *)
 
 (**/**)
