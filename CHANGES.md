@@ -1,3 +1,22 @@
+### v0.3.1 (2025-01-13)
+
+- Notice the domain if it needs to look into the shared heap if a task is ready
+  to be transfered (@dinosaure, #41)
+- Don't use `Option.value` but `match .. with` to calculate the optional length
+  for `Miou_unix.{read,write}` (@kit-ty-kate, #44)
+- Use `List.iter` instead of `Hashtbl.iter` for internal kept file-descriptors
+  of `Miou_unix` (@dinosaure, #45)
+- Improve the documentation of `Miou_unix` about suspended syscalls (@dinosaure,
+  @kit-ty-kate, #43)
+- Export `reraise` (@dinosaure, #46)
+- Fix an issue on the `dom0` and observe if some tasks must be transfered to it
+  (@dinosaure, #48)
+- Fix documentation (@benjamin-thomas, #47)
+- Fix the formatter (@mbarbin, #51)
+- Upgrade miou to `ocamlformat.0.27.0` (@mbarbin, #52)
+- Add `x-maintenance-intent` (@hannesm, #56)
+- Improve the documentation and some `odoc` warnings (@mbarbin, #53, #54)
+
 ### v0.3.0 (2024-08-22)
 
 - Set the internal pipe used to interrupt a domain to a non-blocking mode and
