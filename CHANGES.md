@@ -11,7 +11,7 @@
 - Export `reraise` (@dinosaure, #46)
 - Fix an issue on the `dom0` and observe if some tasks must be transfered to it
   (@dinosaure, #48)
-- Fix documentation (@mbarbin, #47)
+- Fix documentation (@benjamin-thomas, #47)
 - Fix the formatter (@mbarbin, #51)
 - Upgrade miou to `ocamlformat.0.27.0` (@mbarbin, #52)
 - Add `x-maintenance-intent` (@hannesm, #56)
