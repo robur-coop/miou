@@ -1325,7 +1325,7 @@ let syscall () =
   miou_assert (Domain_uid.equal runner self.runner);
   Syscall (uid, trigger, self)
 
-let suspend (Syscall (uid, trigger, prm)) =
+let suspend ?(fn = ignore) (Syscall (uid, trigger, prm)) =
   let domain = Effect.perform Self_domain in
   let (Pack self) = Effect.perform Self in
   if Promise_uid.equal self.uid prm.uid = false then
@@ -1334,24 +1334,29 @@ let suspend (Syscall (uid, trigger, prm)) =
   miou_assert (Domain_uid.equal domain.uid runner');
   if Domain_uid.equal prm.runner runner' = false then
     invalid_arg "This syscall does not belong to the current domain";
-  Atomic.incr domain.syscalls;
-  (* [Trigger.await] gives an opportunity to the scheduler to cancel the current
-     continuation. Indeed, we produce a [(State.error, 'a) continuation] and the
-     parent can actually cancel our current promise. In that case, the domain
-     will clean our continuation with [discontinue_with]. Even if the scheduler
-     wants to cancel/clean our continuation, the finaliser [finally] will be
-     executed in **any** cases. *)
-  let finally () = Atomic.decr domain.syscalls in
-  Fun.protect ~finally @@ fun () ->
-  Logs.debug (fun m ->
-      m "[%a] suspends syscall [%a] (%a)" Domain_uid.pp runner' Syscall_uid.pp
-        uid Promise.pp self);
-  match Trigger.await trigger with
-  | None -> miou_assert (Trigger.is_signaled trigger)
-  | Some (exn, bt) ->
+  match fn () with
+  | () ->
+      Atomic.incr domain.syscalls;
+      (* [Trigger.await] gives an opportunity to the scheduler to cancel the current
+       continuation. Indeed, we produce a [(State.error, 'a) continuation] and the
+       parent can actually cancel our current promise. In that case, the domain
+       will clean our continuation with [discontinue_with]. Even if the scheduler
+       wants to cancel/clean our continuation, the finaliser [finally] will be
+       executed in **any** cases. *)
+      let finally () = Atomic.decr domain.syscalls in
+      Fun.protect ~finally @@ fun () ->
+      begin
+        match Trigger.await trigger with
+        | None -> miou_assert (Trigger.is_signaled trigger)
+        | Some (exn, bt) -> Printexc.raise_with_backtrace exn bt
+        | exception exn ->
+            let bt = Printexc.get_raw_backtrace () in
+            Printexc.raise_with_backtrace exn bt
+      end
+  | exception exn ->
+      let bt = Printexc.get_raw_backtrace () in
       Queue.enqueue domain.cancelled_syscalls uid;
       Printexc.raise_with_backtrace exn bt
-  | exception _ -> Queue.enqueue domain.cancelled_syscalls uid
 
 let signal (Syscall (_uid, trigger, prm)) =
   let runner' = Domain_uid.of_int (Stdlib.Domain.self () :> int) in

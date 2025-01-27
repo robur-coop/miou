@@ -10,9 +10,11 @@ let get, set =
 let sleep until =
   let syscall = Miou.syscall () in
   let sleepers = get () in
-  Hashtbl.add sleepers (Miou.uid syscall) (syscall, until);
-  set sleepers;
-  Miou.suspend syscall
+  let fn () =
+    Hashtbl.add sleepers (Miou.uid syscall) (syscall, until);
+    set sleepers
+  in
+  Miou.suspend ~fn syscall
 
 let select ~block:_ _ =
   let sleepers = get () in

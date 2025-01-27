@@ -8,9 +8,11 @@ let get, set =
 let sleep until =
   let sleepers = get () in
   let syscall = Miou.syscall () in
-  Hashtbl.add sleepers (Miou.uid syscall) (syscall, until);
-  set sleepers;
-  Miou.suspend syscall
+  let fn () =
+    Hashtbl.add sleepers (Miou.uid syscall) (syscall, until);
+    set sleepers
+  in
+  Miou.suspend ~fn syscall
 
 let consume_interrupt ic =
   let buf = Bytes.create 0x1000 in

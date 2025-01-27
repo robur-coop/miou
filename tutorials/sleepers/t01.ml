@@ -4,8 +4,8 @@ let sleepers = Hashtbl.create 0x100
 
 let sleep until =
   let syscall = Miou.syscall () in
-  Hashtbl.add sleepers (Miou.uid syscall) (syscall, until);
-  Miou.suspend syscall
+  let fn () = Hashtbl.add sleepers (Miou.uid syscall) (syscall, until) in
+  Miou.suspend ~fn syscall
 
 let select ~block:_ _ =
   let min =
