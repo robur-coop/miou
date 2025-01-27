@@ -1093,10 +1093,20 @@ val syscall : unit -> syscall
 (** [syscall ()] creates a {i syscall} which permits the user to create a new
     suspension point via {!val:suspend}. *)
 
-val suspend : syscall -> unit
-(** [suspend syscall] creates an user's defined suspension point. Miou will keep
-    it internally and only the user is able to {i resume} it via {!type:events}
-    (and the [select] field) and a {!type:signal}. *)
+val suspend : ?fn:(unit -> unit) -> syscall -> unit
+(** [suspend ?fn syscall] creates an user's defined suspension point. Miou will
+    keep it internally and only the user is able to {i resume} it via
+    {!type:events} (and the [select] field) and a {!type:signal}.
+
+    The suspension makes several checks, making the operation {i non-atomic}. In
+    other words, [suspend] can be cancelled {b before} the suspension has been
+    effectively added internally.
+
+    To keep Miou and the system's event management synchronized, the [suspend]
+    function executes [fn] {b only} when the suspension has been effectively
+    added. Thus, for the user, the modification of the state managing system
+    events should take place in the [fn] function (and not before or after
+    [suspend]). *)
 
 val signal : syscall -> signal
 (** [signal syscall] creates a {!type:signal} value which can be used by Miou to

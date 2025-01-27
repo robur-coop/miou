@@ -123,18 +123,21 @@ let blocking_read fd =
   let syscall = Miou.syscall () in
   let uid = Miou.uid syscall in
   let domain = domain () in
-  Hashtbl.replace domain.revert uid fd;
-  Logs.debug (fun m -> m "append [%d] as a reader" (Obj.magic fd));
-  append domain.readers fd syscall;
-  Miou.suspend syscall
+  let fn () =
+    Hashtbl.replace domain.revert uid fd;
+    append domain.readers fd syscall
+  in
+  Miou.suspend ~fn syscall
 
 let blocking_write fd =
   let syscall = Miou.syscall () in
   let uid = Miou.uid syscall in
   let domain = domain () in
-  Hashtbl.replace domain.revert uid fd;
-  append domain.writers fd syscall;
-  Miou.suspend syscall
+  let fn () =
+    Hashtbl.replace domain.revert uid fd;
+    append domain.writers fd syscall
+  in
+  Miou.suspend ~fn syscall
 
 let rec unsafe_read ({ fd; non_blocking } as file_descr) off len buf =
   if non_blocking then
@@ -242,8 +245,8 @@ let sleep until =
   let elt =
     { time= Unix.gettimeofday () +. until; syscall; cancelled= false }
   in
-  Heapq.insert elt domain.sleepers;
-  Miou.suspend syscall
+  let fn () = Heapq.insert elt domain.sleepers in
+  Miou.suspend ~fn syscall
 
 module Ownership = struct
   type old = file_descr
@@ -386,6 +389,11 @@ let select uid interrupt ~block cancelled_syscalls =
   | exception Unix.(Unix_error (EINTR, _, _)) ->
       Logs.debug (fun m ->
           m "[%a] interrupted by the system" Miou.Domain.Uid.pp uid);
+      collect domain []
+  | exception Unix.(Unix_error (err, f, arg)) ->
+      Logs.err (fun m ->
+          m "[%a] exception %s(%s): %s" Miou.Domain.Uid.pp uid f arg
+            (Unix.error_message err));
       collect domain []
   | [], [], _ -> collect domain []
   | rds, wrs, _ ->

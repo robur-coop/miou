@@ -74,8 +74,8 @@ let sleepers = Hashtbl.create 0x100
 
 let sleep until =
   let syscall = Miou.syscall () in
-  Hashtbl.add sleepers (Miou.uid syscall) (syscall, until);
-  Miou.suspend syscall
+  let fn () = Hashtbl.add sleepers (Miou.uid syscall) (syscall, until) in
+  Miou.suspend ~fn syscall
 ]}
 
 As you can see, the implementation of a 'syscall' is relatively simple, but it
@@ -255,9 +255,10 @@ let get, set =
 let sleep until =
   let syscall = Miou.make (Fun.const ()) in
   let sleepers = get () in
-  Hashtbl.add sleepers (Miou.uid syscall) (syscall, until);
-  set sleepers;
-  Miou.suspend syscall
+  let fn () =
+    Hashtbl.add sleepers (Miou.uid syscall) (syscall, until);
+    set sleepers in
+  Miou.suspend ~fn syscall
 ]}
 
 We then just need to call [get ()] & [set ()] in all the places where we use our

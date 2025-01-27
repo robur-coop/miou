@@ -68,7 +68,7 @@ type uid = private int [@@immediate]
 
 val syscall : unit -> syscall
 val uid : syscall -> uid
-val suspend : syscall -> unit
+val suspend : ?fn:(unit -> unit) -> syscall -> unit
 ```
 
 The equivalent of our `Effect.perform (Await prm)` from our little scheduler
@@ -91,9 +91,22 @@ let sleepers = Sleepers.create ()
 let sleep delay =
   let time = Unix.gettimeofday () +. delay in
   let syscall = Miou.syscall () in
-  Sleepers.insert { time; syscall } sleepers;
-  Miou.suspend syscall
+  let fn () = Sleepers.insert { time; syscall } sleepers in
+  Miou.suspend ~fn syscall
 ```
+
+`Miou.suspend` can use a function `fn` to update your global state (this is the
+_"somewhere"_). `fn` is said to be actual to the internal changes necessary for
+Miou to remember your syscall. In fact, `Miou.suspend` performs several checks
+which may fail for 2 reasons:
+1) misuse of `Miou.suspend`
+2) a cancellation by a parent via `Miou.cancel`
+
+In the second case, the cancellation should also involve "cleaning up" our
+priority queue (so as to forget the sleeper we've just added). Unfortunately,
+this is difficult to do. So `Miou.suspend` offers you this `fn` function, which
+will be executed if and only if all has gone well (you are authorized to
+suspend your syscall and there has been no cancellation involved).
 
 Using a priority queue[^proof] will allow us to get the syscall that needs to
 resume its function as soon as possible among all our sleepers.
@@ -187,8 +200,8 @@ let sleep delay =
   let sleepers = sleepers () in
   let time = Unix.gettimeofday () +. delay in
   let syscall = Miou.syscall () in
-  Sleepers.insert { time; syscall } sleepers;
-  Miou.suspend syscall
+  let fn () = Sleepers.insert { time; syscall } sleepers in
+  Miou.suspend ~fn syscall
 
 let select ~block:_ _ =
   let sleepers = sleepers () in
@@ -278,8 +291,8 @@ let sleep delay =
   let sleepers = sleepers () in
   let time = Unix.gettimeofday () +. delay in
   let syscall = Miou.syscall () in
-  Sleepers.insert { time; syscall; cancelled= false } sleepers;
-  Miou.suspend syscall
+  let fn () = Sleepers.insert { time; syscall; cancelled= false } sleepers in
+  Miou.suspend ~fn syscall
 
 let rec remove_and_signal_older sleepers acc =
   match Sleepers.find_min sleepers with
