@@ -1348,9 +1348,12 @@ let suspend ?(fn = ignore) (Syscall (uid, trigger, prm)) =
       begin
         match Trigger.await trigger with
         | None -> miou_assert (Trigger.is_signaled trigger)
-        | Some (exn, bt) -> Printexc.raise_with_backtrace exn bt
+        | Some (exn, bt) ->
+            Queue.enqueue domain.cancelled_syscalls uid;
+            Printexc.raise_with_backtrace exn bt
         | exception exn ->
             let bt = Printexc.get_raw_backtrace () in
+            Queue.enqueue domain.cancelled_syscalls uid;
             Printexc.raise_with_backtrace exn bt
       end
   | exception exn ->
