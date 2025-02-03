@@ -1370,7 +1370,7 @@ let orphans () =
   {
     orphans= Miou_sequence.create ()
   ; owner= Atomic.make None
-  ; length= Atomic.make 1
+  ; length= Atomic.make 0
   }
 
 let length orphans = Atomic.get orphans.length
