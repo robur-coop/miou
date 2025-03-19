@@ -342,9 +342,6 @@ let transfer_dom0_signals pool =
       let state = State.make fn signal in
       add_into_domain pool.dom0 (Domain_signal (prm, signal, state))
     in
-    Logs.debug (fun m ->
-        m "[%a] transfers %d system signal(s)" Domain_uid.pp pool.dom0.uid
-          (Queue.length elts));
     Queue.iter ~f elts
   end
 
@@ -431,9 +428,6 @@ module Domain = struct
     | _ -> add_into_pool pool (Pool_cancel (prm, bt))
 
   let handle pool domain prm state =
-    Logs.debug (fun m ->
-        m "[%a] handles %a and its continuation %a" Domain_uid.pp domain.uid
-          Promise.pp prm State.pp state);
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
     miou_assert (Domain_uid.equal runner domain.uid);
     miou_assert (Domain_uid.equal prm.runner domain.uid);
@@ -474,9 +468,6 @@ module Domain = struct
         end;
         if Promise.children_terminated prm = false then
           raise_notrace Still_has_children;
-        Logs.debug (fun m ->
-            m "[%a] %a finished correctly" Domain_uid.pp domain.uid Promise.pp
-              prm);
         interrupt_parent pool prm;
         ignore (Computation.try_return prm.state value)
 
@@ -695,13 +686,9 @@ module Domain = struct
             Atomic.set prm.cleaned true;
             handle pool domain prm state)
     | Domain_task (prm, State.Suspended (k, Trigger.Await trigger)) ->
-        Logs.debug (fun m ->
-            m "[%a] %a await" Domain_uid.pp domain.uid Promise.pp prm);
         await pool domain prm trigger k
-    | Domain_signal (prm, signal, State.Suspended (k, Trigger.Await trigger)) ->
-        Logs.debug (fun m ->
-            m "[%a] %a await (signaled by %d)" Domain_uid.pp domain.uid
-              Promise.pp prm signal);
+    | Domain_signal (prm, _signal, State.Suspended (k, Trigger.Await trigger))
+      ->
         await pool domain prm trigger k
     | Domain_task (prm, state) -> (
         let perform = perform pool domain prm in
@@ -779,8 +766,6 @@ module Domain = struct
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
     miou_assert (Domain_uid.equal runner domain.uid);
     miou_assert (Domain_uid.equal runner prm.runner);
-    Logs.debug (fun m ->
-        m "[%a] signals syscall into %a" Domain_uid.pp runner Promise.pp prm);
     try Trigger.signal trigger
     with exn ->
       let bt = Printexc.get_raw_backtrace () in
@@ -803,9 +788,6 @@ module Domain = struct
       else list_empty
     in
     let syscalls = domain.events.select ~block cancelled in
-    Logs.debug (fun m ->
-        m "[%a] handles %d signal(s)" Domain_uid.pp domain.uid
-          (List.length syscalls));
     List.iter (signal_system_events domain) syscalls
 
   let system_events_suspended domain = Atomic.get domain.syscalls > 0
@@ -832,8 +814,6 @@ module Domain = struct
         if system_events_suspended domain then
           unblock_awaits_with_system_events pool domain
     | _, elt ->
-        Logs.debug (fun m ->
-            m "[%a] does %a" Domain_uid.pp domain.uid _pp_domain_elt elt);
         once pool domain elt;
         if system_events_suspended domain then
           unblock_awaits_with_system_events pool domain;
