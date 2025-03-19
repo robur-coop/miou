@@ -139,6 +139,9 @@ let run : type a. quanta:int -> perform:perform -> a t -> a t =
       Logs.err (fun m -> m "Unexpected exception: %S" (Printexc.to_string exn));
       raise exn
 
+let run : type a. quanta:int -> perform:perform -> a t -> a t = fun ~quanta -> ();
+  if quanta == 1 then once else run ~quanta
+
 [@@@warning "+8"]
 
 let fail ~backtrace:bt ~exn = function

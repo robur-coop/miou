@@ -679,9 +679,6 @@ module Domain = struct
             let state = State.make fn () in
             handle pool domain prm state
         | Some (exn, bt) ->
-            Logs.debug (fun m ->
-                m "[%a] %a was cancelled" Domain_uid.pp domain.uid Promise.pp
-                  prm);
             let state = State.pure (Error (exn, bt)) in
             Atomic.set prm.cleaned true;
             handle pool domain prm state)
