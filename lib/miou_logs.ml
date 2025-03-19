@@ -60,17 +60,20 @@ let mutex_logs = Mutex.create ()
 let miou_debug = Sys.getenv_opt "MIOU_DEBUG"
 
 let kmsg : type a b. (unit -> b) -> ?src:string -> level -> (a, b) msgf -> b =
- fun k ?src level msgf ->
+ fun k ?src level ->
+  ();
   match (miou_debug, level) with
   | Some _, _ ->
-      let over () = Mutex.unlock mutex_logs in
-      Mutex.lock mutex_logs;
-      report src level ~over k msgf
+      fun msgf ->
+        let over () = Mutex.unlock mutex_logs in
+        Mutex.lock mutex_logs;
+        report src level ~over k msgf
   | _, Error ->
-      let over () = Mutex.unlock mutex_logs in
-      Mutex.lock mutex_logs;
-      report src level ~over k msgf
-  | _ -> k ()
+      fun msgf ->
+        let over () = Mutex.unlock mutex_logs in
+        Mutex.lock mutex_logs;
+        report src level ~over k msgf
+  | _ -> fun _ -> k ()
 
 let msg level msgf = kmsg (Fun.const ()) level msgf
 let debug msgf = msg Debug msgf

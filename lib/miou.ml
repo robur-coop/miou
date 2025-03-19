@@ -314,15 +314,20 @@ let add_into_domain domain elt =
 
 let transfer_dom0_tasks pool =
   if not (Queue.is_empty pool.to_dom0) then
-    let elts = Queue.(to_list (transfer pool.to_dom0)) in
-    let f = function
-      | Dom0_continue { prm; result; k } ->
-          let state = State.suspended_with k (Get result) in
-          Domain_task (prm, state)
-      | Dom0_clean (prm, child) -> Domain_clean (prm, child)
-      | Dom0_transfer (prm, res, trigger) -> Domain_transfer (prm, res, trigger)
+    let elts = Queue.transfer pool.to_dom0 in
+    let f v =
+      let v =
+        match v with
+        | Dom0_continue { prm; result; k } ->
+            let state = State.suspended_with k (Get result) in
+            Domain_task (prm, state)
+        | Dom0_clean (prm, child) -> Domain_clean (prm, child)
+        | Dom0_transfer (prm, res, trigger) ->
+            Domain_transfer (prm, res, trigger)
+      in
+      add_into_domain pool.dom0 v
     in
-    List.iter (add_into_domain pool.dom0) (List.map f elts)
+    Queue.iter ~f elts
 
 type signal_retrieved =
   | Signal_retrieved : int * (int -> unit) -> signal_retrieved
@@ -331,16 +336,13 @@ let signals = Queue.create ()
 
 let transfer_dom0_signals pool =
   if not (Queue.is_empty signals) then begin
-    let elts = Queue.(to_list (transfer signals)) in
+    let elts = Queue.transfer signals in
     let f (Signal_retrieved (signal, fn)) =
       let prm = Promise.create ~forbid:true pool.dom0.uid in
       let state = State.make fn signal in
-      Domain_signal (prm, signal, state)
+      add_into_domain pool.dom0 (Domain_signal (prm, signal, state))
     in
-    Logs.debug (fun m ->
-        m "[%a] transfers %d system signal(s)" Domain_uid.pp pool.dom0.uid
-          (List.length elts));
-    List.iter (add_into_domain pool.dom0) (List.map f elts)
+    Queue.iter ~f elts
   end
 
 module Domain = struct
@@ -426,9 +428,6 @@ module Domain = struct
     | _ -> add_into_pool pool (Pool_cancel (prm, bt))
 
   let handle pool domain prm state =
-    Logs.debug (fun m ->
-        m "[%a] handles %a and its continuation %a" Domain_uid.pp domain.uid
-          Promise.pp prm State.pp state);
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
     miou_assert (Domain_uid.equal runner domain.uid);
     miou_assert (Domain_uid.equal prm.runner domain.uid);
@@ -469,9 +468,6 @@ module Domain = struct
         end;
         if Promise.children_terminated prm = false then
           raise_notrace Still_has_children;
-        Logs.debug (fun m ->
-            m "[%a] %a finished correctly" Domain_uid.pp domain.uid Promise.pp
-              prm);
         interrupt_parent pool prm;
         ignore (Computation.try_return prm.state value)
 
@@ -575,12 +571,12 @@ module Domain = struct
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
     if not (Promise.has_forbidden prm) then Computation.detach prm.state trigger;
     let result = Computation.cancelled prm.state in
-    match Domain_uid.to_int prm.runner with
-    | 0 -> add_into_dom0 pool (Dom0_continue { prm; result; k })
-    | _ when Domain_uid.equal runner domain.uid ->
-        let state = State.suspended_with k (Get result) in
-        add_into_domain domain (Domain_task (prm, state))
-    | _ -> add_into_pool pool (Pool_continue { prm; result; k })
+    if Domain_uid.equal runner domain.uid then
+      let state = State.suspended_with k (Get result) in
+      add_into_domain domain (Domain_task (prm, state))
+    else if Domain_uid.to_int prm.runner = 0 then
+      add_into_dom0 pool (Dom0_continue { prm; result; k })
+    else add_into_pool pool (Pool_continue { prm; result; k })
 
   (* It should be noted that continuation of [k] does not mean that the promise
      has ended (it means that the promise **may** have ended). We can find out
@@ -690,13 +686,9 @@ module Domain = struct
             Atomic.set prm.cleaned true;
             handle pool domain prm state)
     | Domain_task (prm, State.Suspended (k, Trigger.Await trigger)) ->
-        Logs.debug (fun m ->
-            m "[%a] %a await" Domain_uid.pp domain.uid Promise.pp prm);
         await pool domain prm trigger k
-    | Domain_signal (prm, signal, State.Suspended (k, Trigger.Await trigger)) ->
-        Logs.debug (fun m ->
-            m "[%a] %a await (signaled by %d)" Domain_uid.pp domain.uid
-              Promise.pp prm signal);
+    | Domain_signal (prm, _signal, State.Suspended (k, Trigger.Await trigger))
+      ->
         await pool domain prm trigger k
     | Domain_task (prm, state) -> (
         let perform = perform pool domain prm in
@@ -774,8 +766,6 @@ module Domain = struct
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
     miou_assert (Domain_uid.equal runner domain.uid);
     miou_assert (Domain_uid.equal runner prm.runner);
-    Logs.debug (fun m ->
-        m "[%a] signals syscall into %a" Domain_uid.pp runner Promise.pp prm);
     try Trigger.signal trigger
     with exn ->
       let bt = Printexc.get_raw_backtrace () in
@@ -787,14 +777,17 @@ module Domain = struct
   let synchronize_dom0_tasks pool =
     transfer_dom0_tasks pool; transfer_dom0_signals pool
 
+  let list_empty = []
+
   let unblock_awaits_with_system_events pool (domain : domain) =
-    if (Stdlib.Domain.self () :> int) == 0 then synchronize_dom0_tasks pool;
+    if (Stdlib.Domain.self () :> int) = 0 then synchronize_dom0_tasks pool;
     let block = Heapq.size domain.tasks = 0 in
-    let cancelled = Queue.(to_list (transfer domain.cancelled_syscalls)) in
+    let cancelled =
+      if Queue.is_empty domain.cancelled_syscalls = false then
+        Queue.(to_list (transfer domain.cancelled_syscalls))
+      else list_empty
+    in
     let syscalls = domain.events.select ~block cancelled in
-    Logs.debug (fun m ->
-        m "[%a] handles %d signal(s)" Domain_uid.pp domain.uid
-          (List.length syscalls));
     List.iter (signal_system_events domain) syscalls
 
   let system_events_suspended domain = Atomic.get domain.syscalls > 0
@@ -821,8 +814,6 @@ module Domain = struct
         if system_events_suspended domain then
           unblock_awaits_with_system_events pool domain
     | _, elt ->
-        Logs.debug (fun m ->
-            m "[%a] does %a" Domain_uid.pp domain.uid _pp_domain_elt elt);
         once pool domain elt;
         if system_events_suspended domain then
           unblock_awaits_with_system_events pool domain;
