@@ -1,4 +1,12 @@
 (library
  (name miou_trace)
  (public_name miou.trace)
+ (modules miou_trace fuchsia)
  (libraries logs miou.unix miou.runtime_events))
+
+(executable
+ (name miou_record)
+ (public_name miou-record)
+ (package miou-record)
+ (modules miou_record)
+ (libraries cmdliner fmt fpath logs.cli logs.fmt fmt.cli fmt.tty miou.trace))

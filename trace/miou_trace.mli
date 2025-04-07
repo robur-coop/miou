@@ -1,1 +1,3 @@
-val run : program:int -> string * int -> unit
+module Fuchsia = Fuchsia
+
+val run : tmp:string -> ?filename:string -> int -> unit

@@ -1,4 +1,5 @@
 (lang dune 2.8)
 (name miou)
 (package (name miou))
+(package (name miou-record))
 (cram enable)

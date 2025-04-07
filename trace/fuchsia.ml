@@ -7,14 +7,19 @@ let word value =
   Bytes.set_int64_le buf 0 value;
   write (Bytes.unsafe_to_string buf)
 
-let record ?(data = 0) words t =
+let record ?(data = 0) ~words t =
   let buf = Bytes.create 8 in
   let data = Int64.of_int (data land 0xffffffffffff) in
   let data = Int64.shift_left data 16 in
   Bytes.set_int64_le buf 0 data;
   let rem = ((words land 0xfff) lsl 4) lor (t land 0b1111) in
-  Bytes.set_uint16_le buf 6 rem;
+  Bytes.set_uint16_le buf 0 rem;
   write (Bytes.unsafe_to_string buf)
+
+let magic_number =
+  let buf = Bytes.create 8 in
+  Bytes.set_int64_le buf 0 0x0016547846040010L;
+  Bytes.unsafe_to_string buf
 
 type strings = {
     mutable gen: int
@@ -31,6 +36,15 @@ type threads = {
 }
 
 type t = { strings: strings; threads: threads }
+
+let create () =
+  let strings =
+    { gen= 1; to_string= Array.make 0x8000 None; to_index= Hashtbl.create 200 }
+  in
+  let threads =
+    { gen= 1; to_thread= Array.make 0x100 None; to_index= Hashtbl.create 20 }
+  in
+  { strings; threads }
 
 module String_ref = struct
   type t = Ref of int | Inline of string
@@ -54,14 +68,15 @@ module String_ref = struct
     if String.length str > 32000 then
       invalid_arg "Fushia.String_ref.add: string too long";
     if not (Hashtbl.mem t.strings.to_index str) then begin
-      let index = t.strings.gen + 1 in
-      t.strings.gen <- (t.strings.gen + 1) land 0x7fff;
+      let idx = t.strings.gen in
+      t.strings.gen <- (if t.strings.gen = 0x7fff then 1 else idx + 1);
       let fn = Hashtbl.remove t.strings.to_index in
-      Option.iter fn t.strings.to_string.(index);
-      t.strings.to_string.(index) <- Some str;
+      Option.iter fn t.strings.to_string.(idx);
+      t.strings.to_string.(idx) <- Some str;
+      Hashtbl.add t.strings.to_index str idx;
       let words = strlen str + 1 in
-      let data = index lor (String.length str lsl 16) in
-      record ~data words 2; write_padded str
+      let data = idx lor (String.length str lsl 16) in
+      record ~data ~words 2; write_padded str
     end
 
   let write_inline = function Ref _ -> () | Inline str -> write_padded str
@@ -92,13 +107,13 @@ module Thread_ref = struct
 
   let add t v =
     if not (Hashtbl.mem t.threads.to_index v) then begin
-      let idx = t.threads.gen + 1 in
-      t.threads.gen <- (t.threads.gen + 1) land 0x7f;
+      let idx = t.threads.gen in
+      t.threads.gen <- (if t.threads.gen = 0xff then 1 else idx + 1);
       let fn = Hashtbl.remove t.threads.to_index in
       Option.iter fn t.threads.to_thread.(idx);
       t.threads.to_thread.(idx) <- Some v;
       Hashtbl.add t.threads.to_index v idx;
-      record ~data:idx 3 3;
+      record ~data:idx ~words:3 3;
       let buf = Bytes.create 16 in
       Bytes.set_int64_le buf 0 (Int64.of_int v.pid);
       Bytes.set_int64_le buf 8 (Int64.of_int v.tid);
@@ -223,12 +238,16 @@ let event t ?(args = []) ~name ~thread ~category ~ts kind =
     lor (String_ref.encode category lsl 16)
     lor (String_ref.encode name lsl 32)
   in
-  record ~data words 4;
+  record ~data ~words 4;
   word ts;
   Thread_ref.write_inline thread;
   String_ref.write_inline category;
   String_ref.write_inline name;
   Args.write args
+
+let instant_event t = event t 0
+let duration_begin t = event t 2
+let duration_end t = event t 3
 
 let kernel_object t ?(args = []) ~name oid =
   Args.add t args;
@@ -238,7 +257,7 @@ let kernel_object t ?(args = []) ~name oid =
   let name = String_ref.lookup t name in
   let words = 2 + String_ref.words name + Args.words args in
   let data = 2 lor (String_ref.encode name lsl 8) lor (argc lsl 24) in
-  record ~data words 2; word oid; Args.write args
+  record ~data ~words 2; word oid; Args.write args
 
 (*
 module Reader = struct
