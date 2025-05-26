@@ -21,7 +21,76 @@
     parallelization ([Miou.call]), it is not necessary to cooperate with the
     other tasks as they run in parallel. In this sense, and depending on the
     design of your application, these operations should, or should not, be
-    associated with a [Miou.yield]. *)
+    associated with a [Miou.yield].
+
+    {2 How to spawn & handle processes with Miou_unix?}
+
+    The [Miou_unix] module essentially only provides suspension points for
+    reading and writing blocking {!type:file_descr} (such as sockets). But users
+    would probably like another type of suspension: namely, suspension until a
+    launched program (via [Unix.create_process]) has finished.
+
+    The underlying mechanism provided by the system to signal the end of a
+    program's execution is not related to {!type:file_descr} but to signals.
+    Here is an example of how to launch and wait for the end of a program using
+    signals and the {!module:Miou.Computation} module.
+
+    {[
+      let pid =
+        Unix.create_process "sleep" [| "sleep"; "1" |] Unix.stdin Unix.stdout
+          Unix.stderr
+      in
+      let c = Miou.Computation.create () in
+      let handler _sigchld =
+        match Unix.waitpid [ WNOHANG ] pid with
+        | 0, _ ->
+            ignore (Miou.sys_signal Sys.sigchld (Sys.Single_handle handler))
+        | pid', status ->
+            assert (pid = pid');
+            assert (Miou.Computation.try_return c status)
+      in
+      ignore (Miou.sys_signal Sys.sigchld (Sys.Signal_handle handler));
+      match Miou.Computation.await_exn c with
+      | Unix.WEXITED _ -> ()
+      | Unix.WSIGNALED _ -> ()
+      | Unix.WSTOPPED _ -> ()
+    ]}
+
+    Here are some explanations of the code above.
+    + There is no reference to the [Miou_unix] module (although there are
+      references to [Unix]). As we said, [Miou_unix] only manages
+      {!type:file-descr}. In the code above, it is more about signal management.
+    + First, a program is launched with [Unix.create_process] and a {i handler}
+      is installed on the [SIGCHLD] signal. Please refer to the
+      {!val:Miou.sys_signal} documentation.
+    + This {i handler} then {i fills in} a {!type:Miou.Computation.t} value [c]
+      which, at the same time, is suspended further on with
+      {!val:Miou.Computation.await_exn}.
+
+    The suspension performed by {!val:Miou.Computation.await_exn} can cooperate
+    with the execution of other Miou tasks. In this way, the termination of the
+    program is no longer blocking and you can, at the same time, execute tasks
+    cooperatively and/or in parallel.
+
+    The {i handler} function (which completes our {!type:Miou.Computation.t}) is
+    {b always} executed by [dom0] (as specified in the {!val:Miou.sys_signal}
+    documentation).
+
+    Finally, it is entirely possible to extend this code in order to associate
+    our {!type:Miou.Computation.t} with the PIDs of several launched programs
+    (in a [Hashtbl], for example) in order to define a more generic {i handler}
+    capable of unblocking several suspension points.
+
+    {3 Why not integrate such a mechanism into [Miou_unix]?}
+
+    This code currently has a global side effect: it installs a {i handler} to
+    manage the [SIGCHLD] signal. [Miou] and [Miou_unix] are libraries that
+    should only slightly modify the global state of your program.
+
+    Therefore, it is your responsibility to install such a {i handler} in order
+    to enforce the explicit nature of what your program does — and to prevent
+    [Miou] and [Miou_unix] from doing things implicitly just because you want to
+    depend on these libraries. *)
 
 type file_descr
 (** Type of file-descriptors. *)
