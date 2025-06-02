@@ -43,8 +43,7 @@
       let c = Miou.Computation.create () in
       let handler _sigchld =
         match Unix.waitpid [ WNOHANG ] pid with
-        | 0, _ ->
-            ignore (Miou.sys_signal Sys.sigchld (Sys.Single_handle handler))
+        | 0, _ -> ()
         | pid', status ->
             assert (pid = pid');
             assert (Miou.Computation.try_return c status)
