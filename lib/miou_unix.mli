@@ -44,8 +44,8 @@
       let handler _sigchld =
         match Unix.waitpid [ WNOHANG ] pid with
         | 0, _ -> ()
-        | pid', status ->
-            assert (pid = pid');
+        | pid', status when pid' = pid ->
+            ignore (Miou.sys_signal Sys.sigchld Sys.Signal_default);
             assert (Miou.Computation.try_return c status)
       in
       ignore (Miou.sys_signal Sys.sigchld (Sys.Signal_handle handler));
