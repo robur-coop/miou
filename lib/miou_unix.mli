@@ -43,10 +43,9 @@
       let c = Miou.Computation.create () in
       let handler _sigchld =
         match Unix.waitpid [ WNOHANG ] pid with
-        | 0, _ ->
-            ignore (Miou.sys_signal Sys.sigchld (Sys.Single_handle handler))
-        | pid', status ->
-            assert (pid = pid');
+        | 0, _ -> ()
+        | pid', status when pid' = pid ->
+            ignore (Miou.sys_signal Sys.sigchld Sys.Signal_default);
             assert (Miou.Computation.try_return c status)
       in
       ignore (Miou.sys_signal Sys.sigchld (Sys.Signal_handle handler));
