@@ -847,7 +847,33 @@ val await : 'a t -> ('a, exn) result
 
 val await_exn : 'a t -> 'a
 (** [await_exn prm] is an alias for {!val:await} which reraises the exception in
-    the [Error] case. *)
+    the [Error] case.
+
+    {b Note about exceptions.}
+
+    OCaml can keep a "backtrace" of where the exception came from, and Miou
+    tries to keep this backtrace as best it can using {!val:reraise} (rather
+    than {!val:raise}). However, it should be noted that in {i simple} examples,
+    the backtrace may not correspond to all the functions involved in raising
+    the exception.
+
+    This is because OCaml may choose to inline certain functions (and, as a
+    result, not mention them in the backtrace).
+
+    If you encounter problems with the backtrace, you can apply a pattern such
+    as:
+
+    {[
+      let[@inline never] my_exception () = raise My_exception
+      let foo ... =
+        if ...
+        then my_exception ()
+        else ...
+    ]}
+
+    It should be noted that if you use {!val:await} instead of {!val:await_exn},
+    you lose the backtrace in the first case (since the exception is returned as
+    a value rather than raised). *)
 
 val await_one : 'a t list -> ('a, exn) result
 (** [await_one prms] awaits for a task to finish (by exception or normally).
