@@ -4,10 +4,12 @@ open B0_kit.V000
 
 let ( ~/ ) x = Fpath.v x
 let unix = B0_ocaml.libname "unix"
+let runtime_events = B0_ocaml.libname "runtime_events"
 let miou = B0_ocaml.libname "miou"
 let miou_unix = B0_ocaml.libname "miou.unix"
 let miou_backoff = B0_ocaml.libname "miou.backoff"
 let miou_sync = B0_ocaml.libname "miou.sync"
+let miou_runtime_events = B0_ocaml.libname "miou.runtime_events"
 
 let miou_backoff_lib =
   let srcs = [ `File ~/"lib/miou_backoff.ml"; `File ~/"lib/miou_backoff.mli" ] in
@@ -18,6 +20,13 @@ let miou_sync_lib =
   let srcs = [ `File ~/"lib/miou_sync.ml"; `File ~/"lib/miou_sync.mli" ] in
   let requires = [ miou_backoff ] in
   B0_ocaml.lib miou_sync ~srcs ~requires
+
+let miou_runtime_events_lib =
+  let srcs = 
+    [  `File ~/"lib/miou_runtime_events.mli"
+    ; `File ~/"lib/miou_runtime_events.ml" ] in
+  let requires = [ runtime_events ] in
+  B0_ocaml.lib miou_runtime_events ~srcs ~requires
 
 let[@ocamlformat "disable"] miou_lib =
   let srcs =
@@ -33,7 +42,7 @@ let[@ocamlformat "disable"] miou_lib =
     ; `File ~/"lib/miou_gen.mli"; `File ~/"lib/miou_gen.ml"
     ]
   in
-  let requires = [ miou_backoff; miou_sync ] in
+  let requires = [ miou_backoff; miou_sync; miou_runtime_events; runtime_events ] in
   B0_ocaml.lib miou ~doc:"The Miou library" ~srcs ~requires
 
 let miou_unix_lib =
@@ -42,4 +51,4 @@ let miou_unix_lib =
   B0_ocaml.lib miou_unix ~doc:"The Miou unix library" ~srcs ~requires
 
 let default =
-  B0_pack.make "miou" ~doc:"The Miou package" ~locked:true @@ B0_unit.list ()
+  B0_pack.v "miou" ~doc:"The Miou package" ~locked:true @@ B0_unit.list ()
