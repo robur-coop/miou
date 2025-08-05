@@ -71,9 +71,8 @@ let run { directory } { title; fn; _ } =
   Format.eprintf "*** %s ***\n%!" title;
   try Fun.protect ~finally fn
   with exn ->
-    let ic =
-      open_in (Filename.concat directory (Miou.Fmt.str "%s.stderr" title))
-    in
+    let filename = Filename.concat directory (Miou.Fmt.str "%s.stderr" title) in
+    let ic = open_in_bin filename in
     let ln = in_channel_length ic in
     let rs = Bytes.create ln in
     really_input ic rs 0 ln;
