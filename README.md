@@ -13,8 +13,7 @@ using precise and conservative rules to guide users in their development.
 
 The API documentation is available [here][documentation]. It describes (with
 examples) Miou's behaviour. The official repository is available
-[here][repository]. We also offer a mirror of this repository on
-[GitHub][github]. The project is being maintained by the [robur.coop][robur]
+[here][repository]. The project is being maintained by the [robur.coop][robur]
 cooperative.
 
 Miou is focusing on 2 objectives:
@@ -30,8 +29,6 @@ A [book][book] is available which explains how to make applications with Miou in
 details. It introduces the reader to effects, implements a small scheduler and a
 small echo server as an example. You an also read a simple tutorial from our
 documentation explaining how to implement this echo server with [here][echo].
-Miou is heavily inspired by [picos][picos] and we would like to thanks authors
-of this project.
 
 ### Rules
 
@@ -214,11 +211,33 @@ objectives and our vision - which you may not agree with. So, if Miou satisfies
 you in its approach (and that of its maintainers), and its objectives (and those
 of its users), welcome!
 
-[repository]: https://git.robur.coop/robur/miou
+## Memento
+
+If readers are interested in the OCaml ecosystem and the role Miou could play
+in it, we would also like to refer them to this [discuss post][discuss], which
+summarises our objectives and how we would like to become part of the OCaml
+community.
+
+We would also like to affirm that our position is always one of collaboration
+with others. We do not impose the use of Miou (as we do little to promote it),
+but we would not want anyone to impose their solution on us without prior
+discussion and a search for compromise (as we systematically do when
+participating in projects that do not belong to us).
+
+Since the beginning of OCaml 5 and the appearance of schedulers, we have seen
+very little collaborative approach to finding a solution and have mainly
+noticed behaviour that is at best dogmatic and sometimes problematic (according
+to [the OCaml CoC][coc]). As such, although we remain open, we no longer
+necessarily have the energy to promote and build bridges with other schedulers.
+However, we would be delighted to continue improving the experience of our
+users and the OCaml community in general.
+
+[repository]: https://github.com/robur-coop/miou
 [github]: https://github.com/robur-coop/miou
 [documentation]: https://docs.osau.re/miou/
 [sleepers]: https://docs.osau.re/miou/sleepers.html
 [echo]: https://docs.osau.re/miou/echo.html
 [robur]: https://robur.coop/
 [book]: https://robur-coop.github.io/miou
-[picos]: https://github.com/ocaml-multicore/picos
+[discuss]: https://discuss.ocaml.org/t/on-concurrency-models/15899/13?u=dinosaure
+[coc]: https://ocaml.org/policies/code-of-conduct
