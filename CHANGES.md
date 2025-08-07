@@ -1,3 +1,16 @@
+### v0.4.0 (2025-08-06)
+
+- Fix the suspension mechanism and allow the user to pass a function which will
+  be executed when the suspension is confirmed by Miou (@dinosaure, #58)
+- Clean-up correctly cancelled syscalls (@dinosaure, #59)
+- Fix the number of orphans we count (@dinosaure, #60)
+- Do some micro-optimisations when we use only one core (@dinosaure, #61)
+- Add tests about `waitpid` and document it (@dinosaure, @mbarbin, #64, #66)
+- Explain into the documentation the Miou behavior about exceptions
+  (@kit-ty-kate, @dinosaure, #67)
+- Update the README.md and add a CODE_OF_CONDUCT.md (@dinosaure, #68)
+- Fix our tests on Windows (@dinosaure, #69)
+
 ### v0.3.1 (2025-01-13)
 
 - Notice the domain if it needs to look into the shared heap if a task is ready
