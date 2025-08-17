@@ -1,6 +1,6 @@
 description = "simple scheduler for OCaml 5"
 version = "%%VERSION_NUM%%"
-requires = "miou.backoff miou.sync"
+requires = "miou.backoff miou.sync miou.runtime_events"
 archive(byte) = "miou.cma"
 archive(native) = "miou.cmxa"
 plugin(byte) = "miou.cma"
@@ -38,4 +38,14 @@ package "unix" (
   plugin(byte) = "miou_unix.cma"
   plugin(native) = "miou_unix.cmxs"
   exists_if = "miou_unix.cma miou_unix.cmxa"
+)
+
+package "runtime_events" (
+  directory = "runtime_events"
+  version = "%%VERSION_NUM%%"
+  requires = "runtime_events"
+  archive(byte) = "miou_runtime_events.cma"
+  archive(native) = "miou_runtime_events.cmxa"
+  plugin(byte) = "miou_runtime_events.cma"
+  plugin(native) = "miou_runtime_events.cmxs"
 )

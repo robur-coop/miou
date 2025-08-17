@@ -8,6 +8,11 @@
  (modules test_core)
  (libraries test unix miou))
 
+(executable
+ (name test_fuchsia)
+ (modules test_fuchsia)
+ (libraries test hxd.core hxd.string unix miou.trace))
+
 (rule
  (alias runtest)
  (action
@@ -15,3 +20,8 @@
    MIOU_DOMAINS
    3
    (run ./test_core.exe))))
+
+(rule
+ (alias runtest)
+ (action
+  (run ./test_fuchsia.exe)))
