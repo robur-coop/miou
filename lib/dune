@@ -33,8 +33,22 @@
  (name miou_unix)
  (public_name miou.unix)
  (wrapped false)
- (modules miou_unix)
+ (foreign_stubs
+  (language c)
+  (flags :standard
+         "-Wall"
+         "-Wshadow"
+         "-Wpointer-arith"
+         "-Wcast-qual"
+         "-Wsign-compare"
+         "-Werror")
+  (names bitv miou_poll))
+ (modules miou_unix miou_bitv miou_poll_config miou_poll)
  (libraries unix miou))
+
+(rule
+ (targets miou_poll_config.ml miou_poll.h)
+ (action (run ./include/discover.exe)))
 
 (documentation
  (package miou)

@@ -200,6 +200,8 @@ module Ownership : sig
   val close : file_descr -> unit
 end
 
+module Bitv = Miou_bitv
+
 (**/*)
 
 val blocking_read : Unix.file_descr -> unit
