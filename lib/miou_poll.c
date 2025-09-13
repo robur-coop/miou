@@ -1,3 +1,8 @@
+/* Copyright (c) 2023 Christiano Haesbaert haesbaert@haesbaert.org
+ * SPDX-License-Identifier: ISC
+ * Copyright (c) 2025 Romain Calascibetta <romain.calascibetta@gmail.com>
+ */
+
 #define _GNU_SOURCE
 
 #include <errno.h>
