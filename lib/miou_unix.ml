@@ -393,7 +393,7 @@ let select uid (interrupt, ic) ~block cancelled_syscalls =
         Obj.(reachable_words (repr domain.writers))
         Obj.(reachable_words (repr domain.sleepers))
         Obj.(reachable_words (repr domain.revert)));
-  let nready = Bitv.length domain.bitv in
+  let nready = Bitv.max domain.bitv in
   Logs.debug (fun m -> m "[%a] [nready:%d]" Miou.Domain.Uid.pp uid nready);
   match Poll.ppoll_or_poll domain.poll nready timeout with
   | exception Unix.(Unix_error (EINTR, _, _)) ->

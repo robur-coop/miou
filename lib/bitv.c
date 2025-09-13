@@ -44,7 +44,7 @@ intnat miou_bitv_clz_native(value v_buf) {
   while (d8[i] == 0 && i > 0)
     i--;
 
-  return (i == 0 && d8[i] == 0) ? 0 : (i * 8) + (8 - __builtin_clz(d8[i]));
+  return (i == 0 && d8[i] == 0) ? 0 : (i * 8) + (32 - __builtin_clz(d8[i]));
 }
 
 CAMLprim value miou_bitv_clz_bytecode(value v_buf) {
