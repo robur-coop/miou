@@ -26,7 +26,9 @@ intnat miou_bitv_next_native(value v_buf) {
   while (d8[i] == 0xff)
     i++;
 
-  return ((uint8_t)~d8[i] == 0) ? (i * 8) + 8 : (i * 8) + __builtin_ctz(~d8[i]);
+  uint8_t v = ~d8[i];
+
+  return (v == 0) ? (i * 8) + 8 : (i * 8) + __builtin_ctz(v);
 }
 
 CAMLprim value miou_bitv_next_bytecode(value v_buf) {
