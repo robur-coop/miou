@@ -12,6 +12,12 @@
  (libraries miou.backoff))
 
 (library
+ (name miou_runtime_events)
+ (public_name miou.runtime_events)
+ (modules miou_runtime_events)
+ (libraries runtime_events))
+
+(library
  (name miou)
  (public_name miou)
  (wrapped false)
@@ -27,7 +33,7 @@
   miou_state)
  (instrumentation
   (backend bisect_ppx))
- (libraries miou.backoff miou.sync))
+ (libraries miou.backoff miou.sync miou.runtime_events))
 
 (library
  (name miou_unix)

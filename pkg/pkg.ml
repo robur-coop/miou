@@ -15,6 +15,7 @@ let () =
     [
       Pkg.mllib ~dst_dir:"backoff/" "lib/miou_backoff.mllib"
     ; Pkg.mllib ~dst_dir:"sync/" "lib/miou_sync.mllib"
+    ; Pkg.mllib ~dst_dir:"runtime_events/" "lib/miou_runtime_events.mllib"
     ; Pkg.mllib "lib/miou.mllib"
     ; Pkg.mllib ~dst_dir:"unix/" "lib/miou_unix.mllib"
     ; Pkg.test ~dir:"test" "test/test_core"
