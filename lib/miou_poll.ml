@@ -110,7 +110,13 @@ let get_revents t index =
 
 let get_fd t index = guard_index t index; C.get_fd t.buffer index
 
-let create ?(maxfds = C.max_open_files ()) () =
+let max_open_files () =
+  match C.max_open_files () with
+  | -1 -> failwith "Miou_poll.max_open_files"
+  | n when n > 524288 -> 524288
+  | n -> n
+
+let create ?(maxfds = max_open_files ()) () =
   let len = maxfds * Config.sizeof_pollfd in
   let buffer = Bigarray.(Array1.create char c_layout len) in
   let t = { buffer; maxfds } in
