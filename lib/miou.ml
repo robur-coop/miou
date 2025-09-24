@@ -777,10 +777,16 @@ module Domain = struct
   let synchronize_dom0_tasks pool =
     transfer_dom0_tasks pool; transfer_dom0_signals pool
 
+  let wakeup_dom0_if_needed pool =
+    if Queue.is_empty signals == false then
+      let dom0 = Uid.of_int 0 in
+      interrupt pool ~domain:dom0
+
   let list_empty = []
 
   let unblock_awaits_with_system_events pool (domain : domain) =
-    if (Stdlib.Domain.self () :> int) = 0 then synchronize_dom0_tasks pool;
+    if (Stdlib.Domain.self () :> int) = 0 then synchronize_dom0_tasks pool
+    else wakeup_dom0_if_needed pool;
     let block = Heapq.size domain.tasks = 0 in
     let cancelled =
       if Queue.is_empty domain.cancelled_syscalls = false then
