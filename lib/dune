@@ -43,14 +43,15 @@
    "-Wcast-qual"
    "-Wsign-compare"
    "-Werror")
-  (names bitv miou_poll))
+  (names bitv poll))
  (modules miou_unix miou_bitv miou_poll_config miou_poll)
  (libraries unix miou))
 
 (rule
  (targets miou_poll_config.ml miou_poll.h)
+ (deps conf/discover.exe conf/has_ppoll.c)
  (action
-  (run ./include/discover.exe)))
+  (run ./conf/discover.exe)))
 
 (documentation
  (package miou)

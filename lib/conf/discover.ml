@@ -1,22 +1,30 @@
 module C = Configurator.V1
 
 let has_ppoll_code =
-  {c|
-#define _GNU_SOURCE /* for linux */
-#include <poll.h>
-#include <stddef.h>
-#include <strings.h>
-
-int main(void) {
-  struct pollfd fds;
-  struct timespec ts;
-
-  bzero(&fds, sizeof(fds));
-  bzero(&ts, sizeof(ts));
-
-  return (ppoll(&fds, 0, &ts, NULL));
-}
-|c}
+  match Sys.argv with
+  | [| _; filename |] when Sys.file_exists filename ->
+      let ic = open_in_bin filename in
+      let finally () = close_in ic in
+      Fun.protect ~finally @@ fun () ->
+      let len = in_channel_length ic in
+      let buf = Bytes.create len in
+      really_input ic buf 0 len; Bytes.unsafe_to_string buf
+  | _ ->
+      {c|#define _GNU_SOURCE /* for linux */
+      #include <poll.h>
+      #include <stddef.h>
+      #include <strings.h>
+      
+      int main(void) {
+        struct pollfd fds;
+        struct timespec ts;
+      
+        bzero(&fds, sizeof(fds));
+        bzero(&ts, sizeof(ts));
+      
+        return (ppoll(&fds, 0, &ts, NULL));
+      }
+      |c}
 
 let () =
   C.main ~name:"discover" @@ fun c ->
