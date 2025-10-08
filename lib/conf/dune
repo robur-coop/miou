@@ -8,12 +8,14 @@
  (modules std))
 
 ; for ocamlbuild
+
 (executable
  (name cc)
  (modules cc)
  (libraries std))
 
 ; for ocamlbuild
+
 (executable
  (name has_ppoll)
  (modules has_ppoll)
