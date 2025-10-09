@@ -14,7 +14,7 @@ let ppoll_discover () =
     Cmd (S [A test; A file; Sh ">"; Px out])
   end
 
-let generate () =
+let cc () =
   let open Ocamlbuild_pack in
   pflag [] "objs_include" (fun p -> S [A "-I"; A p]);
   rule "%.objs -> %.native"
@@ -30,7 +30,7 @@ let generate () =
     let srcs = S (List.map (fun x -> P x) srcs) in
     let out = env "%.native" in
     let compiler = env "lib/conf/cc.byte" in
-    Cmd (S [ A compiler; T (tags_of_pathname out); srcs; A "-o"; Px out ])
+    Cmd (S [A compiler; T (tags_of_pathname out); srcs; A "-o"; Px out])
   end
 
 let miou_poll_config_generate () =
@@ -41,19 +41,22 @@ let miou_poll_config_generate () =
   begin fun env build ->
     let generate = env "lib/conf/generate.native" in
     let out = env "lib/miou_poll_config.ml" in
-    Cmd (S [ A generate; Sh ">"; Px out])
+    Cmd (S [A generate; Sh ">"; Px out])
   end
 
 let () =
   dispatch begin function
     | After_rules ->
-        generate ();
+        (* discover if [ppoll(2)] is available. *)
         ppoll_discover ();
+        (* compile *.c to *.native (specially for [generate.native]). *)
+        cc ();
+        (* generate [miou_poll_config.ml] (from [generate.native]). *)
         miou_poll_config_generate ();
-        (* libmiou_poll.clib *)
+        (* compile and use [libmiou_poll.clib]. *)
         flag_and_dep ["link"; "ocaml"; "link_miou_poll"] (P "lib/libmiou_poll.a");
-        flag ["c"; "use_miou_poll"; "ocamlmklib"] (S[A"-lmiou_poll"]);
-        flag ["ocaml"; "use_miou_poll"; "link"; "library"; "byte"] (S[A"-dllib"; A"-lmiou_poll"]);
-        flag ["ocaml"; "use_miou_poll"; "link"; "library"; "native"] (S[A"-cclib"; A"-lmiou_poll"])
+        flag ["c"; "use_miou_poll"; "ocamlmklib"] (S [A"-lmiou_poll"]);
+        flag ["ocaml"; "use_miou_poll"; "link"; "library"; "byte"] (S [A"-dllib"; A"-lmiou_poll"]);
+        flag ["ocaml"; "use_miou_poll"; "link"; "library"; "native"] (S [A"-cclib"; A"-lmiou_poll"])
     | _ -> ()
   end
