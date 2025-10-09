@@ -885,7 +885,12 @@ let test45 =
   let t = Bitv.create 1024 false in
   Test.check (Bitv.max t = 0);
   Bitv.set t (Option.get (Bitv.next t)) true;
-  Test.check (Bitv.max t = 1)
+  Test.check (Bitv.max t = 1);
+  Bitv.set t 1023 true;
+  Test.check (Bitv.max t = 1024);
+  Bitv.set t 1023 false;
+  Bitv.set t 349 true;
+  Test.check (Bitv.max t = 350)
 
 let () =
   let tests =
