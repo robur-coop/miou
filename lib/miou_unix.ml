@@ -1,3 +1,6 @@
+module Bitv = Miou_bitv
+module Poll = Miou_poll
+
 module Logs = Miou.Logs.Make (struct
   let src = "unix"
 end)
@@ -26,9 +29,10 @@ let bind_and_listen ?(backlog = 64) ?(reuseaddr = true) ?(reuseport = true)
   Unix.listen fd backlog
 
 module File_descrs = struct
-  type 'a t = { mutable contents: (Unix.file_descr * 'a) list }
+  type nonrec 'a t = { mutable contents: (Unix.file_descr * 'a) list }
 
   let find tbl fd = List.assq fd tbl.contents
+  let find_opt tbl fd = List.assq_opt fd tbl.contents
 
   let remove tbl fd =
     let contents =
@@ -37,8 +41,6 @@ module File_descrs = struct
         [] tbl.contents
     in
     tbl.contents <- contents
-
-  let iter f tbl = List.iter (fun (k, v) -> f k v) tbl.contents
 
   let replace tbl fd v' =
     let contents =
@@ -67,6 +69,8 @@ type domain = {
   ; writers: Miou.syscall list File_descrs.t
   ; sleepers: Heapq.t
   ; revert: (Miou.uid, Unix.file_descr) Hashtbl.t
+  ; poll: Poll.t
+  ; bitv: Bitv.t
 }
 
 let clean domain uids =
@@ -103,11 +107,18 @@ let domain =
     Hashtbl.clear v.revert;
     make ()
   and make () =
+    let poll = Poll.create () in
+    Logs.debug (fun m ->
+        m "create a poll on [%d] with %d file-descriptors"
+          (Stdlib.Domain.self () :> int)
+          (Poll.maxfds poll));
     {
       readers= File_descrs.create 0x100
     ; writers= File_descrs.create 0x100
     ; sleepers= Heapq.create ()
     ; revert= Hashtbl.create 0x100
+    ; poll
+    ; bitv= Bitv.create (Poll.maxfds poll) false
     }
   in
   let key = Stdlib.Domain.DLS.new_key ~split_from_parent make in
@@ -124,8 +135,17 @@ let blocking_read fd =
   let uid = Miou.uid syscall in
   let domain = domain () in
   let fn () =
-    Hashtbl.replace domain.revert uid fd;
-    append domain.readers fd syscall
+    match Bitv.next domain.bitv with
+    | Some next ->
+        Logs.debug (fun m ->
+            m "poll.set-index on [%d:%d] with POLLIN"
+              (Stdlib.Domain.self () :> int)
+              next);
+        Hashtbl.replace domain.revert uid fd;
+        append domain.readers fd syscall;
+        Poll.set_index domain.poll next fd Poll.Flags.pollin;
+        Bitv.set domain.bitv next true
+    | None -> failwith "Too many open files"
   in
   Miou.suspend ~fn syscall
 
@@ -134,8 +154,17 @@ let blocking_write fd =
   let uid = Miou.uid syscall in
   let domain = domain () in
   let fn () =
-    Hashtbl.replace domain.revert uid fd;
-    append domain.writers fd syscall
+    match Bitv.next domain.bitv with
+    | Some next ->
+        Logs.debug (fun m ->
+            m "poll.set-index on [%d:%d] with POLLIN"
+              (Stdlib.Domain.self () :> int)
+              next);
+        Hashtbl.replace domain.revert uid fd;
+        append domain.writers fd syscall;
+        Poll.set_index domain.poll next fd Poll.Flags.pollout;
+        Bitv.set domain.bitv next true
+    | None -> failwith "Too many open files"
   in
   Miou.suspend ~fn syscall
 
@@ -335,47 +364,27 @@ let rec collect domain signals =
       collect domain (Miou.signal syscall :: signals)
   | _ -> signals
 
-let file_descrs tbl =
-  let res = ref [] in
-  File_descrs.iter (fun k _ -> res := k :: !res) tbl;
-  !res
-
-let transmit_fds signals revert tbl fds =
-  let fold acc fd =
-    match File_descrs.find tbl fd with
-    | [] -> File_descrs.remove tbl fd; acc
-    | syscalls ->
-        let transmit syscall =
-          Hashtbl.remove revert (Miou.uid syscall);
-          Miou.signal syscall
-        in
-        Logs.debug (fun m -> m "delete [%d]" (Obj.magic fd));
-        File_descrs.remove tbl fd;
-        List.rev_append (List.rev_map transmit syscalls) acc
-    | exception Not_found -> acc
-  in
-  List.fold_left fold signals fds
-
-let interrupted fd fds = List.exists (( = ) fd) fds
-
 let intr fd =
   let buf = Bytes.create 0x100 in
   match Unix.read fd buf 0 (Bytes.length buf) with
   | _ -> ()
   | exception Unix.(Unix_error (EAGAIN, _, _)) -> ()
 
-let select uid interrupt ~block cancelled_syscalls =
+let transmit_and_clean domain syscall =
+  Hashtbl.remove domain.revert (Miou.uid syscall);
+  Miou.signal syscall
+
+let select uid (interrupt, ic) ~block cancelled_syscalls =
   let domain = domain () in
   clean domain cancelled_syscalls;
-  let rds = file_descrs domain.readers in
-  let wrs = file_descrs domain.writers in
-  let timeout =
+  let timeout : Poll.ppoll_timeout =
     match (sleeper domain, block) with
-    | None, true -> -1.0
-    | (None | Some _), false -> 0.0
+    | None, true -> Poll.Infinite
+    | (None | Some _), false -> Poll.No_wait
     | Some value, true ->
         let value = value -. Unix.gettimeofday () in
-        Float.max value 0.0
+        let value = Float.max value 0.0 *. 1e9 in
+        Poll.Nanoseconds (Int64.of_float value)
   in
   Logs.debug (fun m ->
       m "[%a] [readers:%dw, writers:%dw, sleepers:%dw, revert:%dw]"
@@ -384,7 +393,46 @@ let select uid interrupt ~block cancelled_syscalls =
         Obj.(reachable_words (repr domain.writers))
         Obj.(reachable_words (repr domain.sleepers))
         Obj.(reachable_words (repr domain.revert)));
-  Logs.debug (fun m -> m "select(%f)" timeout);
+  let nready = Bitv.max domain.bitv in
+  Logs.debug (fun m -> m "[%a] [nready:%d]" Miou.Domain.Uid.pp uid nready);
+  match Poll.ppoll_or_poll domain.poll nready timeout with
+  | exception Unix.(Unix_error (EINTR, _, _)) ->
+      Logs.debug (fun m ->
+          m "[%a] interrupted by the system" Miou.Domain.Uid.pp uid);
+      collect domain []
+  | nready ->
+      let acc = ref (collect domain []) in
+      let fn index fd flags =
+        if index == interrupt then intr ic
+        else if Poll.Flags.mem flags Poll.Flags.pollin then (
+          Poll.invalidate_index domain.poll index;
+          Bitv.set domain.bitv index false;
+          match File_descrs.find_opt domain.readers fd with
+          | None -> ()
+          | Some [] -> File_descrs.remove domain.readers fd
+          | Some syscalls ->
+              File_descrs.remove domain.readers fd;
+              acc :=
+                List.rev_append
+                  (List.rev_map (transmit_and_clean domain) syscalls)
+                  !acc)
+        else if Poll.Flags.mem flags Poll.Flags.pollout then (
+          Poll.invalidate_index domain.poll index;
+          Bitv.set domain.bitv index false;
+          match File_descrs.find_opt domain.writers fd with
+          | None -> ()
+          | Some [] -> File_descrs.remove domain.writers fd
+          | Some syscalls ->
+              File_descrs.remove domain.writers fd;
+              acc :=
+                List.rev_append
+                  (List.rev_map (transmit_and_clean domain) syscalls)
+                  !acc)
+      in
+      Poll.iter domain.poll nready fn;
+      !acc
+
+(*
   match Unix.select (interrupt :: rds) wrs [] timeout with
   | exception Unix.(Unix_error (EINTR, _, _)) ->
       Logs.debug (fun m ->
@@ -406,6 +454,7 @@ let select uid interrupt ~block cancelled_syscalls =
       let signals = transmit_fds signals domain.revert domain.readers rds in
       let signals = transmit_fds signals domain.revert domain.writers wrs in
       signals
+*)
 
 let signal = Bytes.make 1 '\000'
 
@@ -414,11 +463,15 @@ let interrupt oc () =
   | n -> assert (n = 1) (* XXX(dinosaure): paranoid mode. *)
   | exception Unix.(Unix_error (EAGAIN, _, _)) -> ()
 
-let events domain =
+let events uid =
+  let domain = domain () in
   let ic, oc = Unix.pipe ~cloexec:true () in
   Unix.set_nonblock ic;
   Unix.set_nonblock oc;
-  let select = select domain ic in
+  let idx = Option.get (Bitv.next domain.bitv) in
+  Bitv.set domain.bitv idx true;
+  Poll.set_index domain.poll idx ic Poll.Flags.pollin;
+  let select = select uid (idx, ic) in
   let finaliser () = Unix.close ic; Unix.close oc in
   { Miou.interrupt= interrupt oc; select; finaliser }
 

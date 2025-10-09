@@ -10,9 +10,9 @@
     This is not {i generally} the case for files and folders where
     [read]/[write] does not block. So, as far as files/folders are concerned,
     there is no point in using the suspend/resume mechanisms offered by Miou.
-    These mechanisms (and the use of [Unix.select]) could actually degrade
-    performance. It is therefore advisable to use the [Unix] module directly
-    rather than [Miou_unix] for files/folders.
+    These mechanisms (and the use of [poll(2)]/[ppoll(2)]) could actually
+    degrade performance. It is therefore advisable to use the [Unix] module
+    directly rather than [Miou_unix] for files/folders.
 
     It should be noted, however, that reading/writing files can take a long
     time. So, in a cooperative context (with [Miou.async]), it may be worthwhile
@@ -199,6 +199,8 @@ module Ownership : sig
   val write : file_descr -> ?off:int -> ?len:int -> string -> unit
   val close : file_descr -> unit
 end
+
+module Bitv = Miou_bitv
 
 (**/*)
 

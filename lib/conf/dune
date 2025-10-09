@@ -1,0 +1,22 @@
+(executable
+ (name discover)
+ (modules discover)
+ (libraries dune-configurator))
+
+(library
+ (name std)
+ (modules std))
+
+; for ocamlbuild
+
+(executable
+ (name cc)
+ (modules cc)
+ (libraries std))
+
+; for ocamlbuild
+
+(executable
+ (name has_ppoll)
+ (modules has_ppoll)
+ (libraries std))

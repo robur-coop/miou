@@ -17,5 +17,6 @@ let () =
     ; Pkg.mllib ~dst_dir:"sync/" "lib/miou_sync.mllib"
     ; Pkg.mllib "lib/miou.mllib"
     ; Pkg.mllib ~dst_dir:"unix/" "lib/miou_unix.mllib"
+    ; Pkg.clib "lib/libmiou_poll.clib"
     ; Pkg.test ~dir:"test" "test/test_core"
     ]
