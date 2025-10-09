@@ -1030,6 +1030,18 @@ module Ownership = struct
       raise Not_owner
     with Found_resource node -> Miou_sequence.remove node
 
+  let release (Resource { uid; finaliser; value }) =
+    finaliser value;
+    let (Pack self) = Effect.perform Self in
+    let equal (Resource { uid= uid'; _ }) = Resource_uid.equal uid uid' in
+    try
+      let f ({ Miou_sequence.data; _ } as node) =
+        if equal data then raise_notrace (Found_resource node)
+      in
+      Miou_sequence.iter_node ~f self.resources;
+      raise Not_owner
+    with Found_resource node -> finaliser value; Miou_sequence.remove node
+
   let transfer (Resource { uid; _ } as res) =
     let (Pack self) = Effect.perform Self in
     if Option.is_none self.parent then
