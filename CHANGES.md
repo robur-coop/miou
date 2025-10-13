@@ -29,6 +29,10 @@
 - Add `Miou.Ownership.release` to disown and release a resource
   (@dinosaure, #79)
 
+[bitv]: https://github.com/backtracking/bitv
+[ocaml-iomux]: https://github.com/ocaml-multicore/ocaml-iomux
+[httpcats]: https://github.com/robur-coop/httpcats
+
 ### v0.4.0 (2025-08-06)
 
 - Fix the suspension mechanism and allow the user to pass a function which will
