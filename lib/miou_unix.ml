@@ -316,6 +316,12 @@ module Ownership = struct
     connect { fd; non_blocking } sockaddr
 
   let close { fd; resource; _ } =
+    (* NOTE(dinosaure): a world exists when we would like to cancel the current
+       task which tries to perform [disown]. In that case, the [finally] is
+       called and we should not continue the current task. In that case,
+       [Unix.close] should not be called (because the task is cancelled). So
+       it's "safe" to, first, call [disown] and, if we continue, call
+       [Unix.close]. *)
     Miou.Ownership.disown resource;
     Unix.close fd
 
