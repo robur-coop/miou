@@ -778,7 +778,7 @@ module Domain = struct
     transfer_dom0_tasks pool; transfer_dom0_signals pool
 
   let wakeup_dom0_if_needed pool =
-    if Queue.is_empty signals == false then
+    if not (Queue.is_empty signals) then
       let dom0 = Uid.of_int 0 in
       interrupt pool ~domain:dom0
 
