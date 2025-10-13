@@ -1030,6 +1030,24 @@ module Ownership = struct
       raise Not_owner
     with Found_resource node -> Miou_sequence.remove node
 
+  let release (Resource { uid; finaliser; value }) =
+    let (Pack self) = Effect.perform Self in
+    (* NOTE(dinosaure): [Effect.perform Self] can set the state of the current
+       task to a continuation which will execute [finaliser] **or** into an
+       error case because someone tried to cancel the current task.
+
+       In the last case, the [finaliser] is **already** called by Miou and the
+       rest of this function is not executed. In the happy-path case and in the
+       cancellation. *)
+    let equal (Resource { uid= uid'; _ }) = Resource_uid.equal uid uid' in
+    try
+      let f ({ Miou_sequence.data; _ } as node) =
+        if equal data then raise_notrace (Found_resource node)
+      in
+      Miou_sequence.iter_node ~f self.resources;
+      raise Not_owner
+    with Found_resource node -> finaliser value; Miou_sequence.remove node
+
   let transfer (Resource { uid; _ } as res) =
     let (Pack self) = Effect.perform Self in
     if Option.is_none self.parent then
