@@ -68,16 +68,18 @@ type domain = {
     readers: Miou.syscall list File_descrs.t
   ; writers: Miou.syscall list File_descrs.t
   ; sleepers: Heapq.t
-  ; revert: (Miou.uid, Unix.file_descr) Hashtbl.t
+  ; revert: (Miou.uid, Unix.file_descr * int) Hashtbl.t
   ; poll: Poll.t
   ; bitv: Bitv.t
 }
 
 let clean domain uids =
-  let clean uid' (fd : Unix.file_descr) tbl =
+  let clean uid' ((fd : Unix.file_descr), index) tbl =
     match File_descrs.find tbl fd with
     | exception Not_found -> ()
     | syscalls -> (
+        Poll.invalidate_index domain.poll index;
+        Bitv.set domain.bitv index false;
         match List.filter (fun s -> uid' <> Miou.uid s) syscalls with
         | [] -> File_descrs.remove tbl fd
         | syscalls -> File_descrs.replace tbl fd syscalls)
@@ -100,11 +102,28 @@ let rec drop_heapq heapq =
   try Heapq.delete_min_exn heapq; drop_heapq heapq with _ -> ()
 
 let domain =
+  (* NOTE(dinosaure): the semantic of [DLS.new_key] is a bit odd. Here, we call
+     [make ()] when we would like to [DLS.get] our global value. Then, for
+     domains other than [dom0], we use [split_from_parent]. We must _clear_
+     everything except for the file descriptor used for the interrupt (still
+     used by our [dom0]).
+
+     We have two cases:
+     - the usual case where the user call [Miou_unix.run]. In that case, we
+       dont't clean anything because everything has just been freshly created.
+     - the case where the user calls [Miou_unix.run] again. Here, we must clean
+       everything from [dom0] and create new values for the new domains via
+       [split_from_parent]. TODO(dinosaure): we probably should clean our [dom0]
+       via our [events.finaliser]... *)
   let rec split_from_parent v =
     File_descrs.clear v.readers;
     File_descrs.clear v.writers;
     drop_heapq v.sleepers;
     Hashtbl.clear v.revert;
+    for i = 1 to Bitv.length v.bitv - 1 do
+      Poll.invalidate_index v.poll i;
+      Bitv.set v.bitv i false
+    done;
     make ()
   and make () =
     let poll = Poll.create () in
@@ -141,7 +160,7 @@ let blocking_read fd =
             m "poll.set-index on [%d:%d] with POLLIN"
               (Stdlib.Domain.self () :> int)
               next);
-        Hashtbl.replace domain.revert uid fd;
+        Hashtbl.replace domain.revert uid (fd, next);
         append domain.readers fd syscall;
         Poll.set_index domain.poll next fd Poll.Flags.pollin;
         Bitv.set domain.bitv next true
@@ -160,7 +179,7 @@ let blocking_write fd =
             m "poll.set-index on [%d:%d] with POLLIN"
               (Stdlib.Domain.self () :> int)
               next);
-        Hashtbl.replace domain.revert uid fd;
+        Hashtbl.replace domain.revert uid (fd, next);
         append domain.writers fd syscall;
         Poll.set_index domain.poll next fd Poll.Flags.pollout;
         Bitv.set domain.bitv next true
@@ -380,7 +399,7 @@ let transmit_and_clean domain syscall =
   Hashtbl.remove domain.revert (Miou.uid syscall);
   Miou.signal syscall
 
-let select uid (interrupt, ic) ~block cancelled_syscalls =
+let select uid ic ~block cancelled_syscalls =
   let domain = domain () in
   clean domain cancelled_syscalls;
   let timeout : Poll.ppoll_timeout =
@@ -409,7 +428,7 @@ let select uid (interrupt, ic) ~block cancelled_syscalls =
   | nready ->
       let acc = ref (collect domain []) in
       let fn index fd flags =
-        if index == interrupt then intr ic
+        if index == 0 then intr ic
         else if Poll.Flags.mem flags Poll.Flags.pollin then (
           Poll.invalidate_index domain.poll index;
           Bitv.set domain.bitv index false;
@@ -438,30 +457,6 @@ let select uid (interrupt, ic) ~block cancelled_syscalls =
       Poll.iter domain.poll nready fn;
       !acc
 
-(*
-  match Unix.select (interrupt :: rds) wrs [] timeout with
-  | exception Unix.(Unix_error (EINTR, _, _)) ->
-      Logs.debug (fun m ->
-          m "[%a] interrupted by the system" Miou.Domain.Uid.pp uid);
-      collect domain []
-  | exception Unix.(Unix_error (err, f, arg)) ->
-      Logs.err (fun m ->
-          m "[%a] exception %s(%s): %s" Miou.Domain.Uid.pp uid f arg
-            (Unix.error_message err));
-      collect domain []
-  | [], [], _ -> collect domain []
-  | rds, wrs, _ ->
-      if interrupted interrupt rds then begin
-        Logs.debug (fun m ->
-            m "[%a] interrupted by Miou" Miou.Domain.Uid.pp uid);
-        intr interrupt
-      end;
-      let signals = collect domain [] in
-      let signals = transmit_fds signals domain.revert domain.readers rds in
-      let signals = transmit_fds signals domain.revert domain.writers wrs in
-      signals
-*)
-
 let signal = Bytes.make 1 '\000'
 
 let interrupt oc () =
@@ -474,10 +469,9 @@ let events uid =
   let ic, oc = Unix.pipe ~cloexec:true () in
   Unix.set_nonblock ic;
   Unix.set_nonblock oc;
-  let idx = Option.get (Bitv.next domain.bitv) in
-  Bitv.set domain.bitv idx true;
-  Poll.set_index domain.poll idx ic Poll.Flags.pollin;
-  let select = select uid (idx, ic) in
+  Bitv.set domain.bitv 0 true;
+  Poll.set_index domain.poll 0 ic Poll.Flags.pollin;
+  let select = select uid ic in
   let finaliser () = Unix.close ic; Unix.close oc in
   { Miou.interrupt= interrupt oc; select; finaliser }
 
