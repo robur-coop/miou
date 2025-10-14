@@ -23,6 +23,10 @@
   for Miou. However, support for `topkg`/`ocamlbuild` is still maintained (and
   it is possible to compile and install Miou with this build system).
 
+- Correctly clean-up internals structures used by domains when we call multiple
+  times `Miou_unix.run` and clean-up cancelled file-descriptors
+  (#82, @dinosaure)
+
 - Synchronize `dom0` when one domain receive a signal (#78, @omegametabroccolo,
   @dinosaure, @reynir, partially fix #77)
 
