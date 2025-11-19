@@ -463,6 +463,13 @@ let interrupt oc () =
   match Unix.single_write oc signal 0 1 with
   | n -> assert (n = 1) (* XXX(dinosaure): paranoid mode. *)
   | exception Unix.(Unix_error (EAGAIN, _, _)) -> ()
+  | exception Unix.(Unix_error (EBADF, _, _)) ->
+      (* NOTE(dinosaure): it's a special case when we fallback to an abnormal
+         situation. The user breaks a rule ([Still_has_children], [Not_a_child],
+         etc.) and we desperately try to stop all domains. We can have a
+         mix between [interrupt] and our finaliser which close [oc] but that's
+         fine. We can just ignore this error and continue to stop everything. *)
+      ()
 
 let events uid =
   let domain = domain () in

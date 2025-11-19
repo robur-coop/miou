@@ -227,7 +227,7 @@ type pool = {
   ; domains: domain list
   ; dom0: domain
   ; to_dom0: dom0_elt Queue.t
-  ; stop: bool ref
+  ; stop: bool Atomic.t
   ; fail: bool ref
   ; working_counter: int ref
   ; domains_counter: int ref
@@ -823,9 +823,20 @@ module Domain = struct
         once pool domain elt;
         if system_events_suspended domain then
           unblock_awaits_with_system_events pool domain;
+        (* NOTE(dinosaure): we must care about this recursion. It's an hot-path
+           to avoid [Mutex.lock]/[Mutex.unlock] on [Pool.worker] and continue
+           the domain to do its main job. If:
+           - our current domain still has some tasks to do
+           - AND no tasks are pending in our pool
+           - AND our pool can continue
+           - AND if we are [dom0] and we don't have a special task transfer to
+             perform (particularly those coming from signals).
+
+           we can re-call [run]. *)
         if
           Heapq.is_empty domain.tasks = false
           && Atomic.get pool.tasks_is_empty
+          && Atomic.get pool.stop = false
           && no_transfer pool
         then run pool domain
 
@@ -902,10 +913,10 @@ module Pool = struct
     try
       while true do
         Mutex.lock pool.mutex;
-        while nothing_to_do pool domain && not !(pool.stop) do
+        while nothing_to_do pool domain && Atomic.get pool.stop == false do
           Condition.wait pool.condition_pending_work pool.mutex
         done;
-        if !(pool.stop) then raise_notrace Exit;
+        if Atomic.get pool.stop then raise_notrace Exit;
         transfer_all_tasks pool domain;
         Atomic.set pool.tasks_is_empty (Miou_sequence.is_empty pool.tasks);
         incr pool.working_counter;
@@ -913,8 +924,8 @@ module Pool = struct
         Domain.run pool domain;
         Mutex.lock pool.mutex;
         decr pool.working_counter;
-        if (not !(pool.stop)) && Int.equal !(pool.working_counter) 0 then
-          Condition.signal pool.condition_all_idle;
+        if (not (Atomic.get pool.stop)) && Int.equal !(pool.working_counter) 0
+        then Condition.signal pool.condition_all_idle;
         Mutex.unlock pool.mutex
       done
     with
@@ -925,10 +936,19 @@ module Pool = struct
         domain.events.finaliser ();
         Mutex.unlock pool.mutex
     | exn ->
+        Logs.err (fun m ->
+            m "[%a] stops with %S" Domain_uid.pp domain.uid
+              (Printexc.to_string exn));
         Mutex.lock pool.mutex;
-        pool.stop := true;
+        Atomic.set pool.stop true;
         pool.fail := true;
         decr pool.domains_counter;
+        (* NOTE(dinosaure): other domains (including [dom0]) can be waiting for
+           a system event. We must re-wake them and notify them about an
+           abnormal situation. *)
+        let fn dom = dom.events.interrupt () in
+        List.iter fn pool.domains;
+        pool.dom0.events.interrupt ();
         Condition.broadcast pool.condition_pending_work;
         Condition.signal pool.condition_all_idle;
         domain.events.finaliser ();
@@ -936,15 +956,12 @@ module Pool = struct
         reraise exn
 
   let wait pool =
+    miou_assert (Atomic.get pool.stop = true);
     let exception Exit in
     try
-      let working_domains () =
-        !(pool.working_counter) > 0 && not !(pool.stop)
-      in
-      let all_domains () = !(pool.stop) && !(pool.domains_counter) > 0 in
       while true do
         Mutex.lock pool.mutex;
-        if working_domains () || all_domains () then begin
+        if !(pool.domains_counter) > 0 then begin
           Condition.wait pool.condition_all_idle pool.mutex;
           Mutex.unlock pool.mutex
         end
@@ -953,11 +970,17 @@ module Pool = struct
     with Exit -> Mutex.unlock pool.mutex
 
   let kill pool =
+    miou_assert ((Stdlib.Domain.self () :> int) = 0);
     Mutex.lock pool.mutex;
-    pool.stop := true;
+    Atomic.set pool.stop true;
+    (* NOTE(dinosaure): other domains can wait for a system event, we must interrupt
+       them and notify them about an abnormal termination. *)
+    let fn dom = dom.events.interrupt () in
+    List.iter fn pool.domains;
     Logs.debug (fun m -> m "[%a] kills domain(s)" Domain_uid.pp pool.dom0.uid);
     Condition.broadcast pool.condition_pending_work;
     Mutex.unlock pool.mutex;
+    Logs.debug (fun m -> m "[%a] waits domain(s)" Domain_uid.pp pool.dom0.uid);
     wait pool
 
   let number_of_domains () =
@@ -971,7 +994,7 @@ module Pool = struct
       ; mutex= Mutex.create ()
       ; condition_pending_work= Condition.create ()
       ; condition_all_idle= Condition.create ()
-      ; stop= ref false
+      ; stop= Atomic.make false
       ; fail= ref false
       ; working_counter= ref 0
       ; domains_counter= ref domains_counter
@@ -1346,6 +1369,7 @@ let suspend ?(fn = ignore) (Syscall (uid, trigger, prm)) =
   if Promise_uid.equal self.uid prm.uid = false then
     invalid_arg "This syscall does not belong to the current promise";
   let runner' = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
+  (* wait until all our tasks are completed (normal termination) *)
   miou_assert (Domain_uid.equal domain.uid runner');
   if Domain_uid.equal prm.runner runner' = false then
     invalid_arg "This syscall does not belong to the current domain";
