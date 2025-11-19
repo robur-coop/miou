@@ -1,0 +1,25 @@
+name: miou
+on: [push, pull_request]
+jobs:
+  tests:
+    name: Tests
+    strategy:
+      matrix:
+        ocaml-version: [5.0.0, 5.1.0, 5.2.0, 5.3.0, 5.4.0]
+        operating-system: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.operating-system }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Use OCaml ${{ matrix.ocaml-version }}
+        uses: ocaml/setup-ocaml@v3
+        with:
+          ocaml-compiler: ${{ matrix.ocaml-version }}
+          opam-local-packages: |
+            *.opam
+      - name: Install dependencies
+        run: opam install --deps-only -t miou
+      - name: Build
+        run: opam exec -- dune build -p miou
+      - name: Test
+        run: opam exec -- dune runtest -p miou
