@@ -8,10 +8,18 @@
  (modules test_core)
  (libraries test unix miou))
 
+(executable
+ (name test_unix)
+ (modules test_unix)
+ (libraries test unix miou miou.unix))
+
 (rule
  (alias runtest)
  (action
   (setenv
    MIOU_DOMAINS
    3
-   (run ./test_core.exe))))
+   (progn
+    (run ./test_core.exe)
+    (run ./test_unix.exe)
+    ))))
