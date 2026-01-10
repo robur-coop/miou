@@ -52,7 +52,8 @@ module Flags : sig
   (** POLLERR from poll(2). Only expected as output, invalid as input. *)
 
   val pollhup : t
-  (** POLLHUP from poll(2). Only expected as output, invalid as input. *)
+  (** POLLHUP from poll(2). Device disconnected. Output is now impossible.
+      Might read EOF. *)
 
   val pollnval : t
   (** POLLNVAL from poll(2). Only expected as output, invalid as input. *)
