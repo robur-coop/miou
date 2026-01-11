@@ -429,7 +429,7 @@ let select uid ic ~block cancelled_syscalls =
       let acc = ref (collect domain []) in
       let fn index fd flags =
         if index == 0 then intr ic
-        else if Poll.Flags.mem flags Poll.Flags.pollin then (
+        else if Poll.Flags.mem flags Poll.Flags.(pollin + pollhup) then (
           Poll.invalidate_index domain.poll index;
           Bitv.set domain.bitv index false;
           match File_descrs.find_opt domain.readers fd with
