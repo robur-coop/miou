@@ -21,5 +21,4 @@
    3
    (progn
     (run ./test_core.exe)
-    (run ./test_unix.exe)
-    ))))
+    (run ./test_unix.exe)))))
