@@ -1,3 +1,42 @@
+### v0.5.0 (2025-10-13)
+
+- Use `poll(2)`/`ppoll(2)` instead of `select(3P)` (#75, @dinosaure, @haesbaert,
+  @hannesm, @backtracking)
+
+  `miou.unix` now uses the `poll(2)` or `ppoll(2)` function if available (the
+  choice is determined at compilation). It replaces the use of `select(3P)` and
+  improves performance. Miou no longer needs to build lists of file descriptors
+  to observe, but instead manipulates a bitv and an array containing these file
+  descriptors.
+
+  The `bitv` implementation comes from the [bitv][bitv] library written by
+  @backtracking, who kindly allowed us to relicense it under MIT.
+
+  Finally, a special thanks to @haesbaert, who originally wrote
+  [ocaml-iomux][iomux], which provides a portable implementation and an OCaml
+  interface for using `poll(2)`/`ppoll(2)`.
+
+  The use of `poll(2)`/`ppoll(2)` should improve performance, as noted in the
+  PR, particularly with regard to our [httpcats][httpcats] HTTP server.
+
+  It should be noted that `dune-configurator` has been added as a new dependency
+  for Miou. However, support for `topkg`/`ocamlbuild` is still maintained (and
+  it is possible to compile and install Miou with this build system).
+
+- Correctly clean-up internals structures used by domains when we call multiple
+  times `Miou_unix.run` and clean-up cancelled file-descriptors
+  (#82, @dinosaure)
+
+- Synchronize `dom0` when one domain receive a signal (#78, @omegametabroccolo,
+  @dinosaure, @reynir, partially fix #77)
+
+- Add `Miou.Ownership.release` to disown and release a resource
+  (@dinosaure, #79)
+
+[bitv]: https://github.com/backtracking/bitv
+[ocaml-iomux]: https://github.com/ocaml-multicore/ocaml-iomux
+[httpcats]: https://github.com/robur-coop/httpcats
+
 ### v0.4.0 (2025-08-06)
 
 - Fix the suspension mechanism and allow the user to pass a function which will

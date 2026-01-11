@@ -1,0 +1,21 @@
+freebsd_instance:
+  image_family: freebsd-14-3
+
+freebsd_task:
+  env:
+    matrix:
+      - OCAML_VERSION: 5.0.0
+      - OCAML_VERSION: 5.1.0
+      - OCAML_VERSION: 5.2.0
+      - OCAML_VERSION: 5.3.0
+      - OCAML_VERSION: 5.4.0
+  pkg_install_script: pkg install -y ocaml-opam gmp gmake pkgconf
+  ocaml_script:
+    - opam init -a --comp=$OCAML_VERSION
+    - opam env
+  pin_packages_script:
+    - opam pin add -y -t --with-version=dev miou.opam .
+  build_script:
+    - opam exec -- dune build -p miou
+  test_script:
+    - opam exec -- dune runtest -p miou

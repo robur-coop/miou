@@ -562,8 +562,8 @@ module Ownership : sig
         Exception: Failure "p".
       ]}
 
-      {b NOTE}: Finaliser can not perform OCaml's effects. This is because it is
-      not "ordered" like an usual task. Using Miou functions (such as
+      {b NOTE}: Finaliser {b can not} perform OCaml's effects. This is because
+      it is not "ordered" like an usual task. Using Miou functions (such as
       {!val:await} or {!val:cancel}) in the finaliser will raise an exception:
       {!exception:Effect.Unhandled}.
 
@@ -588,7 +588,21 @@ module Ownership : sig
         Exception: Miou.Resource_leak.
       ]}
 
-      Note that even in this situation, Miou calls the finaliser. *)
+      Note that even in this abnormal situation, Miou calls the finaliser.
+
+      However, [finally] {b is not} called by [disown]. For example, if we had
+      associated [Unix.close] as a [finally] with a file descriptor as a
+      resource, [disown] {b does not} close the file descriptor and it is up to
+      the user to explicitly close the file descriptor.
+
+      If you want to [disown] AND call [finally], you should use {!val:release}.
+  *)
+
+  val release : t -> unit
+  (** [release t] properly released the resource (and call [finally]) and
+      informs Miou that the resource is properly released. If the current task
+      fails (via cancellation or exception) after [release], the resource
+      finaliser will not be called. *)
 
   val transfer : t -> unit
   (** [transfer t] transfers the ownership of a resource to the parent task. It

@@ -85,16 +85,15 @@ let () =
     match int_of_string Sys.argv.(1) with value -> value | exception _ -> 30
   in
   Miou_unix.run @@ fun () ->
-  let sem = Array.init 5 (fun _ -> Semaphore.create 1) in
-  let state = Array.init 5 (fun _ -> Thinking) in
+  let n = Miou.Domain.available () in
+  let sem = Array.init n (fun _ -> Semaphore.create 1) in
+  let state = Array.init n (fun _ -> Thinking) in
   let sleep =
     Miou.async @@ fun () ->
     Miou_unix.sleep (Float.of_int ts);
     Array.iter Semaphore.release sem
   in
-  let philosophers =
-    List.init (Stdlib.Domain.recommended_domain_count () - 1) Fun.id
-  in
+  let philosophers = List.init n Fun.id in
   let philosophers =
     Miou.async @@ fun () ->
     ignore (Miou.parallel (philosopher sem state) philosophers)

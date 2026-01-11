@@ -6,7 +6,7 @@
 (executable
  (name test_core)
  (modules test_core)
- (libraries test unix miou))
+ (libraries test unix miou miou.unix))
 
 (executable
  (name test_unix)
