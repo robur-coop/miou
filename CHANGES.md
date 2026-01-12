@@ -1,3 +1,10 @@
+### v0.5.1 (2026-01-12)
+
+- Fix a deadlock when we fall into an abnormal situation (when we broke rules)
+  (@dinosaure, #84)
+- Add `POLLHUP` event when we check if a file-descriptor is read-ready
+  (specially for pipe) (@madroach, @dinosaure, #89)
+
 ### v0.5.0 (2025-10-13)
 
 - Use `poll(2)`/`ppoll(2)` instead of `select(3P)` (#75, @dinosaure, @haesbaert,
