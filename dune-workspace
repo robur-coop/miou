@@ -1,0 +1,2 @@
+(lang dune 2.8)
+(env (dev (c_flags -Werror)))
