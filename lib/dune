@@ -47,7 +47,7 @@
  (libraries unix miou))
 
 (rule
- (targets miou_poll_config.ml miou_poll.h)
+ (targets miou_poll_config.ml miou_ppoll.h)
  (deps conf/discover.exe conf/has_ppoll.c)
  (action
   (run ./conf/discover.exe)))

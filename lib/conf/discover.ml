@@ -29,7 +29,7 @@ let has_ppoll_code =
 let () =
   C.main ~name:"discover" @@ fun c ->
   let has_ppoll = C.c_test c has_ppoll_code in
-  C.C_define.gen_header_file c ~fname:"miou_poll.h"
+  C.C_define.gen_header_file c ~fname:"miou_ppoll.h"
     [ ("HAS_PPOLL", Switch has_ppoll) ];
   let has_list = [ Format.asprintf "let has_ppoll = %b" has_ppoll ] in
   let[@ocamlformat "disable"] defs =

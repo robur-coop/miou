@@ -15,7 +15,7 @@
 #include <caml/signals.h>
 #include <caml/unixsupport.h>
 
-#include "miou_poll.h"
+#include "miou_ppoll.h"
 
 CAMLextern int caml_convert_signal_number(int);
 
