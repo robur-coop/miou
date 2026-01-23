@@ -1,3 +1,5 @@
+module Bitv = Miou_bitv
+
 module Logs = Miou.Logs.Make (struct
   let src = "unix"
 end)
