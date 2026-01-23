@@ -59,18 +59,21 @@
    "-Wcast-qual"
    "-Wsign-compare")
   (names miou_unix))
- (modules (:include conf/modules.sexp))
+ (modules
+  (:include conf/modules.sexp))
  (libraries unix miou miou.bitv))
 
 (rule
-  (targets miou_unix.ml)
-  (deps miou_unix.poll.ml miou_unix.select.ml)
-  (action (copy miou_unix.%{read-strings:conf/impl.out}.ml %{targets})))
+ (targets miou_unix.ml)
+ (deps miou_unix.poll.ml miou_unix.select.ml)
+ (action
+  (copy miou_unix.%{read-strings:conf/impl.out}.ml %{targets})))
 
 (rule
  (targets miou_poll_config.ml miou_ppoll.h)
  (deps conf/discover.exe conf/has_ppoll.c)
- (enabled_if (= %{read-strings:conf/impl.out} "poll"))
+ (enabled_if
+  (= %{read-strings:conf/impl.out} "poll"))
  (action
   (run ./conf/discover.exe)))
 
