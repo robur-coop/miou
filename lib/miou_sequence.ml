@@ -1,4 +1,5 @@
 (* (c) Lwt authors *)
+[@@@warning "-69"]
 
 type 'a t = { mutable prev: 'a t; mutable next: 'a t }
 

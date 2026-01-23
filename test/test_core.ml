@@ -318,8 +318,6 @@ module Miouc = struct
     let compare { time= a; _ } { time= b; _ } = Int.compare a b
   end)
 
-  type domain = Heapq.t
-
   let domain =
     let make () = Heapq.create () in
     let domain = Stdlib.Domain.DLS.new_key make in
@@ -361,10 +359,6 @@ module Miouc = struct
     | exception Heapq.Empty -> None
     | { cancelled= true; _ } -> Heapq.delete_min_exn heapq; next ()
     | { time; _ } -> Some time
-
-  let consume_intr fd =
-    let buf = Bytes.create 0x100 in
-    ignore (Unix.read fd buf 0 (Bytes.length buf))
 
   let select _uid interrupt ~block:_ cancelled_syscalls =
     cancel cancelled_syscalls;
