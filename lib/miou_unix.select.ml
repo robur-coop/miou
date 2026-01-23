@@ -416,10 +416,12 @@ let interrupt oc () =
   | n -> assert (n = 1) (* XXX(dinosaure): paranoid mode. *)
   | exception Unix.(Unix_error (EAGAIN, _, _)) -> ()
 
+let is_windows = Sys.os_type = "Win32"
+
 let events domain =
   let ic, oc = Unix.pipe ~cloexec:true () in
-  Unix.set_nonblock ic;
-  Unix.set_nonblock oc;
+  if not is_windows then Unix.set_nonblock ic;
+  if not is_windows then Unix.set_nonblock oc;
   let select = select domain ic in
   let finaliser () = Unix.close ic; Unix.close oc in
   { Miou.interrupt= interrupt oc; select; finaliser }
