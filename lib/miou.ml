@@ -1384,16 +1384,15 @@ let suspend ?(fn = ignore) (Syscall (uid, trigger, prm)) =
        executed in **any** cases. *)
       let finally () = Atomic.decr domain.syscalls in
       Fun.protect ~finally @@ fun () ->
-      begin
-        match Trigger.await trigger with
-        | None -> miou_assert (Trigger.is_signaled trigger)
-        | Some (exn, bt) ->
-            Queue.enqueue domain.cancelled_syscalls uid;
-            Printexc.raise_with_backtrace exn bt
-        | exception exn ->
-            let bt = Printexc.get_raw_backtrace () in
-            Queue.enqueue domain.cancelled_syscalls uid;
-            Printexc.raise_with_backtrace exn bt
+      begin match Trigger.await trigger with
+      | None -> miou_assert (Trigger.is_signaled trigger)
+      | Some (exn, bt) ->
+          Queue.enqueue domain.cancelled_syscalls uid;
+          Printexc.raise_with_backtrace exn bt
+      | exception exn ->
+          let bt = Printexc.get_raw_backtrace () in
+          Queue.enqueue domain.cancelled_syscalls uid;
+          Printexc.raise_with_backtrace exn bt
       end
   | exception exn ->
       let bt = Printexc.get_raw_backtrace () in

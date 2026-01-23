@@ -68,11 +68,10 @@ let test02 =
     Atomic.check @@ fun () ->
     attached_total := !attached_total + !attached;
     unattached_total := !unattached_total + !unattached;
-    begin
-      match Computation.peek computation with
-      | Some (Ok 101) when !returns = 1 && !cancels = 0 -> true
-      | Some (Error (Exit, _)) when !returns = 0 && !cancels = 1 -> true
-      | _ -> false
+    begin match Computation.peek computation with
+    | Some (Ok 101) when !returns = 1 && !cancels = 0 -> true
+    | Some (Error (Exit, _)) when !returns = 0 && !cancels = 1 -> true
+    | _ -> false
     end
     && !attached + !unattached = Array.length triggers
     && !attached
@@ -108,12 +107,10 @@ let test03 =
       &&
       let trigger = Trigger.create () in
       Computation.try_attach computation trigger
-      && begin
-           match Atomic.get computation with
-           | Cancelled _ | Returned _ -> false
-           | Continue { balance; triggers } ->
-               balance = 1 && triggers = [ trigger ]
-         end
+      && begin match Atomic.get computation with
+      | Cancelled _ | Returned _ -> false
+      | Continue { balance; triggers } -> balance = 1 && triggers = [ trigger ]
+      end
 
 let () =
   let tests = [ test01; test02; test03 ] in

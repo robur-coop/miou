@@ -318,8 +318,6 @@ module Miouc = struct
     let compare { time= a; _ } { time= b; _ } = Int.compare a b
   end)
 
-  type domain = Heapq.t
-
   let domain =
     let make () = Heapq.create () in
     let domain = Stdlib.Domain.DLS.new_key make in
@@ -361,10 +359,6 @@ module Miouc = struct
     | exception Heapq.Empty -> None
     | { cancelled= true; _ } -> Heapq.delete_min_exn heapq; next ()
     | { time; _ } -> Some time
-
-  let consume_intr fd =
-    let buf = Bytes.create 0x100 in
-    ignore (Unix.read fd buf 0 (Bytes.length buf))
 
   let select _uid interrupt ~block:_ cancelled_syscalls =
     cancel cancelled_syscalls;
@@ -857,10 +851,13 @@ let test43 =
     | Unix.WSIGNALED n -> Buffer.add_string buf (Fmt.str "WSIGNALED(%d)\n%!" n)
     | Unix.WSTOPPED n -> Buffer.add_string buf (Fmt.str "WSIGNALED(%d)\n%!" n)
   in
-  prgm ();
-  let serialized = Buffer.contents buf in
-  let expected = "sleep launched\nsignal handler installed\nWEXITED(0)\n" in
-  Test.check (serialized = expected)
+  match Sys.os_type with
+  | "Win32" -> ()
+  | _ ->
+      prgm ();
+      let serialized = Buffer.contents buf in
+      let expected = "sleep launched\nsignal handler installed\nWEXITED(0)\n" in
+      Test.check (serialized = expected)
 
 module Bitv = Miou_unix.Bitv
 

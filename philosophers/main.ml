@@ -1,18 +1,12 @@
 module Semaphore = struct
   type t = {
       mutable value: int
-    ; mutable wakeups: int
     ; mutex: Miou.Mutex.t
     ; condition: Miou.Condition.t
   }
 
   let create value =
-    {
-      value
-    ; wakeups= 0
-    ; mutex= Miou.Mutex.create ()
-    ; condition= Miou.Condition.create ()
-    }
+    { value; mutex= Miou.Mutex.create (); condition= Miou.Condition.create () }
 
   let acquire t =
     Miou.Mutex.lock t.mutex;

@@ -79,8 +79,6 @@ let server (stop, sockaddr) =
 
 let localhost_3000 = Unix.ADDR_INET (Unix.inet_addr_any, 3000)
 
-type stop = Miou.Mutex.t * Miou.Condition.t * bool ref
-
 let stop (m, c, v) _signal =
   Miou.Mutex.protect m @@ fun () ->
   v := true;
