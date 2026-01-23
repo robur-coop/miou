@@ -3,6 +3,11 @@
  (modules discover)
  (libraries dune-configurator))
 
+(executable
+ (name select)
+ (modules select)
+ (libraries dune-configurator))
+
 (library
  (name std)
  (modules std))
@@ -20,3 +25,9 @@
  (name has_ppoll)
  (modules has_ppoll)
  (libraries std))
+
+(rule
+ (targets modules.sexp impl.out miou_poll.h)
+ (deps select.exe)
+ (action
+   (run ./select.exe)))

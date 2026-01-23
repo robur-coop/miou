@@ -58,9 +58,14 @@
    "-Wpointer-arith"
    "-Wcast-qual"
    "-Wsign-compare")
-  (names bitv poll))
- (modules miou_unix miou_bitv miou_poll_config miou_poll)
+  (names miou_unix))
+ (modules (:include conf/modules.sexp))
  (libraries unix miou miou.bitv))
+
+(rule
+  (targets miou_unix.ml)
+  (deps miou_unix.poll.ml miou_unix.select.ml)
+  (action (copy miou_unix.%{read-strings:conf/impl.out}.ml %{targets})))
 
 (rule
  (targets miou_poll_config.ml miou_ppoll.h)

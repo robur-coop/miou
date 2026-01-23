@@ -3,6 +3,9 @@
  * Copyright (c) 2025 Romain Calascibetta <romain.calascibetta@gmail.com>
  */
 
+#include "conf/miou_poll.h"
+
+#ifdef HAS_POLL
 #define _GNU_SOURCE
 
 #include <errno.h>
@@ -150,3 +153,5 @@ CAMLprim value /* noalloc */
 miou_unix_poll_max_open_files(value __unused(v_unit)) {
   return (Val_int(sysconf(_SC_OPEN_MAX)));
 }
+
+#endif /* HAS_POLL */
