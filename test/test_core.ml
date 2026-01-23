@@ -851,10 +851,13 @@ let test43 =
     | Unix.WSIGNALED n -> Buffer.add_string buf (Fmt.str "WSIGNALED(%d)\n%!" n)
     | Unix.WSTOPPED n -> Buffer.add_string buf (Fmt.str "WSIGNALED(%d)\n%!" n)
   in
-  prgm ();
-  let serialized = Buffer.contents buf in
-  let expected = "sleep launched\nsignal handler installed\nWEXITED(0)\n" in
-  Test.check (serialized = expected)
+  match Sys.os_type with
+  | "Win32" -> ()
+  | _ ->
+      prgm ();
+      let serialized = Buffer.contents buf in
+      let expected = "sleep launched\nsignal handler installed\nWEXITED(0)\n" in
+      Test.check (serialized = expected)
 
 module Bitv = Miou_unix.Bitv
 
