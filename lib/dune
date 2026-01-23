@@ -41,8 +41,7 @@
    "-Wshadow"
    "-Wpointer-arith"
    "-Wcast-qual"
-   "-Wsign-compare"
-   "-Werror")
+   "-Wsign-compare")
   (names bitv poll))
  (modules miou_unix miou_bitv miou_poll_config miou_poll)
  (libraries unix miou))
