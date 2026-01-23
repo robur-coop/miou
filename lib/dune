@@ -12,6 +12,22 @@
  (libraries miou.backoff))
 
 (library
+ (name bitv)
+ (public_name miou.bitv)
+ (wrapped false)
+ (modules miou_bitv)
+ (foreign_stubs
+  (language c)
+  (flags
+   :standard
+   "-Wall"
+   "-Wshadow"
+   "-Wpointer-arith"
+   "-Wcast-qual"
+   "-Wsign-compare")
+  (names bitv)))
+
+(library
  (name miou)
  (public_name miou)
  (wrapped false)
@@ -44,7 +60,7 @@
    "-Wsign-compare")
   (names bitv poll))
  (modules miou_unix miou_bitv miou_poll_config miou_poll)
- (libraries unix miou))
+ (libraries unix miou miou.bitv))
 
 (rule
  (targets miou_poll_config.ml miou_ppoll.h)
