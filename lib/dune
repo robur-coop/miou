@@ -70,6 +70,7 @@
 (rule
  (targets miou_poll_config.ml miou_ppoll.h)
  (deps conf/discover.exe conf/has_ppoll.c)
+ (enabled_if (= %{read-strings:conf/impl.out} "poll"))
  (action
   (run ./conf/discover.exe)))
 
