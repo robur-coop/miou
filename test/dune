@@ -19,6 +19,14 @@
   (setenv
    MIOU_DOMAINS
    3
-   (progn
-    (run ./test_core.exe)
-    (run ./test_unix.exe)))))
+   (run ./test_core.exe))))
+
+(rule
+ (alias runtest)
+ (enabled_if
+  (<> %{os_type} "Win32"))
+ (action
+  (setenv
+   MIOU_DOMAINS
+   3
+   (run ./test_unix.exe))))

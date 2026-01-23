@@ -13,8 +13,7 @@ let test_eof_on_pipe =
   Unix.clear_close_on_exec cmd_stdout;
   let pid = Unix.(create_process cmd [| cmd |] stdin cmd_stdout stderr) in
   Unix.close cmd_stdout;
-  (* NOTE(dinosaure): [non_blocking] is mandatory for Windows. *)
-  let out = Miou_unix.of_file_descr ~non_blocking:false out in
+  let out = Miou_unix.of_file_descr out in
   let buf = Bytes.create 1 in
   let read = Miou.async @@ fun () -> Miou_unix.read out buf = 0
   and timeout = Miou.async @@ fun () -> Miou_unix.sleep 1.; false
@@ -34,7 +33,6 @@ let test_eof_on_pipe =
      MacOS   | hang   | false     | true   |
      FreeBSD | true   | false     | exn    |
      Linux   | true   | false     | exn    |
-     Windows | true   | false     | exn    |
 
      The goal here is to prevent the [timeout] case by something else:
      - for Linux/FreeBSD, by the fact that we have successfully received the EOF
