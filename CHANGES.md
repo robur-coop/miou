@@ -1,3 +1,9 @@
+### v0.5.2 (2026-01-26)
+
+- Add the Windows support (from our old `Unix.select` implementation)
+  (@dinosaure, #94)
+- Use `-Werror` only on the released mode (@dinosaure, #93)
+
 ### v0.5.1 (2026-01-12)
 
 - Fix a deadlock when we fall into an abnormal situation (when we broke rules)
