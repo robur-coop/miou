@@ -825,43 +825,9 @@ let test42 =
   let prm1 = Miou.call @@ fun () -> Miou.yield () in
   Miou.await_exn prm1; Miou.cancel prm0; Test.check true
 
-let test43 =
-  let description = {text|Unix.create_process|text} in
-  Test.test ~title:"test43" ~description @@ fun () ->
-  let buf = Buffer.create 0x7ff in
-  let prgm () =
-    Miou.run @@ fun () ->
-    let pid =
-      Unix.create_process "sleep" [| "sleep"; "2" |] Unix.stdin Unix.stdout
-        Unix.stderr
-    in
-    Buffer.add_string buf "sleep launched\n";
-    let cmp = Miou.Computation.create () in
-    let rec fn _sigchld =
-      match Unix.waitpid [ WNOHANG ] pid with
-      | 0, _ -> ignore (Miou.sys_signal Sys.sigchld (Sys.Signal_handle fn))
-      | pid', status ->
-          assert (pid = pid');
-          assert (Miou.Computation.try_return cmp status)
-    in
-    ignore (Miou.sys_signal Sys.sigchld (Sys.Signal_handle fn));
-    Buffer.add_string buf "signal handler installed\n";
-    match Miou.Computation.await_exn cmp with
-    | Unix.WEXITED n -> Buffer.add_string buf (Fmt.str "WEXITED(%d)\n%!" n)
-    | Unix.WSIGNALED n -> Buffer.add_string buf (Fmt.str "WSIGNALED(%d)\n%!" n)
-    | Unix.WSTOPPED n -> Buffer.add_string buf (Fmt.str "WSIGNALED(%d)\n%!" n)
-  in
-  match Sys.os_type with
-  | "Win32" -> ()
-  | _ ->
-      prgm ();
-      let serialized = Buffer.contents buf in
-      let expected = "sleep launched\nsignal handler installed\nWEXITED(0)\n" in
-      Test.check (serialized = expected)
-
 module Bitv = Miou_unix.Bitv
 
-let test44 =
+let test43 =
   let description = {text|Bitv.next|text} in
   Test.test ~title:"test44" ~description @@ fun () ->
   let t = Bitv.create 1024 false in
@@ -876,7 +842,7 @@ let test44 =
   Test.check !v;
   Test.check (Bitv.next t = None)
 
-let test45 =
+let test44 =
   let description = {text|Bitv.max|text} in
   Test.test ~title:"test45" ~description @@ fun () ->
   let t = Bitv.create 1024 false in
@@ -896,7 +862,7 @@ let () =
     ; test10; test11; test12; test13; test14; test15; test16; test17; test18
     ; test19; test20; test21; test22; test23; test24; test25; test26; test27
     ; test28; test29; test30; test31; test32; test33; test34; test35; test36
-    ; test37; test38; test39; test40; test41; test42; test43; test44; test45
+    ; test37; test38; test39; test40; test41; test42; test43; test44
     ]
   in
   let ({ Test.directory } as runner) =

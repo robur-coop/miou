@@ -45,8 +45,42 @@ let test_eof_on_pipe =
   end;
   List.iter Miou.cancel jobs
 
+let test_create_process =
+  let description = {text|Unix.create_process|text} in
+  Test.test ~title:"create process" ~description @@ fun () ->
+  let buf = Buffer.create 0x7ff in
+  let prgm () =
+    Miou_unix.run ~domains:0 @@ fun () ->
+    let pid =
+      Unix.create_process "sleep" [| "sleep"; "2" |] Unix.stdin Unix.stdout
+        Unix.stderr
+    in
+    Buffer.add_string buf "sleep launched\n";
+    let cmp = Miou.Computation.create () in
+    let rec fn _sigchld =
+      match Unix.waitpid [ WNOHANG ] pid with
+      | 0, _ -> ignore (Miou.sys_signal Sys.sigchld (Sys.Signal_handle fn))
+      | pid', status ->
+          assert (pid = pid');
+          assert (Miou.Computation.try_return cmp status)
+    in
+    ignore (Miou.sys_signal Sys.sigchld (Sys.Signal_handle fn));
+    Buffer.add_string buf "signal handler installed\n";
+    match Miou.Computation.await_exn cmp with
+    | Unix.WEXITED n -> Buffer.add_string buf (Fmt.str "WEXITED(%d)\n%!" n)
+    | Unix.WSIGNALED n -> Buffer.add_string buf (Fmt.str "WSIGNALED(%d)\n%!" n)
+    | Unix.WSTOPPED n -> Buffer.add_string buf (Fmt.str "WSIGNALED(%d)\n%!" n)
+  in
+  match Sys.os_type with
+  | "Win32" -> ()
+  | _ ->
+      prgm ();
+      let serialized = Buffer.contents buf in
+      let expected = "sleep launched\nsignal handler installed\nWEXITED(0)\n" in
+      Test.check (serialized = expected)
+
 let () =
-  let tests = [| test_eof_on_pipe |] in
+  let tests = [| test_eof_on_pipe; test_create_process |] in
   let ({ Test.directory } as runner) =
     Test.runner (Filename.concat (Sys.getcwd ()) "_tests")
   in
