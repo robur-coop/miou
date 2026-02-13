@@ -1,3 +1,8 @@
+### v0.5.3 (2026-02-13)
+
+- Fix how we handle signals and transfer them to the `dom0` (#98, @dinosaure,
+  reported by @voodoos)
+
 ### v0.5.2 (2026-01-26)
 
 - Add the Windows support (from our old `Unix.select` implementation)
