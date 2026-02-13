@@ -796,7 +796,12 @@ module Domain = struct
     let syscalls = domain.events.select ~block cancelled in
     List.iter (signal_system_events domain) syscalls
 
-  let system_events_suspended domain = Atomic.get domain.syscalls > 0
+  let system_events_suspended domain =
+    (* NOTE(dinosaure): we consider a signal as a system event which can
+       probably triggers the creation of new task (only on our [dom0]). *)
+    match (domain.uid :> int) with
+    | 0 -> Atomic.get domain.syscalls > 0 || not (Queue.is_empty signals)
+    | _ -> Atomic.get domain.syscalls > 0
 
   let run_hooks domain =
     let apply ({ Miou_sequence.data= fn; _ } as node) =
