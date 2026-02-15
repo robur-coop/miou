@@ -1,3 +1,8 @@
+### v0.5.4 (2026-02-15)
+
+- Fix the MacOS support and the return value of `poll(3P)` (#100, @voodoos,
+  @dinosaure)
+
 ### v0.5.3 (2026-02-13)
 
 - Fix how we handle signals and transfer them to the `dom0` (#98, @dinosaure,
