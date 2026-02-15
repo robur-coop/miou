@@ -40,7 +40,7 @@ CAMLprim value miou_unix_poll(value v_fds, value v_nfds, value v_timo) {
   if (r == -1)
     uerror("poll", Nothing); /* allocation */
 
-  CAMLreturn(Val_unit);
+  CAMLreturn(Val_int(r));
 }
 
 #ifdef HAS_PPOLL
