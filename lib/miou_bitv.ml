@@ -15,7 +15,7 @@
 external bytes_unsafe_set : bytes -> int -> int -> unit = "%bytes_unsafe_set"
 external bytes_unsafe_get : bytes -> int -> int = "%bytes_unsafe_get"
 
-type t = { length: int; bits: bytes }
+type t = { length: int; bits: bytes; mutable hi: int }
 
 let length { length; _ } = length
 let[@inline] equal (v1 : t) (v2 : t) = v1 = v2
@@ -34,11 +34,13 @@ let create n b =
   if n < 0 || n > max_length then invalid_arg "Miou_unix.Bitv.create";
   let initv = if b then 255 else 0 in
   let q = n lsr 3 and r = n land 7 in
-  if r == 0 then { length= n; bits= Bytes.make q (Char.chr initv) }
+  if r == 0 then
+    let bits = Bytes.make q (Char.chr initv) in
+    { length= n; bits; hi= if b then n else 0 }
   else begin
     let s = Bytes.make (q + 1) (Char.chr initv) in
     bytes_unsafe_set s q (initv land low_mask.(r));
-    { length= n; bits= s }
+    { length= n; bits= s; hi= if b then n else 0 }
   end
 
 let unsafe_get v n =
@@ -49,6 +51,10 @@ let get v n =
   if n < 0 || n >= v.length then invalid_arg "Miou_unix.Bitv.get";
   unsafe_get v n
 
+external miou_bitv_clz : bytes -> (int[@untagged])
+  = "miou_bitv_clz_bytecode" "miou_bitv_clz_native"
+[@@noalloc]
+
 let unsafe_set v n b =
   let i = n lsr 3 in
   let c = bytes_unsafe_get v.bits i in
@@ -57,7 +63,9 @@ let unsafe_set v n b =
 
 let set v n b =
   if n < 0 || n >= v.length then invalid_arg "Miou_unix.Bitv.set";
-  unsafe_set v n b
+  unsafe_set v n b;
+  if b then (if n + 1 > v.hi then v.hi <- n + 1)
+  else if n + 1 = v.hi then v.hi <- miou_bitv_clz v.bits
 
 let ntz = Array.make 256 0
 
@@ -90,8 +98,4 @@ let next v =
   let n = miou_bitv_next v.bits in
   if n < v.length then Some n else None
 
-external miou_bitv_clz : bytes -> (int[@untagged])
-  = "miou_bitv_clz_bytecode" "miou_bitv_clz_native"
-[@@noalloc]
-
-let max v = miou_bitv_clz v.bits
+let max v = v.hi
