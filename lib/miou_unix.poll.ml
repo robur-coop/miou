@@ -399,7 +399,7 @@ let transmit_and_clean domain syscall =
   Hashtbl.remove domain.revert (Miou.uid syscall);
   Miou.signal syscall
 
-let select uid ic ~block cancelled_syscalls =
+let select _uid ic ~block cancelled_syscalls =
   let domain = domain () in
   clean domain cancelled_syscalls;
   let timeout : Poll.ppoll_timeout =
@@ -411,20 +411,9 @@ let select uid ic ~block cancelled_syscalls =
         let value = Float.max value 0.0 *. 1e9 in
         Poll.Nanoseconds (Int64.of_float value)
   in
-  Logs.debug (fun m ->
-      m "[%a] [readers:%dw, writers:%dw, sleepers:%dw, revert:%dw]"
-        Miou.Domain.Uid.pp uid
-        Obj.(reachable_words (repr domain.readers))
-        Obj.(reachable_words (repr domain.writers))
-        Obj.(reachable_words (repr domain.sleepers))
-        Obj.(reachable_words (repr domain.revert)));
   let nready = Bitv.max domain.bitv in
-  Logs.debug (fun m -> m "[%a] [nready:%d]" Miou.Domain.Uid.pp uid nready);
   match Poll.ppoll_or_poll domain.poll nready timeout with
-  | exception Unix.(Unix_error (EINTR, _, _)) ->
-      Logs.debug (fun m ->
-          m "[%a] interrupted by the system" Miou.Domain.Uid.pp uid);
-      collect domain []
+  | exception Unix.(Unix_error (EINTR, _, _)) -> collect domain []
   | nready ->
       let acc = ref (collect domain []) in
       let fn index fd flags =
