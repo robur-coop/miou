@@ -38,8 +38,24 @@ CAMLprim value miou_bitv_next_bytecode(value v_buf) {
 intnat miou_bitv_clz_native(value v_buf) {
   mlsize_t tmp;
   tmp = Bosize_val(v_buf) - 1;
-  mlsize_t i = (tmp - Byte(v_buf, tmp)) - 1;
+  mlsize_t len = (tmp - Byte(v_buf, tmp));
+  if (len == 0)
+    return 0;
+
   uint8_t *d8 = (uint8_t *)Bytes_val(v_buf);
+  mlsize_t i = len - 1;
+
+#ifdef ARCH_SIXTYFOUR
+  {
+    uint64_t *d64 = (uint64_t *)d8;
+    mlsize_t j = i / 8;
+    while (j > 0 && d64[j] == 0)
+      j--;
+    i = j * 8 + 7;
+    if (i >= len)
+      i = len - 1;
+  }
+#endif
 
   while (d8[i] == 0 && i > 0)
     i--;
