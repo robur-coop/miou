@@ -411,6 +411,21 @@
     In both cases and in such a situation, an exception is thrown:
     {!exception:No_domain_available}.
 
+    {5 [dom0] and its role.}
+
+    It is worth noting the specific nature of the [dom0]. Although the user may
+    wish to run all their tasks in parallel on the other domains, if the [dom0]
+    is not involved in a job (via {!val:Miou.async}), it will remain in a
+    {i burning-loop} state (100% CPU usage) even whilst waiting for the results
+    of the parallel tasks.
+
+    This is {b expected} behaviour, although counterintuitive. The fact is that
+    the [dom0] monitors several events (such as signals), the domains and their
+    results.
+
+    It is therefore advisable to involve the [dom0] in the work via at least one
+    {!val:Miou.async}.
+
     {4 Rule 7, suspension points are local to the domain.}
 
     A suspension point is local to the domain. This means that only the domain
