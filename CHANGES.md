@@ -1,3 +1,10 @@
+### v0.5.5 (2026-03-25)
+
+- Improve how we manipulate our internal bitv structure for `Miou_unix`
+  (@dinosaure, #102)
+- Improve the documentation about specifities related to the `dom0`
+  (@dinosaure, @voodoos, #104 and #103)
+
 ### v0.5.4 (2026-02-15)
 
 - Fix the MacOS support and the return value of `poll(3P)` (#100, @voodoos,
