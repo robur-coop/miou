@@ -15,13 +15,10 @@ let to_file_descr { fd; _ } = fd
 let nonblocking_stream fam =
   let open Unix in
   let fd = socket fam SOCK_STREAM 0 in
-  set_nonblock fd;
-  { fd; non_blocking= true }
+  set_nonblock fd; { fd; non_blocking= true }
 
 let unix_socket () = nonblocking_stream Unix.PF_UNIX
-
 let tcpv4 () = nonblocking_stream Unix.PF_INET
-
 let tcpv6 () = nonblocking_stream Unix.PF_INET6
 
 let bind_and_listen ?(backlog = 64) ?(reuseaddr = true) ?(reuseport = true)

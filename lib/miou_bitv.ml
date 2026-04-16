@@ -36,11 +36,11 @@ let create n b =
   let q = n lsr 3 and r = n land 7 in
   if r == 0 then
     let bits = Bytes.make q (Char.chr initv) in
-    { length= n; bits; hi= if b then n else 0 }
+    { length= n; bits; hi= (if b then n else 0) }
   else begin
     let s = Bytes.make (q + 1) (Char.chr initv) in
     bytes_unsafe_set s q (initv land low_mask.(r));
-    { length= n; bits= s; hi= if b then n else 0 }
+    { length= n; bits= s; hi= (if b then n else 0) }
   end
 
 let unsafe_get v n =
