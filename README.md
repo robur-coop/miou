@@ -234,9 +234,9 @@ users and the OCaml community in general.
 
 [repository]: https://github.com/robur-coop/miou
 [github]: https://github.com/robur-coop/miou
-[documentation]: https://docs.osau.re/miou/
-[sleepers]: https://docs.osau.re/miou/sleepers.html
-[echo]: https://docs.osau.re/miou/echo.html
+[documentation]: https://docs.osau.re/local/miou/
+[sleepers]: https://docs.osau.re/local/miou/sleepers.html
+[echo]: https://docs.osau.re/local/miou/echo.html
 [robur]: https://robur.coop/
 [book]: https://robur-coop.github.io/miou
 [discuss]: https://discuss.ocaml.org/t/on-concurrency-models/15899/13?u=dinosaure
