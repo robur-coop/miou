@@ -133,7 +133,7 @@ let clean_children ~self (child : _ t) =
     try Miou_sequence.iter_node ~f self.children
     with Clean_children node -> Miou_sequence.remove node
 
-type syscall = Syscall : Syscall_uid.t * Trigger.t * _ t -> syscall
+type syscall = Syscall : string * Syscall_uid.t * Trigger.t * _ t -> syscall
 type signal = Signal : Trigger.t * _ t -> signal
 type uid = Syscall_uid.t
 type select = block:bool -> uid list -> signal list
@@ -306,6 +306,92 @@ let[@coverage off] _pp_domain_elt ppf = function
       Fmt.pf ppf "@[<1>(Domain_signal@ %a:%d)@]" Promise.pp prm signal
   | Domain_tick _ -> .
 
+module Trace = struct
+  [@@@warning "-32"]
+
+  let trace = Option.is_some (Sys.getenv_opt "MIOU_TRACE")
+
+  open Miou_runtime_events
+
+  let event : type a. a Runtime_events.User.t -> (unit -> a) -> unit =
+   fun k fn -> if trace then Runtime_events.User.write k (fn ())
+
+  let spawn ?(kind = `Async) (prm : _ t) =
+    let parent =
+      match prm.parent with
+      | None -> Promise_uid.(to_int null)
+      | Some (Pack parent) -> Promise_uid.to_int parent.uid
+    in
+    let runner = Domain_uid.to_int prm.runner in
+    let uid = Promise_uid.to_int prm.uid in
+    event spawn @@ fun () -> { uid; parent; runner; kind }
+
+  let location (prm : _ t) (filename, line) =
+    let uid = Promise_uid.to_int prm.uid in
+    event spawn_location @@ fun () -> (uid, filename, line)
+
+  let prm_begin (prm : _ t) =
+    let uid = Promise_uid.to_int prm.uid in
+    event prm_begin @@ fun () -> uid
+
+  let prm_end (prm : _ t) =
+    let uid = Promise_uid.to_int prm.uid in
+    event prm_end @@ fun () -> uid
+
+  let await (prm : _ t) =
+    let uid = Promise_uid.to_int prm.uid in
+    event await @@ fun () -> uid
+
+  let cancel (prm : _ t) =
+    let uid = Promise_uid.to_int prm.uid in
+    event cancel @@ fun () -> uid
+
+  let resume (prm : _ t) =
+    let uid = Promise_uid.to_int prm.uid in
+    event resume @@ fun () -> uid
+
+  let cancelled (prm : _ t) =
+    let uid = Promise_uid.to_int prm.uid in
+    event cancelled @@ fun () -> uid
+
+  let suspend (prm : _ t) name =
+    let uid = Promise_uid.to_int prm.uid in
+    event suspend @@ fun () -> (uid, name)
+
+  let unblock (prm : _ t) name =
+    let uid = Promise_uid.to_int prm.uid in
+    event unblock @@ fun () -> (uid, name)
+
+  let yield (prm : _ t) =
+    let uid = Promise_uid.to_int prm.uid in
+    event yield @@ fun () -> uid
+
+  let still_has_children (prm : _ t) =
+    let uid = Promise_uid.to_int prm.uid in
+    event still_has_children @@ fun () -> uid
+
+  let not_a_child ~(self : _ t) (prm : _ t) =
+    let uid0 = Promise_uid.to_int self.uid in
+    let uid1 = Promise_uid.to_int prm.uid in
+    event not_a_child @@ fun () -> (uid0, uid1)
+
+  let attach ~(prm : _ t) (Resource { uid= res_uid; _ }) =
+    let uid0 = Resource_uid.to_int res_uid in
+    let uid1 = Promise_uid.to_int prm.uid in
+    event attach @@ fun () -> (uid0, uid1)
+
+  let detach ~(prm : _ t) (Resource { uid= res_uid; _ }) =
+    let uid0 = Resource_uid.to_int res_uid in
+    let uid1 = Promise_uid.to_int prm.uid in
+    event detach @@ fun () -> (uid0, uid1)
+
+  let finish (prm : _ t) =
+    let uid = Promise_uid.to_int prm.uid in
+    event prm_finish @@ fun () -> uid
+
+  [@@@warning "+32"]
+end
+
 let add_into_domain domain elt =
   let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
   miou_assert (Domain_uid.equal runner domain.uid);
@@ -435,6 +521,7 @@ module Domain = struct
     | (State.Suspended _ | State.Unhandled _) as state ->
         add_into_domain domain (Domain_task (prm, state))
     | State.Finished (Error (exn, bt)) ->
+        Trace.finish prm;
         let f (Resource { uid; value; finaliser }) =
           try finaliser value
           with exn ->
@@ -466,8 +553,11 @@ module Domain = struct
           Miou_sequence.drop prm.resources;
           raise_notrace Resource_leaked
         end;
-        if Promise.children_terminated prm = false then
-          raise_notrace Still_has_children;
+        if Promise.children_terminated prm = false then begin
+          Trace.still_has_children prm;
+          raise_notrace Still_has_children
+        end;
+        Trace.finish prm;
         interrupt_parent pool prm;
         ignore (Computation.try_return prm.state value)
 
@@ -531,6 +621,7 @@ module Domain = struct
           let prm' = Promise.create ~parent:prm ~forbid ~resources domain.uid in
           canceller pool ~self:prm prm';
           Miou_sequence.(add Left) prm.children (Pack prm');
+          Trace.spawn prm';
           add_into_domain domain (Domain_create (prm', fn));
           k (Operation.return prm')
       | Spawn (Parallel runner, forbid, resources, fn) ->
@@ -538,10 +629,12 @@ module Domain = struct
           let prm' = Promise.create ~parent:prm ~forbid ~resources runner in
           canceller pool ~self:prm prm';
           Miou_sequence.(add Left) prm.children (Pack prm');
+          Trace.spawn ~kind:`Parallel prm';
           add_into_pool pool (Pool_create (prm', fn));
           k (Operation.return prm')
       | Cancel (backtrace, child) ->
           cancel pool domain ~backtrace child;
+          Trace.cancel child;
           k (Operation.continue (Await_cancellation child))
       | Await_cancellation child as await ->
           if
@@ -551,7 +644,10 @@ module Domain = struct
                sure that children of our [child] are cancelled too. However,
                [child.cleaned] should be enough. *)
             && Atomic.get child.cleaned
-          then k (Operation.return (clean_children ~self:prm child))
+          then begin
+            Trace.cancelled child;
+            k (Operation.return (clean_children ~self:prm child))
+          end
           else k (Operation.continue await)
       | Transfer res ->
           let (Pack parent) = Option.get prm.parent in
@@ -561,7 +657,7 @@ module Domain = struct
           else add_into_pool pool (Pool_transfer (parent, res, trigger));
           k (Operation.return trigger)
       | Trigger.Await _ -> k Operation.interrupt
-      | Yield -> k Operation.yield
+      | Yield -> Trace.yield prm; k Operation.yield
       | eff -> k (Operation.perform eff)
     in
     { perform }
@@ -571,6 +667,7 @@ module Domain = struct
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
     if not (Promise.has_forbidden prm) then Computation.detach prm.state trigger;
     let result = Computation.cancelled prm.state in
+    Trace.resume prm;
     if Domain_uid.equal runner domain.uid then
       let state = State.suspended_with k (Get result) in
       add_into_domain domain (Domain_task (prm, state))
@@ -677,6 +774,7 @@ module Domain = struct
         match Computation.cancelled prm.state with
         | None ->
             let state = State.make fn () in
+            Trace.prm_end prm;
             handle pool domain prm state
         | Some (exn, bt) ->
             Logs.debug (fun m ->
@@ -686,6 +784,7 @@ module Domain = struct
             Atomic.set prm.cleaned true;
             handle pool domain prm state)
     | Domain_task (prm, State.Suspended (k, Trigger.Await trigger)) ->
+        Trace.await prm;
         await pool domain prm trigger k
     | Domain_signal (prm, _signal, State.Suspended (k, Trigger.Await trigger))
       ->
@@ -699,7 +798,9 @@ module Domain = struct
                [Continuation_already_resumed] exception. If we do, it's a
                violation of our rules, namely that only the domain in charge of
                the promise can continue the continuation [k]. *)
+            Trace.prm_begin prm;
             let state = State.run ~quanta:domain.quanta ~perform state in
+            Trace.prm_end prm;
             handle pool domain prm state
         | Some (exn, bt) ->
             let state = State.fail ~backtrace:bt ~exn state in
@@ -718,7 +819,9 @@ module Domain = struct
         let perform = perform pool domain prm in
         match Computation.cancelled prm.state with
         | None ->
+            Trace.prm_begin prm;
             let state = State.run ~quanta:domain.quanta ~perform state in
+            Trace.prm_end prm;
             handle_signal ~signal domain prm state
         | Some (exn, bt) ->
             let state = State.fail ~backtrace:bt ~exn state in
@@ -1049,7 +1152,10 @@ module Ownership = struct
     let equal (Resource { uid= uid'; _ }) = Resource_uid.equal uid uid' in
     if Miou_sequence.exists equal self.resources then
       invalid_arg "The current promise already holds the resource given"
-    else Miou_sequence.(add Left) self.resources res
+    else begin
+      Trace.attach ~prm:self res;
+      Miou_sequence.(add Left) self.resources res
+    end
 
   exception Found_resource of resource Miou_sequence.node
 
@@ -1062,7 +1168,9 @@ module Ownership = struct
       in
       Miou_sequence.iter_node ~f self.resources;
       raise Not_owner
-    with Found_resource node -> Miou_sequence.remove node
+    with Found_resource node ->
+      Trace.detach ~prm:self node.Miou_sequence.data;
+      Miou_sequence.remove node
 
   let release (Resource { uid; finaliser; value }) =
     let (Pack self) = Effect.perform Self in
@@ -1080,7 +1188,10 @@ module Ownership = struct
       in
       Miou_sequence.iter_node ~f self.resources;
       raise Not_owner
-    with Found_resource node -> finaliser value; Miou_sequence.remove node
+    with Found_resource node ->
+      finaliser value;
+      Trace.detach ~prm:self node.Miou_sequence.data;
+      Miou_sequence.remove node
 
   let transfer (Resource { uid; _ } as res) =
     let (Pack self) = Effect.perform Self in
@@ -1134,16 +1245,28 @@ let rec add_into_orphans : type a.
       end
       else invalid_arg "The given orphans is owned by another promise"
 
+let location () =
+  let bt = Printexc.get_callstack 10 in
+  let ( let* ) = Option.bind in
+  let* slots = Printexc.backtrace_slots bt in
+  let* { Printexc.filename; line_number; _ } =
+    Printexc.Slot.location slots.(2)
+  in
+  Some (filename, line_number)
+
 let async ?(give = []) ?orphans fn =
+  let loc = location () in
   let (Pack self) = Effect.perform Self in
   let prm = Effect.perform (Spawn (Concurrent, false, give, fn)) in
   Option.iter (add_into_orphans ~self prm) orphans;
+  Option.iter (Trace.location prm) loc;
   Logs.debug (fun m -> m "%a spawned" Promise.pp prm);
   prm
 
 let call ?pin ?(give = []) ?orphans fn =
   let domains = Effect.perform Domains in
   if domains = [] then raise No_domain_available;
+  let loc = location () in
   let (Pack self) = Effect.perform Self in
   let runner =
     match pin with
@@ -1166,14 +1289,17 @@ let call ?pin ?(give = []) ?orphans fn =
   in
   let prm = Effect.perform (Spawn (Parallel runner, false, give, fn)) in
   Option.iter (add_into_orphans ~self prm) orphans;
+  Option.iter (Trace.location prm) loc;
   prm
 
 let await prm =
   let (Pack self) = Effect.perform Self in
   Logs.debug (fun m -> m "%a await %a" Promise.pp self Promise.pp prm);
   let some (Pack parent) = Promise_uid.equal self.uid parent.uid in
-  if not (Option.fold ~none:false ~some prm.parent) then
-    raise_notrace Not_a_child;
+  if not (Option.fold ~none:false ~some prm.parent) then begin
+    Trace.not_a_child ~self prm;
+    raise_notrace Not_a_child
+  end;
   let finally () = clean_children ~self prm in
   Fun.protect ~finally @@ fun () ->
   match Computation.await prm.state with
@@ -1198,7 +1324,12 @@ let await_one prms =
   let g = Effect.perform Random in
   let some (Pack parent) = Promise_uid.equal self.uid parent.uid in
   let is_a_child prm = Option.fold ~none:false ~some prm.parent in
-  if not (List.for_all is_a_child prms) then raise_notrace Not_a_child;
+  if not (List.for_all is_a_child prms) then begin
+    List.iter
+      (fun prm -> if not (is_a_child prm) then Trace.not_a_child ~self prm)
+      prms;
+    raise_notrace Not_a_child
+  end;
   let c = Computation.create () in
   let choose =
     Computation.try_capture c @@ fun () ->
@@ -1255,7 +1386,12 @@ let await_first prms =
   let some (Pack parent) = Promise_uid.equal self.uid parent.uid in
   let is_a_child prm = Option.fold ~none:false ~some prm.parent in
   let bt = Printexc.get_callstack max_int in
-  if not (List.for_all is_a_child prms) then raise_notrace Not_a_child;
+  if not (List.for_all is_a_child prms) then begin
+    List.iter
+      (fun prm -> if not (is_a_child prm) then Trace.not_a_child ~self prm)
+      prms;
+    raise_notrace Not_a_child
+  end;
   let c = Computation.create () in
   let choose =
     Computation.try_capture c @@ fun () ->
@@ -1358,7 +1494,7 @@ let parallel fn tasks =
 
 let yield () = Effect.perform Yield
 
-let syscall () =
+let syscall ?name () =
   let uid = Syscall_uid.gen () in
   let trigger = Trigger.create () in
   let (Pack self) = Effect.perform Self in
@@ -1366,9 +1502,10 @@ let syscall () =
   let domain = Effect.perform Self_domain in
   miou_assert (Domain_uid.equal runner domain.uid);
   miou_assert (Domain_uid.equal runner self.runner);
-  Syscall (uid, trigger, self)
+  let name = Option.value ~default:(string_of_int (uid :> int)) name in
+  Syscall (name, uid, trigger, self)
 
-let suspend ?(fn = ignore) (Syscall (uid, trigger, prm)) =
+let suspend ?(fn = ignore) (Syscall (name, uid, trigger, prm)) =
   let domain = Effect.perform Self_domain in
   let (Pack self) = Effect.perform Self in
   if Promise_uid.equal self.uid prm.uid = false then
@@ -1389,28 +1526,30 @@ let suspend ?(fn = ignore) (Syscall (uid, trigger, prm)) =
        executed in **any** cases. *)
       let finally () = Atomic.decr domain.syscalls in
       Fun.protect ~finally @@ fun () ->
-      begin match Trigger.await trigger with
-      | None -> miou_assert (Trigger.is_signaled trigger)
-      | Some (exn, bt) ->
-          Queue.enqueue domain.cancelled_syscalls uid;
-          Printexc.raise_with_backtrace exn bt
-      | exception exn ->
-          let bt = Printexc.get_raw_backtrace () in
-          Queue.enqueue domain.cancelled_syscalls uid;
-          Printexc.raise_with_backtrace exn bt
+      begin
+        Trace.suspend self name;
+        match Trigger.await trigger with
+        | None -> miou_assert (Trigger.is_signaled trigger)
+        | Some (exn, bt) ->
+            Queue.enqueue domain.cancelled_syscalls uid;
+            Printexc.raise_with_backtrace exn bt
+        | exception exn ->
+            let bt = Printexc.get_raw_backtrace () in
+            Queue.enqueue domain.cancelled_syscalls uid;
+            Printexc.raise_with_backtrace exn bt
       end
   | exception exn ->
       let bt = Printexc.get_raw_backtrace () in
       Queue.enqueue domain.cancelled_syscalls uid;
       Printexc.raise_with_backtrace exn bt
 
-let signal (Syscall (_uid, trigger, prm)) =
+let signal (Syscall (_name, _uid, trigger, prm)) =
   let runner' = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
   if Domain_uid.equal prm.runner runner' = false then
     invalid_arg "This syscall does not belong to the current domain.";
   Signal (trigger, prm)
 
-let uid (Syscall (uid, _, _)) = uid
+let uid (Syscall (_, uid, _, _)) = uid
 
 let orphans () =
   {

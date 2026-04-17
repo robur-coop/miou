@@ -1144,7 +1144,7 @@ type signal
 type uid = private int [@@immediate]
 (** The type of unique IDs of {!type:syscall}s. *)
 
-val syscall : unit -> syscall
+val syscall : ?name:string -> unit -> syscall
 (** [syscall ()] creates a {i syscall} which permits the user to create a new
     suspension point via {!val:suspend}. *)
 

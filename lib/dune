@@ -40,10 +40,11 @@
   miou_pqueue
   miou_sequence
   miou_queue
+  miou_runtime_events
   miou_state)
  (instrumentation
   (backend bisect_ppx))
- (libraries miou.backoff miou.sync))
+ (libraries runtime_events miou.backoff miou.sync))
 
 (library
  (name miou_unix)
