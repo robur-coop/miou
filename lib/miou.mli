@@ -462,6 +462,7 @@ module Trigger = Miou_sync.Trigger
 module Computation = Miou_sync.Computation
 module Queue = Miou_queue
 module Backoff = Miou_backoff
+module Runtime_events = Miou_runtime_events
 
 external reraise : exn -> 'a = "%reraise"
 (** [reraise exn] raises the exception [exn]. Unlike [raise exn], [reraise exn]
