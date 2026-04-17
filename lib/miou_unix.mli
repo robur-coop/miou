@@ -102,6 +102,9 @@ val of_file_descr : ?non_blocking:bool -> Unix.file_descr -> file_descr
 val to_file_descr : file_descr -> Unix.file_descr
 (** [to_file_descr fd] returns the {i real} {!type:Unix.file_descr}. *)
 
+val unix_socket : unit -> file_descr
+(** [unix_socket ()] allocates a new Unix-domain socket. *)
+
 val tcpv4 : unit -> file_descr
 (** [tcpv4 ()] allocates a new IPv4 socket. *)
 
