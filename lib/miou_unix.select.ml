@@ -123,8 +123,8 @@ let append tbl fd syscall =
     File_descrs.replace tbl fd (syscall :: syscalls)
   with Not_found -> File_descrs.add tbl fd [ syscall ]
 
-let blocking_read fd =
-  let syscall = Miou.syscall () in
+let blocking_read ?(name = "read") fd =
+  let syscall = Miou.syscall ~name () in
   let uid = Miou.uid syscall in
   let domain = domain () in
   let fn () =
@@ -133,8 +133,8 @@ let blocking_read fd =
   in
   Miou.suspend ~fn syscall
 
-let blocking_write fd =
-  let syscall = Miou.syscall () in
+let blocking_write ?(name = "write") fd =
+  let syscall = Miou.syscall ~name () in
   let uid = Miou.uid syscall in
   let domain = domain () in
   let fn () =
@@ -212,7 +212,8 @@ let rec accept ?cloexec ({ fd; non_blocking } as file_descr) =
     match Unix.accept ?cloexec fd with
     | exception Unix.(Unix_error (EINTR, _, _)) -> accept ?cloexec file_descr
     | exception Unix.(Unix_error ((EAGAIN | EWOULDBLOCK), _, _)) ->
-        blocking_read fd; accept ?cloexec file_descr
+        blocking_read ~name:"accept" fd;
+        accept ?cloexec file_descr
     | fd, sockaddr ->
         Unix.set_nonblock fd;
         let file_descr = { fd; non_blocking= true } in
@@ -236,7 +237,7 @@ let rec connect ({ fd; non_blocking } as file_descr) sockaddr =
   | () -> ()
   | exception Unix.(Unix_error (EINTR, _, _)) -> connect file_descr sockaddr
   | exception Unix.(Unix_error (EINPROGRESS, _, _)) -> (
-      blocking_write fd;
+      blocking_write ~name:"connect" fd;
       match Unix.getsockopt_error fd with
       | None -> ()
       | Some err -> raise (Unix.Unix_error (err, "connect", "")))

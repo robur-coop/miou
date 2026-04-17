@@ -462,6 +462,7 @@ module Trigger = Miou_sync.Trigger
 module Computation = Miou_sync.Computation
 module Queue = Miou_queue
 module Backoff = Miou_backoff
+module Trace = Miou_trace
 
 external reraise : exn -> 'a = "%reraise"
 (** [reraise exn] raises the exception [exn]. Unlike [raise exn], [reraise exn]
@@ -1144,7 +1145,7 @@ type signal
 type uid = private int [@@immediate]
 (** The type of unique IDs of {!type:syscall}s. *)
 
-val syscall : unit -> syscall
+val syscall : ?name:string -> unit -> syscall
 (** [syscall ()] creates a {i syscall} which permits the user to create a new
     suspension point via {!val:suspend}. *)
 
