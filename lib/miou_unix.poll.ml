@@ -24,10 +24,11 @@ let tcpv6 () = nonblocking_stream Unix.PF_INET6
 
 let bind_and_listen ?(backlog = 64) ?(reuseaddr = true) ?(reuseport = true)
     { fd; _ } sockaddr =
-  Unix.setsockopt fd Unix.SO_REUSEADDR reuseaddr;
-  Unix.setsockopt fd Unix.SO_REUSEPORT reuseport;
-  Unix.bind fd sockaddr;
-  Unix.listen fd backlog
+  let open Unix in
+  setsockopt fd SO_REUSEADDR reuseaddr;
+  setsockopt fd SO_REUSEPORT reuseport;
+  bind fd sockaddr;
+  listen fd backlog
 
 module File_descrs = struct
   type nonrec 'a t = { mutable contents: (Unix.file_descr * 'a) list }
