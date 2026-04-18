@@ -9,6 +9,7 @@ module Pqueue = Miou_pqueue
 module Logs = Miou_logs
 module Fmt = Miou_fmt
 module Gen = Miou_gen
+module Trace = Miou_trace
 open Miou_sync
 module Trigger = Trigger
 module Computation = Computation
@@ -306,16 +307,7 @@ let[@coverage off] _pp_domain_elt ppf = function
       Fmt.pf ppf "@[<1>(Domain_signal@ %a:%d)@]" Promise.pp prm signal
   | Domain_tick _ -> .
 
-module Trace = struct
-  [@@@warning "-32"]
-
-  let trace = Option.is_some (Sys.getenv_opt "MIOU_TRACE")
-
-  open Miou_runtime_events
-
-  let event : type a. a Runtime_events.User.t -> (unit -> a) -> unit =
-   fun k fn -> if trace then Runtime_events.User.write k (fn ())
-
+module Event = struct
   let spawn ?(kind = `Async) (prm : _ t) =
     let parent =
       match prm.parent with
@@ -324,72 +316,70 @@ module Trace = struct
     in
     let runner = Domain_uid.to_int prm.runner in
     let uid = Promise_uid.to_int prm.uid in
-    event spawn @@ fun () -> { uid; parent; runner; kind }
+    Trace.trace (Trace.Spawn { uid; parent; runner; kind })
 
   let location (prm : _ t) (filename, line) =
     let uid = Promise_uid.to_int prm.uid in
-    event spawn_location @@ fun () -> (uid, filename, line)
+    Trace.trace (Trace.Spawn_location { uid; filename; line })
 
-  let prm_begin (prm : _ t) =
+  let run_begin (prm : _ t) =
     let uid = Promise_uid.to_int prm.uid in
-    event prm_begin @@ fun () -> uid
+    Trace.trace (Trace.Run_begin uid)
 
-  let prm_end (prm : _ t) =
+  let run_end (prm : _ t) =
     let uid = Promise_uid.to_int prm.uid in
-    event prm_end @@ fun () -> uid
+    Trace.trace (Trace.Run_end uid)
+
+  let run_done (prm : _ t) =
+    let uid = Promise_uid.to_int prm.uid in
+    Trace.trace (Trace.Run_done uid)
 
   let await (prm : _ t) =
     let uid = Promise_uid.to_int prm.uid in
-    event await @@ fun () -> uid
+    Trace.trace (Trace.Await uid)
 
   let cancel (prm : _ t) =
     let uid = Promise_uid.to_int prm.uid in
-    event cancel @@ fun () -> uid
-
-  let resume (prm : _ t) =
-    let uid = Promise_uid.to_int prm.uid in
-    event resume @@ fun () -> uid
+    Trace.trace (Trace.Cancel uid)
 
   let cancelled (prm : _ t) =
     let uid = Promise_uid.to_int prm.uid in
-    event cancelled @@ fun () -> uid
+    Trace.trace (Trace.Cancelled uid)
+
+  let resume (prm : _ t) =
+    let uid = Promise_uid.to_int prm.uid in
+    Trace.trace (Trace.Resume uid)
 
   let suspend (prm : _ t) name =
     let uid = Promise_uid.to_int prm.uid in
-    event suspend @@ fun () -> (uid, name)
+    Trace.trace (Trace.Suspend { name; uid })
 
-  let unblock (prm : _ t) name =
+  let continue (prm : _ t) name =
     let uid = Promise_uid.to_int prm.uid in
-    event unblock @@ fun () -> (uid, name)
+    Trace.trace (Trace.Continue { name; uid })
 
   let yield (prm : _ t) =
     let uid = Promise_uid.to_int prm.uid in
-    event yield @@ fun () -> uid
+    Trace.trace (Trace.Yield uid)
 
   let still_has_children (prm : _ t) =
     let uid = Promise_uid.to_int prm.uid in
-    event still_has_children @@ fun () -> uid
+    Trace.trace (Trace.Still_has_children uid)
 
   let not_a_child ~(self : _ t) (prm : _ t) =
-    let uid0 = Promise_uid.to_int self.uid in
-    let uid1 = Promise_uid.to_int prm.uid in
-    event not_a_child @@ fun () -> (uid0, uid1)
+    let self = Promise_uid.to_int self.uid in
+    let prm = Promise_uid.to_int prm.uid in
+    Trace.trace (Trace.Not_a_child { self; prm })
 
   let attach ~(prm : _ t) (Resource { uid= res_uid; _ }) =
-    let uid0 = Resource_uid.to_int res_uid in
-    let uid1 = Promise_uid.to_int prm.uid in
-    event attach @@ fun () -> (uid0, uid1)
+    let ruid = Resource_uid.to_int res_uid in
+    let puid = Promise_uid.to_int prm.uid in
+    Trace.trace (Trace.Attach { ruid; puid })
 
   let detach ~(prm : _ t) (Resource { uid= res_uid; _ }) =
-    let uid0 = Resource_uid.to_int res_uid in
-    let uid1 = Promise_uid.to_int prm.uid in
-    event detach @@ fun () -> (uid0, uid1)
-
-  let finish (prm : _ t) =
-    let uid = Promise_uid.to_int prm.uid in
-    event prm_finish @@ fun () -> uid
-
-  [@@@warning "+32"]
+    let ruid = Resource_uid.to_int res_uid in
+    let puid = Promise_uid.to_int prm.uid in
+    Trace.trace (Trace.Detach { ruid; puid })
 end
 
 let add_into_domain domain elt =
@@ -521,7 +511,7 @@ module Domain = struct
     | (State.Suspended _ | State.Unhandled _) as state ->
         add_into_domain domain (Domain_task (prm, state))
     | State.Finished (Error (exn, bt)) ->
-        Trace.finish prm;
+        Event.run_done prm;
         let f (Resource { uid; value; finaliser }) =
           try finaliser value
           with exn ->
@@ -554,10 +544,10 @@ module Domain = struct
           raise_notrace Resource_leaked
         end;
         if Promise.children_terminated prm = false then begin
-          Trace.still_has_children prm;
+          Event.still_has_children prm;
           raise_notrace Still_has_children
         end;
-        Trace.finish prm;
+        Event.run_done prm;
         interrupt_parent pool prm;
         ignore (Computation.try_return prm.state value)
 
@@ -621,7 +611,7 @@ module Domain = struct
           let prm' = Promise.create ~parent:prm ~forbid ~resources domain.uid in
           canceller pool ~self:prm prm';
           Miou_sequence.(add Left) prm.children (Pack prm');
-          Trace.spawn prm';
+          Event.spawn prm';
           add_into_domain domain (Domain_create (prm', fn));
           k (Operation.return prm')
       | Spawn (Parallel runner, forbid, resources, fn) ->
@@ -629,12 +619,12 @@ module Domain = struct
           let prm' = Promise.create ~parent:prm ~forbid ~resources runner in
           canceller pool ~self:prm prm';
           Miou_sequence.(add Left) prm.children (Pack prm');
-          Trace.spawn ~kind:`Parallel prm';
+          Event.spawn ~kind:`Parallel prm';
           add_into_pool pool (Pool_create (prm', fn));
           k (Operation.return prm')
       | Cancel (backtrace, child) ->
           cancel pool domain ~backtrace child;
-          Trace.cancel child;
+          Event.cancel child;
           k (Operation.continue (Await_cancellation child))
       | Await_cancellation child as await ->
           if
@@ -645,7 +635,7 @@ module Domain = struct
                [child.cleaned] should be enough. *)
             && Atomic.get child.cleaned
           then begin
-            Trace.cancelled child;
+            Event.cancelled child;
             k (Operation.return (clean_children ~self:prm child))
           end
           else k (Operation.continue await)
@@ -657,7 +647,7 @@ module Domain = struct
           else add_into_pool pool (Pool_transfer (parent, res, trigger));
           k (Operation.return trigger)
       | Trigger.Await _ -> k Operation.interrupt
-      | Yield -> Trace.yield prm; k Operation.yield
+      | Yield -> Event.yield prm; k Operation.yield
       | eff -> k (Operation.perform eff)
     in
     { perform }
@@ -667,7 +657,7 @@ module Domain = struct
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
     if not (Promise.has_forbidden prm) then Computation.detach prm.state trigger;
     let result = Computation.cancelled prm.state in
-    Trace.resume prm;
+    Event.resume prm;
     if Domain_uid.equal runner domain.uid then
       let state = State.suspended_with k (Get result) in
       add_into_domain domain (Domain_task (prm, state))
@@ -774,7 +764,7 @@ module Domain = struct
         match Computation.cancelled prm.state with
         | None ->
             let state = State.make fn () in
-            Trace.prm_end prm;
+            Event.run_end prm;
             handle pool domain prm state
         | Some (exn, bt) ->
             Logs.debug (fun m ->
@@ -784,7 +774,7 @@ module Domain = struct
             Atomic.set prm.cleaned true;
             handle pool domain prm state)
     | Domain_task (prm, State.Suspended (k, Trigger.Await trigger)) ->
-        Trace.await prm;
+        Event.await prm;
         await pool domain prm trigger k
     | Domain_signal (prm, _signal, State.Suspended (k, Trigger.Await trigger))
       ->
@@ -798,9 +788,9 @@ module Domain = struct
                [Continuation_already_resumed] exception. If we do, it's a
                violation of our rules, namely that only the domain in charge of
                the promise can continue the continuation [k]. *)
-            Trace.prm_begin prm;
+            Event.run_begin prm;
             let state = State.run ~quanta:domain.quanta ~perform state in
-            Trace.prm_end prm;
+            Event.run_end prm;
             handle pool domain prm state
         | Some (exn, bt) ->
             let state = State.fail ~backtrace:bt ~exn state in
@@ -819,9 +809,9 @@ module Domain = struct
         let perform = perform pool domain prm in
         match Computation.cancelled prm.state with
         | None ->
-            Trace.prm_begin prm;
+            Event.run_begin prm;
             let state = State.run ~quanta:domain.quanta ~perform state in
-            Trace.prm_end prm;
+            Event.run_end prm;
             handle_signal ~signal domain prm state
         | Some (exn, bt) ->
             let state = State.fail ~backtrace:bt ~exn state in
@@ -1153,7 +1143,7 @@ module Ownership = struct
     if Miou_sequence.exists equal self.resources then
       invalid_arg "The current promise already holds the resource given"
     else begin
-      Trace.attach ~prm:self res;
+      Event.attach ~prm:self res;
       Miou_sequence.(add Left) self.resources res
     end
 
@@ -1169,7 +1159,7 @@ module Ownership = struct
       Miou_sequence.iter_node ~f self.resources;
       raise Not_owner
     with Found_resource node ->
-      Trace.detach ~prm:self node.Miou_sequence.data;
+      Event.detach ~prm:self node.Miou_sequence.data;
       Miou_sequence.remove node
 
   let release (Resource { uid; finaliser; value }) =
@@ -1190,7 +1180,7 @@ module Ownership = struct
       raise Not_owner
     with Found_resource node ->
       finaliser value;
-      Trace.detach ~prm:self node.Miou_sequence.data;
+      Event.detach ~prm:self node.Miou_sequence.data;
       Miou_sequence.remove node
 
   let transfer (Resource { uid; _ } as res) =
@@ -1259,7 +1249,7 @@ let async ?(give = []) ?orphans fn =
   let (Pack self) = Effect.perform Self in
   let prm = Effect.perform (Spawn (Concurrent, false, give, fn)) in
   Option.iter (add_into_orphans ~self prm) orphans;
-  Option.iter (Trace.location prm) loc;
+  Option.iter (Event.location prm) loc;
   Logs.debug (fun m -> m "%a spawned" Promise.pp prm);
   prm
 
@@ -1289,7 +1279,7 @@ let call ?pin ?(give = []) ?orphans fn =
   in
   let prm = Effect.perform (Spawn (Parallel runner, false, give, fn)) in
   Option.iter (add_into_orphans ~self prm) orphans;
-  Option.iter (Trace.location prm) loc;
+  Option.iter (Event.location prm) loc;
   prm
 
 let await prm =
@@ -1297,7 +1287,7 @@ let await prm =
   Logs.debug (fun m -> m "%a await %a" Promise.pp self Promise.pp prm);
   let some (Pack parent) = Promise_uid.equal self.uid parent.uid in
   if not (Option.fold ~none:false ~some prm.parent) then begin
-    Trace.not_a_child ~self prm;
+    Event.not_a_child ~self prm;
     raise_notrace Not_a_child
   end;
   let finally () = clean_children ~self prm in
@@ -1326,7 +1316,7 @@ let await_one prms =
   let is_a_child prm = Option.fold ~none:false ~some prm.parent in
   if not (List.for_all is_a_child prms) then begin
     List.iter
-      (fun prm -> if not (is_a_child prm) then Trace.not_a_child ~self prm)
+      (fun prm -> if not (is_a_child prm) then Event.not_a_child ~self prm)
       prms;
     raise_notrace Not_a_child
   end;
@@ -1388,7 +1378,7 @@ let await_first prms =
   let bt = Printexc.get_callstack max_int in
   if not (List.for_all is_a_child prms) then begin
     List.iter
-      (fun prm -> if not (is_a_child prm) then Trace.not_a_child ~self prm)
+      (fun prm -> if not (is_a_child prm) then Event.not_a_child ~self prm)
       prms;
     raise_notrace Not_a_child
   end;
@@ -1524,10 +1514,12 @@ let suspend ?(fn = ignore) (Syscall (name, uid, trigger, prm)) =
        will clean our continuation with [discontinue_with]. Even if the scheduler
        wants to cancel/clean our continuation, the finaliser [finally] will be
        executed in **any** cases. *)
-      let finally () = Atomic.decr domain.syscalls in
+      let finally () =
+        Event.continue self name;
+        Atomic.decr domain.syscalls in
       Fun.protect ~finally @@ fun () ->
       begin
-        Trace.suspend self name;
+        Event.suspend self name;
         match Trigger.await trigger with
         | None -> miou_assert (Trigger.is_signaled trigger)
         | Some (exn, bt) ->
@@ -2072,5 +2064,3 @@ module Sequence = struct
 
   let add direction t value = add direction t value; peek_node direction t
 end
-
-module Runtime_events = Miou_runtime_events
