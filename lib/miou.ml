@@ -1468,12 +1468,15 @@ let await_all prms =
 let async ?give ?orphans fn = async ?give ?orphans fn
 
 let parallel fn tasks =
+  let loc = location () in
   let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
   let domains = Effect.perform Domains in
   let domains = List.filter (Fun.negate (Domain_uid.equal runner)) domains in
   let spawn runner fn v =
     let fn () = fn v in
-    Effect.perform (Spawn (Parallel runner, false, [], fn))
+    let prm = Effect.perform (Spawn (Parallel runner, false, [], fn)) in
+    Option.iter (Event.location prm) loc;
+    prm
   in
   if domains = [] then raise No_domain_available;
   let rec go rr prms tasks =
