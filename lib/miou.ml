@@ -763,6 +763,7 @@ module Domain = struct
     | Domain_create (prm, fn) -> (
         match Computation.cancelled prm.state with
         | None ->
+            Event.run_begin prm;
             let state = State.make fn () in
             Event.run_end prm;
             handle pool domain prm state
