@@ -1245,8 +1245,10 @@ let location () =
   in
   Some (filename, line_number)
 
-let async ?(give = []) ?orphans fn =
-  let loc = location () in
+let async ?loc ?(give = []) ?orphans fn =
+  let loc = match loc with
+    | Some loc -> Some loc
+    | None -> location () in
   let (Pack self) = Effect.perform Self in
   let prm = Effect.perform (Spawn (Concurrent, false, give, fn)) in
   Option.iter (add_into_orphans ~self prm) orphans;
@@ -1311,6 +1313,7 @@ let await prm = await prm |> Result.map_error fst
 
 let await_one prms =
   if prms = [] then invalid_arg "Miou.await_one";
+  let loc = location () in
   let (Pack self) = Effect.perform Self in
   let g = Effect.perform Random in
   let some (Pack parent) = Promise_uid.equal self.uid parent.uid in
@@ -1359,7 +1362,7 @@ let await_one prms =
     in
     try_attach_all [] prms
   in
-  let prm = async choose in
+  let prm = async ?loc choose in
   miou_assert (await_exn prm);
   match Computation.await_exn c with
   | Ok value -> Ok value
@@ -1372,6 +1375,7 @@ let cancel ~self ~backtrace:bt prm =
 
 let await_first prms =
   if prms = [] then invalid_arg "Miou.await_first";
+  let loc = location () in
   let (Pack self) = Effect.perform Self in
   let g = Effect.perform Random in
   let some (Pack parent) = Promise_uid.equal self.uid parent.uid in
@@ -1439,7 +1443,7 @@ let await_first prms =
     in
     try_attach_all [] prms
   in
-  let prm = async choose in
+  let prm = async ?loc choose in
   miou_assert (await_exn prm);
   match Computation.await_exn c with
   | Ok value -> Ok value
@@ -1460,6 +1464,8 @@ let cancel prm =
 let await_all prms =
   let prms = List.rev_map (fun prm -> await prm) prms in
   List.rev prms
+
+let async ?give ?orphans fn = async ?give ?orphans fn
 
 let parallel fn tasks =
   let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
