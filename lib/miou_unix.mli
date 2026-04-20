@@ -36,23 +36,23 @@
     signals and the {!module:Miou.Computation} module.
 
     {[
-      let pid =
-        Unix.create_process "sleep" [| "sleep"; "1" |] Unix.stdin Unix.stdout
-          Unix.stderr
-      in
-      let c = Miou.Computation.create () in
-      let handler _sigchld =
-        match Unix.waitpid [ WNOHANG ] pid with
-        | 0, _ -> ()
-        | pid', status when pid' = pid ->
-            ignore (Miou.sys_signal Sys.sigchld Sys.Signal_default);
-            assert (Miou.Computation.try_return c status)
-      in
-      ignore (Miou.sys_signal Sys.sigchld (Sys.Signal_handle handler));
-      match Miou.Computation.await_exn c with
-      | Unix.WEXITED _ -> ()
-      | Unix.WSIGNALED _ -> ()
-      | Unix.WSTOPPED _ -> ()
+    let pid =
+      Unix.create_process "sleep" [| "sleep"; "1" |] Unix.stdin Unix.stdout
+        Unix.stderr
+    in
+    let c = Miou.Computation.create () in
+    let handler _sigchld =
+      match Unix.waitpid [ WNOHANG ] pid with
+      | 0, _ -> ()
+      | pid', status when pid' = pid ->
+          ignore (Miou.sys_signal Sys.sigchld Sys.Signal_default);
+          assert (Miou.Computation.try_return c status)
+    in
+    ignore (Miou.sys_signal Sys.sigchld (Sys.Signal_handle handler));
+    match Miou.Computation.await_exn c with
+    | Unix.WEXITED _ -> ()
+    | Unix.WSIGNALED _ -> ()
+    | Unix.WSTOPPED _ -> ()
     ]}
 
     Here are some explanations of the code above.

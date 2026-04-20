@@ -1768,21 +1768,21 @@ module Mutex = struct
           | None, _ | _, None -> true
           | Some a, Some b -> Promise_uid.equal a.uid b.uid
         in
-        if is_owner then begin
-          match r.head with
+        if is_owner then
+          begin match r.head with
           | Entry { trigger; prm } :: rest ->
               let after = Locked { r with prm; head= rest } in
               transfer_as t self seen after trigger backoff
-          | [] -> begin
-              match List.rev r.tail with
+          | [] ->
+              begin match List.rev r.tail with
               | Entry { trigger; prm } :: rest ->
                   let after = Locked { prm; head= rest; tail= [] } in
                   transfer_as t self seen after trigger backoff
               | [] ->
                   if not (Atomic.compare_and_set t seen Unlocked) then
                     unlock_as t self (Backoff.once backoff)
-            end
-        end
+              end
+          end
         else not_owner ()
 
   and transfer_as t self seen after trigger backoff =
@@ -1918,13 +1918,13 @@ module Condition = struct
   let create () = Atomic.make Empty
 
   let broadcast t =
-    if Atomic.get t != Empty then begin
-      match Atomic.exchange t Empty with
+    if Atomic.get t != Empty then
+      begin match Atomic.exchange t Empty with
       | Empty -> ()
       | Queue state ->
           List.iter Trigger.signal state.head;
           List.iter Trigger.signal (List.rev state.tail)
-    end
+      end
 
   let[@inline always] update_head seen head =
     if head == [] && seen.tail == [] then Empty else Queue { seen with head }

@@ -17,7 +17,7 @@ val reporter : Miou.Trace.event -> unit
     application, the program must be executed with [MIOU_TRACE=1] and:
 
     {[
-      let () = Miou.Trace.set_reporter Miou_runtime_events.reporter
+    let () = Miou.Trace.set_reporter Miou_runtime_events.reporter
     ]} *)
 
 val add_callbacks :

@@ -19,20 +19,20 @@
     function with the result of the operation (here, [() : unit]).
 
     {[
-      type _ Effect.t += Hello : unit Effect.t
+    type _ Effect.t += Hello : unit Effect.t
 
-      let handler =
-        let retc = Fun.id in
-        let exnc = raise in
-        let effc : type c. c Effect.t -> ((c, 'a) continuation -> 'a) option =
-          function
-          | Hello -> Some (fun k -> continue k (print_endline "Hello"))
-          | _ -> None
-        in
-        { retc; exnc; effc }
+    let handler =
+      let retc = Fun.id in
+      let exnc = raise in
+      let effc : type c. c Effect.t -> ((c, 'a) continuation -> 'a) option =
+        function
+        | Hello -> Some (fun k -> continue k (print_endline "Hello"))
+        | _ -> None
+      in
+      { retc; exnc; effc }
 
-      let my_function () = Effect.perform Hello; print_endline "World"
-      let () = match_with my_function () handler
+    let my_function () = Effect.perform Hello; print_endline "World"
+    let () = match_with my_function () handler
     ]}
 
     To go back to familiar OCaml elements, an effect is like an exception in
@@ -43,10 +43,10 @@
     the effect was launched.
 
     {[
-      exception Hello
+    exception Hello
 
-      let my_function () = raise Hello; print_endline "World"
-      let () = try my_function () with Hello k -> print_endline "Hello"; k ()
+    let my_function () = raise Hello; print_endline "World"
+    let () = try my_function () with Hello k -> print_endline "Hello"; k ()
     ]}
 
     Miou defines several effects that allow the user to interact with Miou's
@@ -54,9 +54,9 @@
     you want to use Miou, you should always start with {!val:run}:
 
     {[
-      val my_program : unit -> unit
+    val my_program : unit -> unit
 
-      let () = Miou.run my_program ()
+    let () = Miou.run my_program ()
     ]}
 
     {3 A task manager.}
@@ -76,22 +76,22 @@
     all in order to terminate your program.
 
     {[
-      let digest filename =
-        Miou.async @@ fun () -> (filename, Digest.file filename)
+    let digest filename =
+      Miou.async @@ fun () -> (filename, Digest.file filename)
 
-      let my_program filenames =
-        (* 1) we create a list of tasks *)
-        let prms = List.map digest filenames in
-        (* 2) Miou manages the execution of these tasks *)
-        (* 3) we wait these tasks *)
-        let results = List.map Miou.await_exn prms in
-        (* 4) we print results *)
-        List.iter
-          (fun (filename, hash) ->
-            Format.printf "%s: %s\n%!" filename (Digest.to_hex hash))
-          results
+    let my_program filenames =
+      (* 1) we create a list of tasks *)
+      let prms = List.map digest filenames in
+      (* 2) Miou manages the execution of these tasks *)
+      (* 3) we wait these tasks *)
+      let results = List.map Miou.await_exn prms in
+      (* 4) we print results *)
+      List.iter
+        (fun (filename, hash) ->
+          Format.printf "%s: %s\n%!" filename (Digest.to_hex hash))
+        results
 
-      let () = Miou.run @@ fun () -> my_program [ "file01.ml"; "file02.ml" ]
+    let () = Miou.run @@ fun () -> my_program [ "file01.ml"; "file02.ml" ]
     ]}
 
     Miou suggests a {{!page:scheduler}little exercise} to implement a task
@@ -189,18 +189,18 @@
     that your application can handle this event as a priority.
 
     {[
-      let _, _ =
-        Miou.run @@ fun () ->
-        let rec server () =
-          let socket = accept () in
-          let _ = Miou.call (handler socket) in
-          server ()
-        in
-        let prm0 = Miou.async server in
-        let prm1 = Miou.async my_long_computation in
-        Miou.both prm0 prm1
+    let _, _ =
+      Miou.run @@ fun () ->
+      let rec server () =
+        let socket = accept () in
+        let _ = Miou.call (handler socket) in
+        server ()
+      in
+      let prm0 = Miou.async server in
+      let prm1 = Miou.async my_long_computation in
+      Miou.both prm0 prm1
 
-      (* [my_long_computation] should have multiple cooperative points to let
+    (* [my_long_computation] should have multiple cooperative points to let
          the other task (our [server]) to accept incoming TCP/IP connections. *)
     ]}
 
@@ -263,13 +263,13 @@
     you know that this [read()] will not block.
 
     {[
-      let global = Hashtbl.create 0x100
+    let global = Hashtbl.create 0x100
 
-      let miou_read fd buf off len =
-        let syscall = Miou.syscall () in
-        Hashtbl.add global fd syscall;
-        Miou.suspend syscall;
-        Unix.read fd buf off len
+    let miou_read fd buf off len =
+      let syscall = Miou.syscall () in
+      Hashtbl.add global fd syscall;
+      Miou.suspend syscall;
+      Unix.read fd buf off len
     ]}
 
     Here, we use a global table to remind us that the file-descriptor we're
@@ -285,23 +285,23 @@
     that can be unblocked.
 
     {[
-      let select ~poll:_ _cancelled_points =
-        let fds = Hashtbl.to_seq_keys global |> List.of_seq in
-        match Unix.select fds [] [] 0.1 with
-        | fds, _, _ ->
-            let signals =
-              List.map
-                (fun fd ->
-                  let syscall = Hashtbl.find global fd in
-                  let signal = Miou.signal syscall in
-                  Hashtbl.remove global fd; signal)
-                fds
-            in
-            signals
+    let select ~poll:_ _cancelled_points =
+      let fds = Hashtbl.to_seq_keys global |> List.of_seq in
+      match Unix.select fds [] [] 0.1 with
+      | fds, _, _ ->
+          let signals =
+            List.map
+              (fun fd ->
+                let syscall = Hashtbl.find global fd in
+                let signal = Miou.signal syscall in
+                Hashtbl.remove global fd; signal)
+              fds
+          in
+          signals
 
-      let run fn =
-        let events _domain = { Miou.select; interrupt= Fun.const () } in
-        Miou.run ~events fn
+    let run fn =
+      let events _domain = { Miou.select; interrupt= Fun.const () } in
+      Miou.run ~events fn
     ]}
 
     As you can see, the next step is to produce a {!val:run} function that uses
@@ -394,12 +394,12 @@
     However, you can involve [dom0] in the calculations with {!val:async}.
 
     {[
-      let () =
-        Miou.run ~domains:3 @@ fun () ->
-        let prm = Miou.async server in
-        Miou.parallel server (List.init 3 (Fun.const ()))
-        |> List.iter (function Ok () -> () | Error exn -> raise exn);
-        Miou.await_exn prm
+    let () =
+      Miou.run ~domains:3 @@ fun () ->
+      let prm = Miou.async server in
+      Miou.parallel server (List.init 3 (Fun.const ()))
+      |> List.iter (function Ok () -> () | Error exn -> raise exn);
+      Miou.await_exn prm
     ]}
 
     The above rule also limits the use of {!val:call} if you only have (or want)
@@ -439,20 +439,20 @@
     each domain.
 
     {[
-      let get, set =
-        let make () = Hashtbl.create () in
-        let dom = Stdlib.Domain.DLS.new_key make in
-        let get () = Stdlib.Domain.DLS.get dom in
-        let set value = Stdlib.Domain.DLS.set dom value in
-        (get, set)
+    let get, set =
+      let make () = Hashtbl.create () in
+      let dom = Stdlib.Domain.DLS.new_key make in
+      let get () = Stdlib.Domain.DLS.get dom in
+      let set value = Stdlib.Domain.DLS.set dom value in
+      (get, set)
 
-      let miou_read fd buf off len =
-        let syscall = Miou.syscall () in
-        let tbl = get () in
-        Hashtbl.add tbl fd syscall;
-        set tbl;
-        Miou.suspend syscall;
-        Unix.read fd buf off len
+    let miou_read fd buf off len =
+      let syscall = Miou.syscall () in
+      let tbl = get () in
+      Hashtbl.add tbl fd syscall;
+      set tbl;
+      Miou.suspend syscall;
+      Unix.read fd buf off len
     ]} *)
 
 module Pqueue = Miou_pqueue
@@ -626,20 +626,20 @@ module Ownership : sig
       would like to retransfer it at the end:
 
       {[
-        exception Timeout
+      exception Timeout
 
-        let with_timeout ~give sec fn =
-          Miou.await_first
-            [
-              (Miou.async @@ fun () -> Miou_unix.sleep sec; raise Timeout)
-            ; Miou.async ~give fn
-            ]
+      let with_timeout ~give sec fn =
+        Miou.await_first
+          [
+            (Miou.async @@ fun () -> Miou_unix.sleep sec; raise Timeout)
+          ; Miou.async ~give fn
+          ]
 
-        let connect socket sockaddr =
-          let t = Miou_unix.Ownership.resource socket in
-          with_timeout ~give:[ t ] 1.0 @@ fun () ->
-          Miou_unix.Ownership.connect socket sockaddr;
-          Miou.Ownership.transfer t
+      let connect socket sockaddr =
+        let t = Miou_unix.Ownership.resource socket in
+        with_timeout ~give:[ t ] 1.0 @@ fun () ->
+        Miou_unix.Ownership.connect socket sockaddr;
+        Miou.Ownership.transfer t
       ]} *)
 end
 
@@ -652,7 +652,7 @@ end
     For OCaml/[lwt] aficionados, this corresponds to [Lwt.async]:
 
     {[
-      val detach : (unit -> unit t) -> unit
+    val detach : (unit -> unit t) -> unit
     ]}
 
     Not that we want to impose an authoritarian family approach between parent
@@ -677,17 +677,17 @@ end
     this code shows:
 
     {[
-      let rec clean_up orphans =
-        match Miou.care orphans with
-        | None | Some None -> ()
-        | Some (Some prm) -> Miou.await_exn prm; clean_up orphans
+    let rec clean_up orphans =
+      match Miou.care orphans with
+      | None | Some None -> ()
+      | Some (Some prm) -> Miou.await_exn prm; clean_up orphans
 
-      let rec server orphans =
-        clean_up orphans;
-        ignore (Miou.call ~orphans handler);
-        server orphans
+    let rec server orphans =
+      clean_up orphans;
+      ignore (Miou.call ~orphans handler);
+      server orphans
 
-      let () = Miou.run @@ fun () -> server (Miou.orphans ())
+    let () = Miou.run @@ fun () -> server (Miou.orphans ())
     ]}
 
     There is a step-by-step {{!page:echo}tutorial} on how to create an echo
@@ -754,29 +754,29 @@ val call :
     is always true:
 
     {[
-      let () =
-        Miou.run @@ fun () ->
-        let p =
-          Miou.call @@ fun () ->
-          let u = Miou.Domain.self () in
-          let q = Miou.call @@ fun () -> Miou.Domain.self () in
-          (u, Miou.await_exn q)
-        in
-        let u, v = Miou.await_exn p in
-        assert (v <> u)
+    let () =
+      Miou.run @@ fun () ->
+      let p =
+        Miou.call @@ fun () ->
+        let u = Miou.Domain.self () in
+        let q = Miou.call @@ fun () -> Miou.Domain.self () in
+        (u, Miou.await_exn q)
+      in
+      let u, v = Miou.await_exn p in
+      assert (v <> u)
     ]}
 
     Sequential calls to {!val:call} do not guarantee that different domains are
     always chosen. This code {b may} be true.
 
     {[
-      let () =
-        Miou.run @@ fun () ->
-        let p = Miou.call @@ fun () -> Miou.Domain.self () in
-        let q = Miou.call @@ fun () -> Miou.Domain.self () in
-        let u = Miou.await_exn p in
-        let v = Miou.await_exn q in
-        assert (u = v)
+    let () =
+      Miou.run @@ fun () ->
+      let p = Miou.call @@ fun () -> Miou.Domain.self () in
+      let q = Miou.call @@ fun () -> Miou.Domain.self () in
+      let u = Miou.await_exn p in
+      let v = Miou.await_exn q in
+      assert (u = v)
     ]}
 
     To ensure that tasks are properly allocated to all domains, you need to use
@@ -803,26 +803,25 @@ val parallel : ('a -> 'b) -> 'a list -> ('b, exn) result list
     Let's take the example of a sequential merge-sort:
 
     {[
-      let sort ~compare (arr, lo, hi) =
-        if hi - lo >= 2 then begin
-          let mi = (lo + hi) / 2 in
-          sort ~compare (arr, lo, mi);
-          sort ~compare (arr, mi, hi);
-          merge ~compare arr lo mi hi
-        end
+    let sort ~compare (arr, lo, hi) =
+      if hi - lo >= 2 then begin
+        let mi = (lo + hi) / 2 in
+        sort ~compare (arr, lo, mi);
+        sort ~compare (arr, mi, hi);
+        merge ~compare arr lo mi hi
+      end
     ]}
 
     The 2 recursions work on 2 different spaces (from [lo] to [mi] and from [mi]
     to [hi]). We could parallelise their work such that:
 
     {[
-      let sort ~compare (arr, lo, hi) =
-        if hi - lo >= 2 then begin
-          let mi = (lo + hi) / 2 in
-          ignore
-            (Miou.parallel (sort ~compare) [ (arr, lo, mi); (arr, mi, hi) ]);
-          merge ~compare arr lo mi hi
-        end
+    let sort ~compare (arr, lo, hi) =
+      if hi - lo >= 2 then begin
+        let mi = (lo + hi) / 2 in
+        ignore (Miou.parallel (sort ~compare) [ (arr, lo, mi); (arr, mi, hi) ]);
+        merge ~compare arr lo mi hi
+      end
     ]}
 
     Note that {!val:parallel} launches tasks ({i fork}) and awaits for them
@@ -836,14 +835,14 @@ val parallel : ('a -> 'b) -> 'a list -> ('b, exn) result list
     concurrently.
 
     {[
-      val server : unit -> unit
+    val server : unit -> unit
 
-      let () =
-        Miou.run ~domains:3 @@ fun () ->
-        let p = Miou.async server in
-        Miou.parallel server (List.init 3 (Fun.const ()))
-        |> List.iter (function Ok () -> () | Error exn -> raise exn);
-        Miou.await_exn p
+    let () =
+      Miou.run ~domains:3 @@ fun () ->
+      let p = Miou.async server in
+      Miou.parallel server (List.init 3 (Fun.const ()))
+      |> List.iter (function Ok () -> () | Error exn -> raise exn);
+      Miou.await_exn p
     ]} *)
 
 val await : 'a t -> ('a, exn) result

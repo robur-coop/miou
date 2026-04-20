@@ -143,13 +143,13 @@ let run : type a. quanta:int -> perform:perform -> a t -> a t =
 
 let fail ~backtrace:bt ~exn = function
   | Finished _ -> Finished (Error (exn, bt))
-  | Unhandled (k, _) -> begin
-      try discontinue_with ~backtrace:bt k exn
+  | Unhandled (k, _) ->
+      begin try discontinue_with ~backtrace:bt k exn
       with Stdlib.Effect.Continuation_already_resumed ->
         Finished (Error (exn, bt))
-    end
-  | Suspended (k, _) -> begin
-      try discontinue_with ~backtrace:bt k exn
+      end
+  | Suspended (k, _) ->
+      begin try discontinue_with ~backtrace:bt k exn
       with Stdlib.Effect.Continuation_already_resumed ->
         Finished (Error (exn, bt))
-    end
+      end
