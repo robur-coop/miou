@@ -134,44 +134,42 @@ let run_begin = User.register "miou.begin" Run_begin uid_type
 let run_end = User.register "miou.end" Run_end uid_type
 let run_done = User.register "miou.done" Run_done uid_type
 
-let () =
-  let reporter (event : Miou.Trace.event) = match event with
-    | Miou.Trace.Spawn { uid; parent; runner; kind } ->
-      Runtime_events.User.write spawn { uid; parent; runner; kind }
-    | Miou.Trace.Spawn_location { uid; filename; line } ->
-      Runtime_events.User.write location (uid, filename, line)
-    | Miou.Trace.Cancel uid ->
-      Runtime_events.User.write cancel uid
-    | Miou.Trace.Cancelled uid ->
-      Runtime_events.User.write cancelled uid
-    | Miou.Trace.Await uid ->
-      Runtime_events.User.write await uid
-    | Miou.Trace.Resume uid ->
-      Runtime_events.User.write resume uid
-    | Miou.Trace.Yield uid ->
-      Runtime_events.User.write yield uid
-    | Miou.Trace.Suspend { name; uid } ->
-      Runtime_events.User.write suspend (uid, name)
-    | Miou.Trace.Continue { name; uid } ->
-      Runtime_events.User.write continue (uid, name)
-    | Miou.Trace.Attach { ruid; puid } ->
-      Runtime_events.User.write attach (ruid, puid)
-    | Miou.Trace.Detach { ruid; puid } ->
-      Runtime_events.User.write detach (ruid, puid)
-    | Miou.Trace.Run_begin uid ->
-      Runtime_events.User.write run_begin uid
-    | Miou.Trace.Run_end uid ->
-      Runtime_events.User.write run_end uid
-    | Miou.Trace.Run_done uid ->
-      Runtime_events.User.write run_done uid
-    | Miou.Trace.Still_has_children uid ->
-      Runtime_events.User.write still_has_children uid
-    | Miou.Trace.Not_a_child { self; prm } ->
-      Runtime_events.User.write not_a_child (self, prm)
-    | Miou.Trace.Resource_leaked uid ->
-      Runtime_events.User.write resource_leaked uid
-    | _ -> () in
-  Miou.Trace.set_reporter reporter
+let reporter (event : Miou.Trace.event) = match event with
+  | Miou.Trace.Spawn { uid; parent; runner; kind } ->
+    Runtime_events.User.write spawn { uid; parent; runner; kind }
+  | Miou.Trace.Spawn_location { uid; filename; line } ->
+    Runtime_events.User.write location (uid, filename, line)
+  | Miou.Trace.Cancel uid ->
+    Runtime_events.User.write cancel uid
+  | Miou.Trace.Cancelled uid ->
+    Runtime_events.User.write cancelled uid
+  | Miou.Trace.Await uid ->
+    Runtime_events.User.write await uid
+  | Miou.Trace.Resume uid ->
+    Runtime_events.User.write resume uid
+  | Miou.Trace.Yield uid ->
+    Runtime_events.User.write yield uid
+  | Miou.Trace.Suspend { name; uid } ->
+    Runtime_events.User.write suspend (uid, name)
+  | Miou.Trace.Continue { name; uid } ->
+    Runtime_events.User.write continue (uid, name)
+  | Miou.Trace.Attach { ruid; puid } ->
+    Runtime_events.User.write attach (ruid, puid)
+  | Miou.Trace.Detach { ruid; puid } ->
+    Runtime_events.User.write detach (ruid, puid)
+  | Miou.Trace.Run_begin uid ->
+    Runtime_events.User.write run_begin uid
+  | Miou.Trace.Run_end uid ->
+    Runtime_events.User.write run_end uid
+  | Miou.Trace.Run_done uid ->
+    Runtime_events.User.write run_done uid
+  | Miou.Trace.Still_has_children uid ->
+    Runtime_events.User.write still_has_children uid
+  | Miou.Trace.Not_a_child { self; prm } ->
+    Runtime_events.User.write not_a_child (self, prm)
+  | Miou.Trace.Resource_leaked uid ->
+    Runtime_events.User.write resource_leaked uid
+  | _ -> ()
 
 let add_callbacks ~fn callbacks =
   let create_spawn ring_id ts ev spawn =
