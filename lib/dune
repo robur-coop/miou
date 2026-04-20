@@ -36,6 +36,7 @@
   miou
   miou_gen
   miou_logs
+  miou_trace
   miou_vector
   miou_pqueue
   miou_sequence
@@ -44,6 +45,13 @@
  (instrumentation
   (backend bisect_ppx))
  (libraries miou.backoff miou.sync))
+
+(library
+ (name miou_runtime_events)
+ (public_name miou.runtime_events)
+ (wrapped false)
+ (modules miou_runtime_events)
+ (libraries miou runtime_events))
 
 (library
  (name miou_unix)

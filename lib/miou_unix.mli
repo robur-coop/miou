@@ -207,5 +207,5 @@ module Bitv = Miou_bitv
 
 (**/*)
 
-val blocking_read : Unix.file_descr -> unit
-val blocking_write : Unix.file_descr -> unit
+val blocking_read : ?name:string -> Unix.file_descr -> unit
+val blocking_write : ?name:string -> Unix.file_descr -> unit
