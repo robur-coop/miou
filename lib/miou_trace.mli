@@ -18,6 +18,7 @@ type event +=
   | Still_has_children of int
   | Not_a_child of { self : int; prm : int }
   | Resource_leaked of int
+  | Not_owner of { ruid : int; puid : int }
 
 val set_reporter : (event -> unit) -> unit
 val trace : event -> unit

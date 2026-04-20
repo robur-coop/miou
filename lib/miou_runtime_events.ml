@@ -100,6 +100,7 @@ type Runtime_events.User.tag +=
   | Exn_still_has_children
   | Exn_not_a_child
   | Exn_resource_leaked
+  | Exn_not_owner
   | Run_begin
   | Run_end
   | Run_done
@@ -129,6 +130,10 @@ let not_a_child =
 let resource_leaked =
   let name = "miou.exn.resouce_leaked" in
   User.register name Exn_resource_leaked uid_type
+
+let not_owner =
+  let name = "miou.exn.not_owner" in
+  User.register name Exn_not_owner uid_uid_type
 
 let run_begin = User.register "miou.begin" Run_begin uid_type
 let run_end = User.register "miou.end" Run_end uid_type
@@ -169,6 +174,8 @@ let reporter (event : Miou.Trace.event) = match event with
     Runtime_events.User.write not_a_child (self, prm)
   | Miou.Trace.Resource_leaked uid ->
     Runtime_events.User.write resource_leaked uid
+  | Miou.Trace.Not_owner { ruid; puid } ->
+    Runtime_events.User.write not_owner (ruid, puid)
   | _ -> ()
 
 let add_callbacks ~fn callbacks =
@@ -204,6 +211,7 @@ let add_callbacks ~fn callbacks =
     | Attach -> fn ring_id ts (Miou.Trace.Attach { ruid= uid0; puid= uid1 })
     | Detach -> fn ring_id ts (Miou.Trace.Detach { ruid= uid0; puid= uid1 })
     | Exn_not_a_child -> fn ring_id ts (Miou.Trace.Not_a_child { self= uid0; prm= uid1 })
+    | Exn_not_owner -> fn ring_id ts (Miou.Trace.Not_owner { ruid= uid0; puid= uid1 })
     | _ -> ()
   in
   let from_uid_string_uid ring_id ts ev (uid0, str, uid1) =

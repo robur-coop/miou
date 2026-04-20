@@ -371,13 +371,18 @@ module Event = struct
     let prm = Promise_uid.to_int prm.uid in
     Trace.trace (Trace.Not_a_child { self; prm })
 
-  let attach ~(prm : _ t) (Resource { uid= res_uid; _ }) =
-    let ruid = Resource_uid.to_int res_uid in
+  let not_owner (prm : _ t) (Resource { uid= ruid; _ }) =
+    let puid = Promise_uid.to_int prm.uid in
+    let ruid = Resource_uid.to_int ruid in
+    Trace.trace (Trace.Not_owner { ruid; puid })
+
+  let attach ~(prm : _ t) (Resource { uid= ruid; _ }) =
+    let ruid = Resource_uid.to_int ruid in
     let puid = Promise_uid.to_int prm.uid in
     Trace.trace (Trace.Attach { ruid; puid })
 
-  let detach ~(prm : _ t) (Resource { uid= res_uid; _ }) =
-    let ruid = Resource_uid.to_int res_uid in
+  let detach ~(prm : _ t) (Resource { uid= ruid; _ }) =
+    let ruid = Resource_uid.to_int ruid in
     let puid = Promise_uid.to_int prm.uid in
     Trace.trace (Trace.Detach { ruid; puid })
 end
@@ -1127,13 +1132,16 @@ module Ownership = struct
   let create ~finally:finaliser value =
     Resource { uid= Resource_uid.gen (); value; finaliser }
 
-  let check (Resource { uid; _ }) =
+  let check (Resource { uid; _ } as res) =
     let (Pack self) = Effect.perform Self in
     Logs.debug (fun m ->
         m "[%a] checks if [%a] is owned by %a" Domain_uid.pp self.runner
           Resource_uid.pp uid Promise.pp self);
     let equal (Resource { uid= uid'; _ }) = Resource_uid.equal uid uid' in
-    if Miou_sequence.exists equal self.resources = false then raise Not_owner
+    if Miou_sequence.exists equal self.resources = false then begin
+      Event.not_owner self res;
+      raise Not_owner
+    end
 
   let own (Resource { uid; _ } as res) =
     let (Pack self) = Effect.perform Self in
@@ -1150,7 +1158,7 @@ module Ownership = struct
 
   exception Found_resource of resource Miou_sequence.node
 
-  let disown (Resource { uid; _ }) =
+  let disown (Resource { uid; _ } as res) =
     let (Pack self) = Effect.perform Self in
     let equal (Resource { uid= uid'; _ }) = Resource_uid.equal uid uid' in
     try
@@ -1158,12 +1166,13 @@ module Ownership = struct
         if equal data then raise_notrace (Found_resource node)
       in
       Miou_sequence.iter_node ~f self.resources;
+      Event.not_owner self res;
       raise Not_owner
     with Found_resource node ->
       Event.detach ~prm:self node.Miou_sequence.data;
       Miou_sequence.remove node
 
-  let release (Resource { uid; finaliser; value }) =
+  let release (Resource { uid; finaliser; value } as res) =
     let (Pack self) = Effect.perform Self in
     (* NOTE(dinosaure): [Effect.perform Self] can set the state of the current
        task to a continuation which will execute [finaliser] **or** into an
@@ -1178,6 +1187,7 @@ module Ownership = struct
         if equal data then raise_notrace (Found_resource node)
       in
       Miou_sequence.iter_node ~f self.resources;
+      Event.not_owner self res;
       raise Not_owner
     with Found_resource node ->
       finaliser value;
@@ -1196,6 +1206,7 @@ module Ownership = struct
         if equal data then raise_notrace (Found_resource node)
       in
       Miou_sequence.iter_node ~f self.resources;
+      Event.not_owner self res;
       raise Not_owner
     with Found_resource node -> (
       Logs.debug (fun m ->
