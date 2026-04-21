@@ -529,6 +529,10 @@ module Domain = struct
                   Domain_uid.pp domain.uid Resource_uid.pp uid Promise.pp prm
                   (Printexc.to_string exn))
         in
+        Logs.debug (fun m ->
+            m "[%a] finished a promise %a with exception %s\n%s" Domain_uid.pp
+              domain.uid Promise.pp prm (Printexc.to_string exn)
+              (Printexc.raw_backtrace_to_string bt));
         Miou_sequence.iter ~f prm.resources;
         Miou_sequence.drop prm.resources;
         let f (Pack prm) = cancel pool domain ~backtrace:bt prm in
