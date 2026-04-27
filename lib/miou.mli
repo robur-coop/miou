@@ -714,6 +714,17 @@ val care : 'a orphans -> 'a t option option
       Indeed, the child returned by care can only be awaited ({!await}) by its
       direct parent (in reference to {{!section:rule_2}our second rule}). *)
 
+val take : 'a orphans -> 'a t option
+(** [take orphans] returns a promise or [None]. The returned promise is in an
+    unknown state, meaning it is unclear whether it has completed or not.
+    However, it is no longer the responsibility of the given [orphans]. This
+    means that the user must (according to Miou's rules) consume it (using
+    {!val:Miou.await} or {!val:Miou.cancel}).
+
+    @raise Invalid_argument
+      As {!val:care}, [take] must be used in the promise that corresponds to the
+      parent of the promises held by the given [orphans].*)
+
 val length : _ orphans -> int
 (** [length orphans] returns the number of remaining tasks. *)
 

@@ -1597,6 +1597,14 @@ let domain_safe_care : type a.
       let prm = Miou_sequence.data node in
       Miou_sequence.remove node; Atomic.decr length; Some (Some prm)
 
+let domain_safe_take : type a. a t Miou_sequence.t -> int Atomic.t -> a t option
+    =
+ fun orphans length ->
+  if Miou_sequence.is_empty orphans then None
+  else
+    let prm = Miou_sequence.(take Left) orphans in
+    Atomic.decr length; Some prm
+
 let rec care : type a.
     ?backoff:Backoff.t -> self:'x t -> a orphans -> a t option option =
  fun ?(backoff = Backoff.default) ~self ({ orphans; owner; length } as v) ->
@@ -1612,6 +1620,22 @@ let rec care : type a.
 let care orphans =
   let (Pack self) = Effect.perform Self in
   care ~self orphans
+
+let rec take : type a.
+    ?backoff:Backoff.t -> self:'x t -> a orphans -> a t option =
+ fun ?(backoff = Backoff.default) ~self ({ orphans; owner; length } as v) ->
+  match Atomic.get owner with
+  | None ->
+      if Atomic.compare_and_set owner None (Some self.uid) then
+        domain_safe_take orphans length
+      else take ~backoff:(Backoff.once backoff) ~self v
+  | Some uid ->
+      if Promise_uid.equal self.uid uid then domain_safe_take orphans length
+      else invalid_arg "The given orphans is owned by another promise"
+
+let take orphans =
+  let (Pack self) = Effect.perform Self in
+  take ~self orphans
 
 module Hook = struct
   type t = { uid: Domain.Uid.t; node: (unit -> unit) Miou_sequence.node }
