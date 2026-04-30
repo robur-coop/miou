@@ -65,6 +65,7 @@ type 'a t = {
   ; resources: resource Miou_sequence.t
   ; mutable cancelled: (exn * Printexc.raw_backtrace) option
   ; cleaned: bool Atomic.t
+  ; finalized: bool Atomic.t
 }
 
 and pack = Pack : 'a t -> pack [@@unboxed]
@@ -85,6 +86,7 @@ module Promise = struct
     ; resources
     ; cancelled= None
     ; cleaned= Atomic.make false
+    ; finalized= Atomic.make false
     }
 
   let[@coverage off] pp ppf ({ uid; runner; _ } as prm) =
@@ -512,6 +514,32 @@ module Domain = struct
     | 0, _ -> miou_assert false
     | _ -> add_into_pool pool (Pool_cancel (prm, bt))
 
+  (* NOTE(dinosaure): [handle] is actually idempotent which means that it does
+     things according to the given [state] only once. It's especially true for
+     [State.Finished (Error _)] and [State.Finished (Ok _)] where some
+     finalisers are executed. We must ensure that they are executed only one
+     time. [prm.finalized] gives to us the ability to **not** execute two (or
+     more) times these finalisers.
+
+     This addition ([prm.finalized]) prevents [Trace.run_done] from being
+     called more than once. Other operations such as:
+     - releasing resources
+     - changing the promise’s state
+     - interrupting the parent
+     - or cancelling subtasks
+
+     will also only be executed once. Previously, the fact that these
+     operations were executed multiple times was not a problem:
+     - we 'clean' the resources; a second call to handle does not double-free
+       the resources
+     - changing the state from [try_cancel] to [try_cancel] or from [try_return]
+       to [try_return] (because of double calls to handle) was not a problem,
+       but with this [prm.finalized], the model is clearer
+     - the non-executed parent’s interruption (on the second time) saves us from
+       a signal
+     - cancelling subtasks could pollute our queues, but this had no impact (2
+       [Domain_cancel]s on a task don’t matter). This saves us from unnecessary
+       [Domain_cancel] pollution. *)
   let handle pool domain prm state =
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
     miou_assert (Domain_uid.equal runner domain.uid);
@@ -520,26 +548,30 @@ module Domain = struct
     | (State.Suspended _ | State.Unhandled _) as state ->
         add_into_domain domain (Domain_task (prm, state))
     | State.Finished (Error (exn, bt)) ->
-        Event.run_done prm;
-        let f (Resource { uid; value; finaliser }) =
-          try finaliser value
-          with exn ->
-            Logs.err (fun m ->
-                m "[%a] unexpected exception from the finaliser of [%a](%a): %s"
-                  Domain_uid.pp domain.uid Resource_uid.pp uid Promise.pp prm
-                  (Printexc.to_string exn))
-        in
-        Logs.debug (fun m ->
-            m "[%a] finished a promise %a with exception %s\n%s" Domain_uid.pp
-              domain.uid Promise.pp prm (Printexc.to_string exn)
-              (Printexc.raw_backtrace_to_string bt));
-        Miou_sequence.iter ~f prm.resources;
-        Miou_sequence.drop prm.resources;
-        let f (Pack prm) = cancel pool domain ~backtrace:bt prm in
-        Miou_sequence.iter ~f prm.children;
-        ignore (Computation.try_cancel prm.state (exn, bt));
-        interrupt_parent pool prm;
-        miou_assert (Option.is_some (Computation.cancelled prm.state))
+        if Atomic.compare_and_set prm.finalized false true then begin
+          Event.run_done prm;
+          let f (Resource { uid; value; finaliser }) =
+            try finaliser value
+            with exn ->
+              Logs.err (fun m ->
+                  m
+                    "[%a] unexpected exception from the finaliser of [%a](%a): \
+                     %s"
+                    Domain_uid.pp domain.uid Resource_uid.pp uid Promise.pp prm
+                    (Printexc.to_string exn))
+          in
+          Logs.debug (fun m ->
+              m "[%a] finished a promise %a with exception %s\n%s" Domain_uid.pp
+                domain.uid Promise.pp prm (Printexc.to_string exn)
+                (Printexc.raw_backtrace_to_string bt));
+          Miou_sequence.iter ~f prm.resources;
+          Miou_sequence.drop prm.resources;
+          let f (Pack prm) = cancel pool domain ~backtrace:bt prm in
+          Miou_sequence.iter ~f prm.children;
+          ignore (Computation.try_cancel prm.state (exn, bt));
+          interrupt_parent pool prm;
+          miou_assert (Option.is_some (Computation.cancelled prm.state))
+        end
     | State.Finished (Ok value) ->
         if Miou_sequence.is_empty prm.resources = false then begin
           let f (Resource { uid; value; finaliser }) =
@@ -561,9 +593,11 @@ module Domain = struct
           Event.still_has_children prm;
           raise_notrace Still_has_children
         end;
-        Event.run_done prm;
-        interrupt_parent pool prm;
-        ignore (Computation.try_return prm.state value)
+        if Atomic.compare_and_set prm.finalized false true then begin
+          Event.run_done prm;
+          interrupt_parent pool prm;
+          ignore (Computation.try_return prm.state value)
+        end
 
   let propagate_cancellation trigger (pool, possibly_cancelled) child =
     match Computation.cancelled possibly_cancelled.state with
