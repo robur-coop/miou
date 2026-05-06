@@ -1,3 +1,26 @@
+### v0.6.0 (2026-05-05)
+
+- Add `.git-blame-ignore-revs` (#55, @mbarbin)
+- Fix documentation link (#107, @dinosaure)
+- Allow creation of UNIX domain (#106, @theAlexes)
+- Add trace system for Miou (#110, @dinosaure)
+
+  A new module `Miou.Trace` is available and allows the user to register an
+  event consumer. The sub-package `miou.runtime_events` is also avaible and use
+  the OCaml runtime events system to emit Miou's events. Some tools are now
+  available to record Miou's events, you can check them [here][mtbox]
+
+- Add `Miou.take` (#113, @dinosaure)
+
+  A new function `Miou.take` is available to consume tasks available from an
+  `Miou.orphans`. By this way, the user is able to `Miou.cancel` tasks instead
+  of just await them (with `Miou.await{,_exn}` and `Miou.care`).
+
+- Internal function `handle` (which runs tasks) becomes indempotent (#112,
+  @dinosaure)
+
+[mtbox]: https://github.com/robur-coop/mtbox
+
 ### v0.5.5 (2026-03-25)
 
 - Improve how we manipulate our internal bitv structure for `Miou_unix`
