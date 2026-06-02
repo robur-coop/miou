@@ -1623,9 +1623,20 @@ let orphans () =
 
 let length orphans = Atomic.get orphans.length
 
-let domain_safe_care : type a.
-    a t Miou_sequence.t -> int Atomic.t -> a t option option =
- fun orphans length ->
+let rec acquire_orphans ?(backoff = Backoff.default) ~(self : _ t)
+    ({ owner; _ } as v) =
+  match Atomic.get owner with
+  | None ->
+      if not (Atomic.compare_and_set owner None (Some self.uid)) then
+        acquire_orphans ~backoff:(Backoff.once backoff) ~self v
+  | Some uid ->
+      if not (Promise_uid.equal self.uid uid) then
+        invalid_arg "The given orphans is owned by another promise"
+
+let care : type a. a orphans -> a t option option =
+ fun ({ orphans; length; _ } as v) ->
+  let (Pack self) = Effect.perform Self in
+  acquire_orphans ~self v;
   if Miou_sequence.is_empty orphans then None
   else
     let exception Orphan of a t Miou_sequence.node in
@@ -1640,45 +1651,83 @@ let domain_safe_care : type a.
       let prm = Miou_sequence.data node in
       Miou_sequence.remove node; Atomic.decr length; Some (Some prm)
 
-let domain_safe_take : type a. a t Miou_sequence.t -> int Atomic.t -> a t option
-    =
- fun orphans length ->
+let take ({ orphans; length; _ } as v) =
+  let (Pack self) = Effect.perform Self in
+  acquire_orphans ~self v;
   if Miou_sequence.is_empty orphans then None
   else
     let prm = Miou_sequence.(take Left) orphans in
     Atomic.decr length; Some prm
 
-let rec care : type a.
-    ?backoff:Backoff.t -> self:'x t -> a orphans -> a t option option =
- fun ?(backoff = Backoff.default) ~self ({ orphans; owner; length } as v) ->
-  match Atomic.get owner with
-  | None ->
-      if Atomic.compare_and_set owner None (Some self.uid) then
-        domain_safe_care orphans length
-      else care ~backoff:(Backoff.once backoff) ~self v
-  | Some uid ->
-      if Promise_uid.equal self.uid uid then domain_safe_care orphans length
-      else invalid_arg "The given orphans is owned by another promise"
-
-let care orphans =
+let get : type a. a orphans -> (a, exn) result option =
+ fun ({ orphans; length; _ } as v) ->
   let (Pack self) = Effect.perform Self in
-  care ~self orphans
-
-let rec take : type a.
-    ?backoff:Backoff.t -> self:'x t -> a orphans -> a t option =
- fun ?(backoff = Backoff.default) ~self ({ orphans; owner; length } as v) ->
-  match Atomic.get owner with
-  | None ->
-      if Atomic.compare_and_set owner None (Some self.uid) then
-        domain_safe_take orphans length
-      else take ~backoff:(Backoff.once backoff) ~self v
-  | Some uid ->
-      if Promise_uid.equal self.uid uid then domain_safe_take orphans length
-      else invalid_arg "The given orphans is owned by another promise"
-
-let take orphans =
-  let (Pack self) = Effect.perform Self in
-  take ~self orphans
+  acquire_orphans ~self v;
+  let g = Effect.perform Random in
+  if Miou_sequence.is_empty orphans then None
+  else begin
+    (* NOTE(dinosaure): as [await_one]. *)
+    let nodes = ref [] in
+    Miou_sequence.iter_node ~f:(fun node -> nodes := node :: !nodes) orphans;
+    let nodes = !nodes in
+    (* NOTE(dinosaure): snapshot of [nodes] which is safe. Only one promise can
+       manipulate our [orphans]. *)
+    let c = Computation.create () in
+    let choose =
+      Computation.try_capture c @@ fun () ->
+      let t = Trigger.create () in
+      let prm_of node = Miou_sequence.data node in
+      let take_one_and_detach_rest unattached attached =
+        List.iter
+          (fun node -> Computation.detach (prm_of node).state t)
+          attached;
+        let _, terminated =
+          List.partition
+            (fun node -> Promise.is_running (prm_of node))
+            (attached @ unattached)
+        in
+        let filter node =
+          if Result.is_ok (Option.get (Computation.peek (prm_of node).state))
+          then Either.Left node
+          else Either.Right node
+        in
+        let result, node =
+          match List.partition_map filter terminated with
+          | [], nodes | nodes, _ ->
+              let n = Random.State.int g (List.length nodes) in
+              let node = List.nth nodes n in
+              (Computation.await (prm_of node).state, node)
+        in
+        let prm = prm_of node in
+        Miou_sequence.remove node;
+        Atomic.decr length;
+        clean_children ~self prm;
+        result
+      in
+      let rec try_attach_all attached = function
+        | node :: nodes ->
+            let attached = node :: attached in
+            if Computation.try_attach (prm_of node).state t then
+              try_attach_all attached nodes
+            else take_one_and_detach_rest nodes attached
+        | [] -> (
+            match Trigger.await t with
+            | Some (exn, bt) ->
+                List.iter
+                  (fun node -> Computation.detach (prm_of node).state t)
+                  attached;
+                Error (exn, bt)
+            | None -> take_one_and_detach_rest [] nodes)
+      in
+      try_attach_all [] nodes
+    in
+    let prm = async choose in
+    miou_assert (await_exn prm);
+    match Computation.await_exn c with
+    | Ok value -> Some (Ok value)
+    | Error (exn, _bt) -> Some (Error exn)
+    | exception _exn -> assert false
+  end
 
 module Hook = struct
   type t = { uid: Domain.Uid.t; node: (unit -> unit) Miou_sequence.node }

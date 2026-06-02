@@ -874,6 +874,64 @@ let test45 =
   in
   Miou.await_exn prm; Test.check true
 
+let test46 =
+  let description = {text|Miou.get|text} in
+  Test.test ~title:"test46" ~description @@ fun () ->
+  Miou.run @@ fun () ->
+  let prm =
+    Miou.async @@ fun () ->
+    let orphans = Miou.orphans () in
+    Test.check (Miou.get orphans = None);
+    ignore (Miou.async ~orphans @@ fun () -> 1);
+    ignore (Miou.async ~orphans @@ fun () -> 2);
+    ignore (Miou.async ~orphans @@ fun () -> failwith "t46");
+    Test.check (Miou.length orphans = 3);
+    let oks = ref 0 and errs = ref 0 in
+    let rec drain () =
+      match Miou.get orphans with
+      | None -> ()
+      | Some (Ok _) -> incr oks; drain ()
+      | Some (Error _) -> incr errs; drain ()
+    in
+    drain ();
+    Test.check (Miou.length orphans = 0);
+    Test.check (!oks = 2 && !errs = 1)
+  in
+  Miou.await_exn prm
+
+let test47 =
+  let description = {text|Miou.get: parent error|text} in
+  Test.test ~title:"test47" ~description @@ fun () ->
+  Miou.run @@ fun () ->
+  let orphans = Miou.orphans () in
+  let p = Miou.async ~orphans @@ fun () -> 42 in
+  let bad =
+    Miou.async @@ fun () ->
+    try
+      ignore (Miou.get orphans);
+      false
+    with Invalid_argument _ -> true
+  in
+  Test.check (Miou.await_exn bad);
+  ignore (Miou.await_exn p);
+  ignore (Miou.get orphans)
+
+let test48 =
+  let description = {text|Miou.get: no leak on it|text} in
+  Test.test ~title:"test48" ~description @@ fun () ->
+  Miou.run @@ fun () ->
+  let blocker =
+    Miou.async @@ fun () ->
+    let orphans = Miou.orphans () in
+    ignore (Miou.async ~orphans infinite);
+    ignore (Miou.get orphans)
+  in
+  Miou.yield ();
+  Miou.cancel blocker;
+  match Miou.await blocker with
+  | Error Miou.Cancelled -> Test.check true
+  | _ -> Test.check false
+
 let () =
   let tests =
     [
@@ -882,6 +940,7 @@ let () =
     ; test19; test20; test21; test22; test23; test24; test25; test26; test27
     ; test28; test29; test30; test31; test32; test33; test34; test35; test36
     ; test37; test38; test39; test40; test41; test42; test43; test44; test45
+    ; test46; test47; test48
     ]
   in
   let ({ Test.directory } as runner) =
