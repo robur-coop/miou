@@ -509,6 +509,7 @@ type 'a t
 
 module Promise : sig
   type nonrec 'a t = 'a t
+  type state = Running | Exited | Finished
 
   module Uid : sig
     type t [@@immediate]
@@ -517,6 +518,7 @@ module Promise : sig
   end
 
   val uid : 'a t -> Uid.t
+  val state : 'a t -> state
 end
 
 exception No_domain_available

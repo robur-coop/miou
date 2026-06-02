@@ -73,6 +73,15 @@ and pack = Pack : 'a t -> pack [@@unboxed]
 module Promise = struct
   module Uid = Promise_uid
 
+  type state = Running | Exited | Finished
+
+  let state : type a. a t -> state =
+   fun prm ->
+    match Atomic.get (prm.state :> a Computation.state Atomic.t) with
+    | Computation.Cancelled _ -> Exited
+    | Computation.Returned _ -> Finished
+    | Computation.Continue _ -> Running
+
   let create ?parent ~forbid ?resources:(ress = []) runner =
     let resources = Miou_sequence.create () in
     List.iter Miou_sequence.(add Left resources) ress;
