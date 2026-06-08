@@ -1,3 +1,7 @@
+### v0.7.0 (2026-06-08)
+
+- Add `Miou.get` and `Miou.Promise.state` (@dinosaure, #115)
+
 ### v0.6.0 (2026-05-05)
 
 - Add `.git-blame-ignore-revs` (#55, @mbarbin)
