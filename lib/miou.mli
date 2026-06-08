@@ -509,7 +509,14 @@ type 'a t
 
 module Promise : sig
   type nonrec 'a t = 'a t
-  type state = Running | Exited | Finished
+
+  type state =
+    | Running
+    | Exited
+    | Finished
+        (** The status of a promise: it may be in a pending state, or it may
+            have ended abnormally ([Exited]) or successfully ([Finished]). This
+            status is for information purposes only. *)
 
   module Uid : sig
     type t [@@immediate]
@@ -518,7 +525,10 @@ module Promise : sig
   end
 
   val uid : 'a t -> Uid.t
+  (** [uid prm] returns the unique ID of the promise. *)
+
   val state : 'a t -> state
+  (** [state prm] returns the status of a promise. *)
 end
 
 exception No_domain_available
