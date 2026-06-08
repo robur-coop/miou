@@ -510,6 +510,14 @@ type 'a t
 module Promise : sig
   type nonrec 'a t = 'a t
 
+  type state =
+    | Running
+    | Exited
+    | Finished
+        (** The status of a promise: it may be in a pending state, or it may
+            have ended abnormally ([Exited]) or successfully ([Finished]). This
+            status is for information purposes only. *)
+
   module Uid : sig
     type t [@@immediate]
 
@@ -517,6 +525,10 @@ module Promise : sig
   end
 
   val uid : 'a t -> Uid.t
+  (** [uid prm] returns the unique ID of the promise. *)
+
+  val state : 'a t -> state
+  (** [state prm] returns the status of a promise. *)
 end
 
 exception No_domain_available
@@ -724,6 +736,29 @@ val take : 'a orphans -> 'a t option
     @raise Invalid_argument
       As {!val:care}, [take] must be used in the promise that corresponds to the
       parent of the promises held by the given [orphans].*)
+
+val get : 'a orphans -> ('a, exn) result option
+(** [get orphans] behaves like {!val:await_one} but on the promises held by the
+    given [orphans]. It {b blocks} until one of these promises terminates
+    (either normally or with an exception), removes it from the [orphans] and
+    returns its result.
+
+    [None] is returned only if the given [orphans] is empty (there is nothing to
+    wait for). [Some result] is the result of the promise which terminated; that
+    promise is then removed from the internal sequence of the given [orphans]
+    and is no longer its responsibility (it has been consumed). The other
+    promises are {b not} cancelled.
+
+    {[
+    let rec drain orphans =
+      match Miou.get orphans with
+      | None -> ()
+      | Some (Ok _ | Error _) -> drain orphans
+    ]}
+
+    @raise Invalid_argument
+      As {!val:care} and {!val:take}, [get] must be used in the promise that
+      corresponds to the parent of the promises held by the given [orphans]. *)
 
 val length : _ orphans -> int
 (** [length orphans] returns the number of remaining tasks. *)
