@@ -28,6 +28,5 @@
 
 (rule
  (targets modules.sexp impl.out miou_poll.h)
- (deps select.exe)
  (action
-  (run ./select.exe)))
+  (run %{exe:select.exe})))
