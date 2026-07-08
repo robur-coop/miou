@@ -5,30 +5,51 @@ module Logs = Miou.Logs.Make (struct
   let src = "unix"
 end)
 
-type file_descr = { fd: Unix.file_descr; non_blocking: bool }
+type kind = STREAM | DGRAM
+type file_descr = { fd: Unix.file_descr; kind: kind option; non_blocking: bool }
+
+let is_dgram { kind; _ } = match kind with Some DGRAM -> true | _ -> false
 
 let of_file_descr ?(non_blocking = true) fd =
   if non_blocking then Unix.set_nonblock fd else Unix.clear_nonblock fd;
-  { fd; non_blocking }
+  match Unix.getsockopt_int fd Unix.SO_TYPE with
+  | 1 -> { fd; kind= Some STREAM; non_blocking }
+  | 2 -> { fd; kind= Some DGRAM; non_blocking }
+  | _ ->
+      failwith
+        "Miou_unix.of_file_descr: invalid file-descriptor (neither TCP nor UDP)"
+  | exception _exn -> { fd; kind= None; non_blocking }
 
 let to_file_descr { fd; _ } = fd
 
 let nonblocking_stream fam =
   let open Unix in
   let fd = socket fam SOCK_STREAM 0 in
-  set_nonblock fd; { fd; non_blocking= true }
+  set_nonblock fd;
+  { fd; non_blocking= true; kind= Some STREAM }
+
+let nonblocking_dgram fam =
+  let open Unix in
+  let fd = socket fam SOCK_DGRAM 0 in
+  set_nonblock fd;
+  { fd; non_blocking= true; kind= Some DGRAM }
 
 let unix_socket () = nonblocking_stream Unix.PF_UNIX
 let tcpv4 () = nonblocking_stream Unix.PF_INET
 let tcpv6 () = nonblocking_stream Unix.PF_INET6
+let udpv4 () = nonblocking_dgram Unix.PF_INET
+let udpv6 () = nonblocking_dgram Unix.PF_INET6
 
 let bind_and_listen ?(backlog = 64) ?(reuseaddr = true) ?(reuseport = true)
-    { fd; _ } sockaddr =
+    ({ fd; _ } as file_descr) sockaddr =
   let open Unix in
   setsockopt fd SO_REUSEADDR reuseaddr;
   setsockopt fd SO_REUSEPORT reuseport;
   bind fd sockaddr;
-  listen fd backlog
+  (* NOTE(dinosaure): [listen] is meaningless (and fails with [EOPNOTSUPP]) on a
+     datagram socket. We still allow [bind_and_listen] to bind such a socket so
+     that UDP servers can share the same entry-point. *)
+  if not (is_dgram file_descr) then listen fd backlog
 
 module File_descrs = struct
   type nonrec 'a t = { mutable contents: (Unix.file_descr * 'a) list }
@@ -189,7 +210,7 @@ let blocking_write ?(name = "write") fd =
   in
   Miou.suspend ~fn syscall
 
-let rec unsafe_read ({ fd; non_blocking } as file_descr) off len buf =
+let rec unsafe_read ({ fd; non_blocking; _ } as file_descr) off len buf =
   if non_blocking then
     match Unix.read fd buf off len with
     | exception Unix.(Unix_error (EINTR, _, _)) ->
@@ -210,7 +231,34 @@ let read file_descr ?(off = 0) ?len buf =
   let len = match len with None -> Bytes.length buf - off | Some len -> len in
   if off < 0 || len < 0 || off > Bytes.length buf - len then
     invalid_arg "Miou_unix.read";
+  if is_dgram file_descr then invalid_arg "Miou_unix.read: invalid file-descr";
   unsafe_read file_descr off len buf
+
+let rec unsafe_recvfrom ({ fd; non_blocking; _ } as file_descr) off len buf
+    flags =
+  if non_blocking then
+    match Unix.recvfrom fd buf off len flags with
+    | exception Unix.(Unix_error (EINTR, _, _)) ->
+        unsafe_recvfrom file_descr off len buf flags
+    | exception Unix.(Unix_error ((EAGAIN | EWOULDBLOCK), _, _)) ->
+        blocking_read fd;
+        unsafe_recvfrom file_descr off len buf flags
+    | value -> value
+  else
+    let rec go () =
+      match Unix.recvfrom fd buf off len flags with
+      | exception Unix.(Unix_error (EINTR, _, _)) -> go ()
+      | value -> value
+    in
+    blocking_read fd; go ()
+
+let recvfrom file_descr ?(off = 0) ?len buf flags =
+  let len = match len with None -> Bytes.length buf - off | Some len -> len in
+  if off < 0 || len < 0 || off > Bytes.length buf - len then
+    invalid_arg "Miou_unix.recvfrom";
+  if not (is_dgram file_descr) then
+    invalid_arg "Miou_unix.recvfrom: invalid file-descr";
+  unsafe_recvfrom file_descr off len buf flags
 
 let rec really_read_go file_descr off len buf =
   let len' = unsafe_read file_descr off len buf in
@@ -222,9 +270,10 @@ let really_read file_descr ?(off = 0) ?len buf =
   let len = match len with None -> Bytes.length buf - off | Some len -> len in
   if off < 0 || len < 0 || off > Bytes.length buf - len then
     invalid_arg "Miou_unix.really_read";
+  if is_dgram file_descr then invalid_arg "Miou_unix.read: invalid file-descr";
   if len > 0 then really_read_go file_descr off len buf
 
-let rec unsafe_write ({ fd; non_blocking } as file_descr) off len str =
+let rec unsafe_write ({ fd; non_blocking; _ } as file_descr) off len str =
   if non_blocking then
     match Unix.write fd (Bytes.unsafe_of_string str) off len with
     | exception Unix.(Unix_error (EINTR, _, _)) ->
@@ -251,9 +300,39 @@ let write file_descr ?(off = 0) ?len str =
   in
   if off < 0 || len < 0 || off > String.length str - len then
     invalid_arg "Miou_unix.write";
+  if is_dgram file_descr then invalid_arg "Miou_unix.write: invalid file-descr";
   unsafe_write file_descr off len str
 
-let rec accept ?cloexec ({ fd; non_blocking } as file_descr) =
+let rec unsafe_sendto ({ fd; non_blocking; _ } as file_descr) off len str flags
+    sockaddr =
+  if non_blocking then
+    match Unix.sendto_substring fd str off len flags sockaddr with
+    | exception Unix.(Unix_error (EINTR, _, _)) ->
+        unsafe_sendto file_descr off len str flags sockaddr
+    | exception Unix.(Unix_error ((EAGAIN | EWOULDBLOCK), _, _)) ->
+        blocking_write fd;
+        unsafe_sendto file_descr off len str flags sockaddr
+    | value -> value
+  else
+    let rec go () =
+      match Unix.sendto_substring fd str off len flags sockaddr with
+      | exception Unix.(Unix_error (EINTR, _, _)) -> go ()
+      | value -> value
+    in
+    blocking_write fd; go ()
+
+let sendto file_descr ?(off = 0) ?len str flags sockaddr =
+  let len =
+    match len with None -> String.length str - off | Some len -> len
+  in
+  if off < 0 || len < 0 || off > String.length str - len then
+    invalid_arg "Miou_unix.sendto";
+  if not (is_dgram file_descr) then
+    invalid_arg "Miou_unix.sendto: invalid file-descr";
+  unsafe_sendto file_descr off len str flags sockaddr
+
+let rec accept ?cloexec ({ fd; non_blocking; _ } as file_descr) =
+  if is_dgram file_descr then invalid_arg "Miou_unix.accept: invalid file-descr";
   if non_blocking then (
     match Unix.accept ?cloexec fd with
     | exception Unix.(Unix_error (EINTR, _, _)) -> accept ?cloexec file_descr
@@ -262,7 +341,7 @@ let rec accept ?cloexec ({ fd; non_blocking } as file_descr) =
         accept ?cloexec file_descr
     | fd, sockaddr ->
         Unix.set_nonblock fd;
-        let file_descr = { fd; non_blocking= true } in
+        let file_descr = { fd; non_blocking= true; kind= Some STREAM } in
         (file_descr, sockaddr))
   else
     let rec go () =
@@ -270,15 +349,17 @@ let rec accept ?cloexec ({ fd; non_blocking } as file_descr) =
       | exception Unix.(Unix_error (EINTR, _, _)) -> go ()
       | fd, sockaddr ->
           Unix.set_nonblock fd;
-          let file_descr = { fd; non_blocking= true } in
+          let file_descr = { fd; non_blocking= true; kind= Some STREAM } in
           (file_descr, sockaddr)
     in
     blocking_read fd; go ()
 
-let rec connect ({ fd; non_blocking } as file_descr) sockaddr =
+let rec connect ({ fd; non_blocking; _ } as file_descr) sockaddr =
   if not non_blocking then
     invalid_arg
       "Miou_unix.connect: we expect a file descriptor in the non-blocking mode";
+  if is_dgram file_descr then
+    invalid_arg "Miou_unix.connect: invalid file-descr";
   match Unix.connect fd sockaddr with
   | () -> ()
   | exception Unix.(Unix_error (EINTR, _, _)) -> connect file_descr sockaddr
@@ -306,36 +387,37 @@ module Ownership = struct
       fd: Unix.file_descr
     ; non_blocking: bool
     ; resource: Miou.Ownership.t
+    ; kind: kind option
   }
 
-  let bind_and_listen ?backlog { fd; non_blocking; resource } sockaddr =
+  let bind_and_listen ?backlog { fd; non_blocking; resource; kind } sockaddr =
     Miou.Ownership.check resource;
-    bind_and_listen ?backlog { fd; non_blocking } sockaddr
+    bind_and_listen ?backlog { fd; non_blocking; kind } sockaddr
 
-  let read { fd; non_blocking; resource } ?off ?len buf =
+  let read { fd; non_blocking; resource; kind } ?off ?len buf =
     Miou.Ownership.check resource;
-    read { fd; non_blocking } ?off ?len buf
+    read { fd; non_blocking; kind } ?off ?len buf
 
-  let really_read { fd; non_blocking; resource } ?off ?len buf =
+  let really_read { fd; non_blocking; resource; kind } ?off ?len buf =
     Miou.Ownership.check resource;
-    really_read { fd; non_blocking } ?off ?len buf
+    really_read { fd; non_blocking; kind } ?off ?len buf
 
-  let write { fd; non_blocking; resource } ?off ?len str =
+  let write { fd; non_blocking; resource; kind } ?off ?len str =
     Miou.Ownership.check resource;
-    write { fd; non_blocking } ?off ?len str
+    write { fd; non_blocking; kind } ?off ?len str
 
-  let accept ?cloexec { fd; non_blocking; resource } =
+  let accept ?cloexec { fd; non_blocking; resource; kind } =
     Miou.Ownership.check resource;
-    let ({ fd; non_blocking } : old), sockaddr =
-      accept ?cloexec { fd; non_blocking }
+    let ({ fd; non_blocking; kind } : old), sockaddr =
+      accept ?cloexec { fd; non_blocking; kind }
     in
     let resource = Miou.Ownership.create ~finally:Unix.close fd in
     Miou.Ownership.own resource;
-    ({ fd; non_blocking; resource }, sockaddr)
+    ({ fd; non_blocking; resource; kind }, sockaddr)
 
-  let connect { fd; non_blocking; resource } sockaddr =
+  let connect { fd; non_blocking; resource; kind } sockaddr =
     Miou.Ownership.check resource;
-    connect { fd; non_blocking } sockaddr
+    connect { fd; non_blocking; kind } sockaddr
 
   let close { fd; resource; _ } =
     (* NOTE(dinosaure): a world exists when we would like to cancel the current
@@ -351,7 +433,14 @@ module Ownership = struct
     let resource = Miou.Ownership.create ~finally:Unix.close fd in
     if non_blocking then Unix.set_nonblock fd else Unix.clear_nonblock fd;
     Miou.Ownership.own resource;
-    { fd; non_blocking; resource }
+    match Unix.getsockopt_int fd Unix.SO_TYPE with
+    | 1 -> { fd; non_blocking; resource; kind= Some STREAM }
+    | 2 -> { fd; non_blocking; resource; kind= Some DGRAM }
+    | _ ->
+        invalid_arg
+          "Miou_unix.Ownership.of_file_descr: invalid file-descriptor (neither \
+           TCP nor UDP)"
+    | exception _ -> { fd; non_blocking; resource; kind= None }
 
   let to_file_descr { fd; _ } = fd
   let resource { resource; _ } = resource
@@ -361,14 +450,36 @@ module Ownership = struct
     let resource = Miou.Ownership.create ~finally:Unix.close fd in
     Unix.set_nonblock fd;
     Miou.Ownership.own resource;
-    { fd; non_blocking= true; resource }
+    { fd; non_blocking= true; resource; kind= Some STREAM }
 
   let tcpv6 () =
     let fd = Unix.socket Unix.PF_INET6 Unix.SOCK_STREAM 0 in
     let resource = Miou.Ownership.create ~finally:Unix.close fd in
     Unix.set_nonblock fd;
     Miou.Ownership.own resource;
-    { fd; non_blocking= true; resource }
+    { fd; non_blocking= true; resource; kind= Some STREAM }
+
+  let udpv4 () =
+    let fd = Unix.socket Unix.PF_INET Unix.SOCK_DGRAM 0 in
+    let resource = Miou.Ownership.create ~finally:Unix.close fd in
+    Unix.set_nonblock fd;
+    Miou.Ownership.own resource;
+    { fd; non_blocking= true; resource; kind= Some DGRAM }
+
+  let udpv6 () =
+    let fd = Unix.socket Unix.PF_INET6 Unix.SOCK_DGRAM 0 in
+    let resource = Miou.Ownership.create ~finally:Unix.close fd in
+    Unix.set_nonblock fd;
+    Miou.Ownership.own resource;
+    { fd; non_blocking= true; resource; kind= Some DGRAM }
+
+  let recvfrom { fd; non_blocking; resource; kind } ?off ?len buf flags =
+    Miou.Ownership.check resource;
+    recvfrom { fd; non_blocking; kind } ?off ?len buf flags
+
+  let sendto { fd; non_blocking; resource; kind } ?off ?len str flags sockaddr =
+    Miou.Ownership.check resource;
+    sendto { fd; non_blocking; kind } ?off ?len str flags sockaddr
 end
 
 let rec sleeper domain =
