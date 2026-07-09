@@ -105,11 +105,13 @@ val to_file_descr : file_descr -> Unix.file_descr
 val unix_socket : unit -> file_descr
 (** [unix_socket ()] allocates a new Unix-domain socket. *)
 
+(** {3 I/O with TCP/IP protocol.} *)
+
 val tcpv4 : unit -> file_descr
-(** [tcpv4 ()] allocates a new IPv4 socket. *)
+(** [tcpv4 ()] allocates a new TCP/IPv4 socket. *)
 
 val tcpv6 : unit -> file_descr
-(** [tcpv6 ()] allocates a new IPv6 socket. *)
+(** [tcpv6 ()] allocates a new TCP/IPv6 socket. *)
 
 val bind_and_listen :
      ?backlog:int
@@ -123,19 +125,29 @@ val bind_and_listen :
     the maximal number of pending requests. The optional argument [reuseaddr]
     (defaults to [true]) sets the [REUSEADDR] socket option on the given [fd].
     The optional argument [reuseport] (defaults to [true] sets the [REUSEPORT]
-    socket option on the given [fd]. *)
+    socket option on the given [fd].
+
+    {b NOTE}: [bind_and_listen] can also be used with a
+    {!val:udpv4}/{!val:udpv6} file descriptor. *)
 
 val accept : ?cloexec:bool -> file_descr -> file_descr * Unix.sockaddr
 (** [accept ?cloexec fd] is a Miou friendly {!Unix.accept} which returns file
-    descriptors in non-blocking mode. *)
+    descriptors in non-blocking mode.
+
+    @raise Invalid_argument
+      if [fd] does not designate a {!constructor:Unix.SOCK_STREAM} socket. *)
 
 val connect : file_descr -> Unix.sockaddr -> unit
 (** [connect fd sockaddr] is a Miou friendly {!val:Unix.connect}. The function
-    accepts only {!type:file_descr}s in non-blocking mode. *)
+    accepts only {!type:file_descr}s in non-blocking mode.
+
+    @raise Invalid_argument
+      if [fd] does not designate a {!constructor:Unix.SOCK_STREAM} socket or if
+      [fd] is not in non-blocking mode. *)
 
 val read : file_descr -> ?off:int -> ?len:int -> bytes -> int
 (** [read fd buf ~off ~len] reads up to [len] bytes (defaults to
-    [Bytes.length buf - off] from the given file-descriptor [fd], storing them
+    [Bytes.length buf - off]) from the given file-descriptor [fd], storing them
     in byte sequence [buf], starting at position [off] in [buf] (defaults to
     [0]). It returns the actual number of characters read, between 0 and [len]
     (inclusive).
@@ -146,7 +158,8 @@ val read : file_descr -> ?off:int -> ?len:int -> bytes -> int
       {!constructor:Unix.EWOULDBLOCK} exceptions and redo the system call.
 
     @raise Invalid_argument
-      if [off] and [len] do not designate a valid range of [buf] *)
+      if [off] and [len] do not designate a valid range of [buf] or if [fd] does
+      not designate a {!constructor:Unix.SOCK_STREAM} socket. *)
 
 val really_read : file_descr -> ?off:int -> ?len:int -> bytes -> unit
 (** [really_read fd buf ~off ~len] reads [len] bytes (defaults to
@@ -163,11 +176,12 @@ val really_read : file_descr -> ?off:int -> ?len:int -> bytes -> unit
       if {!val:Unix.read} returns [0] before [len] characters have been read.
 
     @raise Invalid_argument
-      if [off] and [len] do not designate a valid range of [buf] *)
+      if [off] and [len] do not designate a valid range of [buf] or if [fd] does
+      not designate a {!constructor:Unix.SOCK_STREAM} socket. *)
 
 val write : file_descr -> ?off:int -> ?len:int -> string -> unit
 (** [write fd str ~off ~len] writes [len] bytes (defaults to
-    [String.length str - off]) from byte sequence [buf], starting at offset
+    [String.length str - off]) from byte sequence [str], starting at offset
     [off] (defaults to [0]), to the given file-descriptor [fd].
 
     @raise Unix.Unix_error
@@ -176,13 +190,70 @@ val write : file_descr -> ?off:int -> ?len:int -> string -> unit
       {!constructor:Unix.EWOULDBLOCK} exceptions and redo the system call.
 
     @raise Invalid_argument
-      if [off] and [len] do not designate a valid range of [buf] *)
+      if [off] and [len] do not designate a valid range of [buf] or if [fd] does
+      not designate a {!constructor:Unix.SOCK_STREAM} socket. *)
 
 val close : file_descr -> unit
 (** [close fd] closes properly the given [fd]. *)
 
+(** {3 I/O with UDP/IP protocol.} *)
+
+val udpv4 : unit -> file_descr
+(** [udpv4 ()] allocates a new UDP/IPv4 socket. *)
+
+val udpv6 : unit -> file_descr
+(** [udpv6 ()] allocates a new UDP/IPv6 socket. *)
+
+val recvfrom :
+     file_descr
+  -> ?off:int
+  -> ?len:int
+  -> bytes
+  -> Unix.msg_flag list
+  -> int * Unix.sockaddr
+(** [recvfrom fd ~off ~len buf flags] receives up to [len] bytes (defaults to
+    [Bytes.length buf - off]) from the given unconnected socket [fd] and store
+    it into the given [buf] at offset [off] (defaults to [0]). It returns the
+    actual number of characters received, between 0 and [len] (inclusive) and
+    the peer which sent these bytes.
+
+    @raise Unix.Unixerror
+      raised by the system call {!val:unix.recvfrom}. The function handles
+      {!constructor:Unix.EINTR}, {!constructor:Unix.EAGAIN} and
+      {!constructor:Unix.EWOULDBLOCK} exceptions and redo the system call.
+
+    @raise Invalid_argument
+      if [off] and [len] do not designate a valid range of [buf] or if [fd] does
+      not designate a {!constructor:Unix.SOCK_DGRAM} socket. *)
+
+val sendto :
+     file_descr
+  -> ?off:int
+  -> ?len:int
+  -> string
+  -> Unix.msg_flag list
+  -> Unix.sockaddr
+  -> int
+(** [sendto fd ~off ~len str flags sockaddr] sends [len] bytes (defaults to
+    [String.length str - off]) from byte sequence [str], starting at offset
+    [off] (defaults to [0]), to the destination [sockaddr] via the given
+    file-descriptor [fd].
+
+    @raise Unix.Unix_error
+      raised by the system call {!val:Unix.read}. The function handles
+      {!constructor:Unix.EINTR}, {!constructor:Unix.EAGAIN} and
+      {!constructor:Unix.EWOULDBLOCK} exceptions and redo the system call.
+
+    @raise Invalid_argument
+      if [off] and [len] do not designate a valid range of [buf] or if [fd] does
+      not designate a {!constructor:Unix.SOCK_DGRAM} socket. *)
+
+(** {3 Sleepers.} *)
+
 val sleep : float -> unit
 (** [sleep v] suspends the current task and {i sleeps} [v] seconds. *)
+
+(** {3 First entry point.} *)
 
 val run : ?g:Random.State.t -> ?domains:int -> (unit -> 'a) -> 'a
 
@@ -201,6 +272,25 @@ module Ownership : sig
   val really_read : file_descr -> ?off:int -> ?len:int -> bytes -> unit
   val write : file_descr -> ?off:int -> ?len:int -> string -> unit
   val close : file_descr -> unit
+  val udpv4 : unit -> file_descr
+  val udpv6 : unit -> file_descr
+
+  val recvfrom :
+       file_descr
+    -> ?off:int
+    -> ?len:int
+    -> bytes
+    -> Unix.msg_flag list
+    -> int * Unix.sockaddr
+
+  val sendto :
+       file_descr
+    -> ?off:int
+    -> ?len:int
+    -> string
+    -> Unix.msg_flag list
+    -> Unix.sockaddr
+    -> int
 end
 
 module Bitv = Miou_bitv

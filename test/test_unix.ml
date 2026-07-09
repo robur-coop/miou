@@ -79,8 +79,72 @@ let test_create_process =
       let expected = "sleep launched\nsignal handler installed\nWEXITED(0)\n" in
       Test.check (serialized = expected)
 
+let test_udp_echo =
+  let description = {text|A simple echo with sendto/recvfrom|text} in
+  Test.test ~title:"echo" ~description @@ fun () ->
+  Miou_unix.run ~domains:0 @@ fun () ->
+  let server = Miou_unix.udpv4 () in
+  Miou_unix.bind_and_listen server (Unix.ADDR_INET (Unix.inet_addr_loopback, 0));
+  let sockaddr = Unix.getsockname (Miou_unix.to_file_descr server) in
+  let payload = "hello, world!" in
+  let server_task =
+    Miou.async @@ fun () ->
+    let buf = Bytes.create 0x100 in
+    let len, client_addr = Miou_unix.recvfrom server buf [] in
+    let msg = Bytes.sub_string buf 0 len in
+    let reply = String.uppercase_ascii msg in
+    let sent = Miou_unix.sendto server reply [] client_addr in
+    (msg, sent)
+  in
+  let client_task =
+    Miou.async @@ fun () ->
+    let client = Miou_unix.udpv4 () in
+    let sent = Miou_unix.sendto client payload [] sockaddr in
+    let buf = Bytes.create 0x100 in
+    let len, _ = Miou_unix.recvfrom client buf [] in
+    let reply = Bytes.sub_string buf 0 len in
+    Miou_unix.close client; (sent, reply)
+  in
+  let a, b = Miou.await_exn server_task in
+  let x, y = Miou.await_exn client_task in
+  Miou_unix.close server;
+  Test.check (a = payload);
+  Test.check (x = String.length payload);
+  Test.check (b = String.length (String.uppercase_ascii payload));
+  Test.check (y = String.uppercase_ascii payload)
+
+let test_udp_stream_mismatch =
+  let description = {text|TCP/UDP guards|text} in
+  Test.test ~title:"udp and tcp" ~description @@ fun () ->
+  Miou_unix.run ~domains:0 @@ fun () ->
+  let exn fn =
+    match fn () with
+    | () -> false
+    | exception Invalid_argument _ -> true
+    | exception _ -> false
+  in
+  let udp = Miou_unix.udpv4 () in
+  let tcp = Miou_unix.tcpv4 () in
+  let buf = Bytes.create 0x7ff in
+  Test.check (exn @@ fun () -> ignore (Miou_unix.read udp buf));
+  Test.check (exn @@ fun () -> Miou_unix.write udp "x");
+  Test.check (exn @@ fun () -> ignore (Miou_unix.recvfrom tcp buf []));
+  let fn () =
+    ignore
+      (Miou_unix.sendto tcp "x" []
+         (Unix.ADDR_INET (Unix.inet_addr_loopback, 0)))
+  in
+  Test.check (exn fn);
+  Miou_unix.close udp;
+  Miou_unix.close tcp
+
 let () =
-  let tests = [| test_eof_on_pipe; test_create_process |] in
+  let tests =
+    [|
+       test_eof_on_pipe; test_create_process; test_udp_echo
+     ; test_udp_stream_mismatch
+    |]
+  in
   let ({ Test.directory } as runner) =
     Test.runner (Filename.concat (Sys.getcwd ()) "_tests")
   in
