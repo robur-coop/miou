@@ -513,6 +513,14 @@ let transmit_and_clean domain syscall =
   Hashtbl.remove domain.revert (Miou.uid syscall);
   Miou.signal syscall
 
+let wakeup domain tbl fd =
+  match File_descrs.find_opt tbl fd with
+  | None -> []
+  | Some [] -> File_descrs.remove tbl fd; []
+  | Some syscalls ->
+      File_descrs.remove tbl fd;
+      List.rev_map (transmit_and_clean domain) syscalls
+
 let select _uid ic ~block cancelled_syscalls =
   let domain = domain () in
   clean domain cancelled_syscalls;
@@ -532,51 +540,18 @@ let select _uid ic ~block cancelled_syscalls =
       let acc = ref (collect domain []) in
       let fn index fd flags =
         if index == 0 then intr ic
-        else if Poll.Flags.mem flags Poll.Flags.(pollin + pollhup) then (
-          Poll.invalidate_index domain.poll index;
-          Bitv.set domain.bitv index false;
-          match File_descrs.find_opt domain.readers fd with
-          | None -> ()
-          | Some [] -> File_descrs.remove domain.readers fd
-          | Some syscalls ->
-              File_descrs.remove domain.readers fd;
-              acc :=
-                List.rev_append
-                  (List.rev_map (transmit_and_clean domain) syscalls)
-                  !acc)
-        else if Poll.Flags.mem flags Poll.Flags.pollout then (
-          Poll.invalidate_index domain.poll index;
-          Bitv.set domain.bitv index false;
-          match File_descrs.find_opt domain.writers fd with
-          | None -> ()
-          | Some [] -> File_descrs.remove domain.writers fd
-          | Some syscalls ->
-              File_descrs.remove domain.writers fd;
-              acc :=
-                List.rev_append
-                  (List.rev_map (transmit_and_clean domain) syscalls)
-                  !acc)
-        else if Poll.Flags.(mem flags (pollerr + pollnval)) then (
-          Poll.invalidate_index domain.poll index;
-          Bitv.set domain.bitv index false;
-          (match File_descrs.find_opt domain.readers fd with
-          | None -> ()
-          | Some [] -> File_descrs.remove domain.readers fd
-          | Some syscalls ->
-              File_descrs.remove domain.readers fd;
-              acc :=
-                List.rev_append
-                  (List.rev_map (transmit_and_clean domain) syscalls)
-                  !acc);
-          match File_descrs.find_opt domain.writers fd with
-          | None -> ()
-          | Some [] -> File_descrs.remove domain.writers fd
-          | Some syscalls ->
-              File_descrs.remove domain.writers fd;
-              acc :=
-                List.rev_append
-                  (List.rev_map (transmit_and_clean domain) syscalls)
-                  !acc)
+        else begin
+          let err = Poll.Flags.(mem flags (pollerr + pollhup + pollnval)) in
+          let readable = err || Poll.Flags.mem flags Poll.Flags.pollin in
+          let writable = err || Poll.Flags.mem flags Poll.Flags.pollout in
+          if readable || writable then begin
+            Poll.invalidate_index domain.poll index;
+            Bitv.set domain.bitv index false;
+            let x = if readable then wakeup domain domain.readers fd else [] in
+            let y = if writable then wakeup domain domain.writers fd else [] in
+            acc := List.rev_append y (List.rev_append x !acc)
+          end
+        end
       in
       Poll.iter domain.poll nready fn;
       !acc
