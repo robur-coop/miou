@@ -138,11 +138,32 @@ let test_udp_stream_mismatch =
   Miou_unix.close udp;
   Miou_unix.close tcp
 
+let test_connect_refused =
+  let description = {text|A failing connect must signal the writer|text} in
+  Test.test ~title:"connect refused" ~description @@ fun () ->
+  Miou_unix.run ~domains:0 @@ fun () ->
+  let m = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
+  Unix.bind m (Unix.ADDR_INET (Unix.inet_addr_loopback, 0));
+  let sockaddr = Unix.getsockname m in
+  Unix.close m;
+  let socket = Miou_unix.tcpv4 () in
+  let connect =
+    Miou.async @@ fun () ->
+    match Miou_unix.connect socket sockaddr with
+    | () -> `Connected
+    | exception Unix.Unix_error (Unix.ECONNREFUSED, _, _) -> `Refused
+  and timeout = Miou.async @@ fun () -> Miou_unix.sleep 2.; `Timeout in
+  let jobs = [ connect; timeout ] in
+  let result = Miou.await_one jobs in
+  List.iter Miou.cancel jobs;
+  Miou_unix.close socket;
+  Test.check (result = Ok `Refused)
+
 let () =
   let tests =
     [|
        test_eof_on_pipe; test_create_process; test_udp_echo
-     ; test_udp_stream_mismatch
+     ; test_udp_stream_mismatch; test_connect_refused
     |]
   in
   let ({ Test.directory } as runner) =
