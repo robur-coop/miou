@@ -4,9 +4,9 @@ let system =
   ignore (Unix.close_process_in ic);
   system
 
-let test_eof_on_pipe =
+let test01 =
   let description = {text|Test waiting for EOF|text} in
-  Test.test ~title:"eof on pipe" ~description @@ fun () ->
+  Test.test ~title:"test01" ~description @@ fun () ->
   Miou_unix.run ~domains:0 @@ fun () ->
   let cmd = "true" in
   let out, cmd_stdout = Unix.pipe ~cloexec:true () in
@@ -45,9 +45,9 @@ let test_eof_on_pipe =
   end;
   List.iter Miou.cancel jobs
 
-let test_create_process =
+let test02 =
   let description = {text|Unix.create_process|text} in
-  Test.test ~title:"create process" ~description @@ fun () ->
+  Test.test ~title:"test02" ~description @@ fun () ->
   let buf = Buffer.create 0x7ff in
   let prgm () =
     Miou_unix.run ~domains:0 @@ fun () ->
@@ -79,9 +79,9 @@ let test_create_process =
       let expected = "sleep launched\nsignal handler installed\nWEXITED(0)\n" in
       Test.check (serialized = expected)
 
-let test_udp_echo =
+let test03 =
   let description = {text|A simple echo with sendto/recvfrom|text} in
-  Test.test ~title:"echo" ~description @@ fun () ->
+  Test.test ~title:"test03" ~description @@ fun () ->
   Miou_unix.run ~domains:0 @@ fun () ->
   let server = Miou_unix.udpv4 () in
   Miou_unix.bind_and_listen server (Unix.ADDR_INET (Unix.inet_addr_loopback, 0));
@@ -113,9 +113,9 @@ let test_udp_echo =
   Test.check (b = String.length (String.uppercase_ascii payload));
   Test.check (y = String.uppercase_ascii payload)
 
-let test_udp_stream_mismatch =
+let test04 =
   let description = {text|TCP/UDP guards|text} in
-  Test.test ~title:"udp and tcp" ~description @@ fun () ->
+  Test.test ~title:"test04" ~description @@ fun () ->
   Miou_unix.run ~domains:0 @@ fun () ->
   let exn fn =
     match fn () with
@@ -138,9 +138,9 @@ let test_udp_stream_mismatch =
   Miou_unix.close udp;
   Miou_unix.close tcp
 
-let test_connect_refused =
+let test05 =
   let description = {text|A failing connect must signal the writer|text} in
-  Test.test ~title:"connect refused" ~description @@ fun () ->
+  Test.test ~title:"test05" ~description @@ fun () ->
   Miou_unix.run ~domains:0 @@ fun () ->
   let m = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
   Unix.bind m (Unix.ADDR_INET (Unix.inet_addr_loopback, 0));
@@ -160,12 +160,7 @@ let test_connect_refused =
   Test.check (result = Ok `Refused)
 
 let () =
-  let tests =
-    [|
-       test_eof_on_pipe; test_create_process; test_udp_echo
-     ; test_udp_stream_mismatch; test_connect_refused
-    |]
-  in
+  let tests = [| test01; test02; test03; test04; test05 |] in
   let ({ Test.directory } as runner) =
     Test.runner (Filename.concat (Sys.getcwd ()) "_tests")
   in
