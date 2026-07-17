@@ -41,6 +41,7 @@ exception Not_a_child
 exception No_domain_available
 exception Not_owner
 exception Resource_leaked
+exception No_select_provided
 
 let () =
   Printexc.register_printer @@ function
@@ -975,6 +976,21 @@ module Domain = struct
     | exception Heapq.Empty ->
         if system_events_suspended domain then
           unblock_awaits_with_system_events pool domain
+        else if (domain.uid :> int) = 0 then
+          (* NOTE(dinosaure): [dom0] has an empty run-queue and no pending
+             syscall: [prm0] is waiting for completions coming from other
+             domains. Without this branch, [run] returns immediately and the
+             toplevel loop of [Miou.run] busy-waits at 100% CPU until a worker
+             resolves what [prm0] awaits. Blocking into
+             [events.select ~block:true] is safe here: every cross-domain
+             completion goes through [add_into_dom0] which wakes [dom0] up with
+             [events.interrupt] (so does the failure path of the pool).
+
+             NOTE(dinosaure): Backends without a select function (pure
+             [Miou.run]) keep the historical spinning behaviour for our tests. *)
+          begin try unblock_awaits_with_system_events pool domain
+          with No_select_provided -> ()
+          end
     | _, elt ->
         once pool domain elt;
         if system_events_suspended domain then
@@ -1759,8 +1775,6 @@ let error_select =
    (which does not handle system events). You should use Miou_unix.run if you \
    use functions proposed by the Miou_unix module or use your own run function \
    associated with your suspensions."
-
-exception No_select_provided
 
 let () =
   Printexc.register_printer @@ function
