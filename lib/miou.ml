@@ -41,6 +41,7 @@ exception Not_a_child
 exception No_domain_available
 exception Not_owner
 exception Resource_leaked
+exception No_select_provided
 
 let () =
   Printexc.register_printer @@ function
@@ -429,6 +430,7 @@ type signal_retrieved =
   | Signal_retrieved : int * (int -> unit) -> signal_retrieved
 
 let signals = Queue.create ()
+let dom0_interrupt = Atomic.make ignore
 
 let transfer_dom0_signals pool =
   if not (Queue.is_empty signals) then begin
@@ -458,6 +460,8 @@ module Domain = struct
     ; hooks= Miou_sequence.create ()
     }
 
+  (* NOTE(dinosaure): as far as [event.interrupt] is domain-safe (which should
+     be the case), [interrupt] is domain-safe. *)
   let interrupt pool ~domain:uid =
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
     Logs.debug (fun m ->
@@ -975,6 +979,21 @@ module Domain = struct
     | exception Heapq.Empty ->
         if system_events_suspended domain then
           unblock_awaits_with_system_events pool domain
+        else if (domain.uid :> int) = 0 then
+          (* NOTE(dinosaure): [dom0] has an empty run-queue and no pending
+             syscall: [prm0] is waiting for completions coming from other
+             domains. Without this branch, [run] returns immediately and the
+             toplevel loop of [Miou.run] busy-waits at 100% CPU until a worker
+             resolves what [prm0] awaits. Blocking into
+             [events.select ~block:true] is safe here: every cross-domain
+             completion goes through [add_into_dom0] which wakes [dom0] up with
+             [events.interrupt] (so does the failure path of the pool).
+
+             NOTE(dinosaure): Backends without a select function (pure
+             [Miou.run]) keep the historical spinning behaviour for our tests. *)
+          begin try unblock_awaits_with_system_events pool domain
+          with No_select_provided -> ()
+          end
     | _, elt ->
         once pool domain elt;
         if system_events_suspended domain then
@@ -1760,8 +1779,6 @@ let error_select =
    use functions proposed by the Miou_unix module or use your own run function \
    associated with your suspensions."
 
-exception No_select_provided
-
 let () =
   Printexc.register_printer @@ function
   | No_select_provided -> Some error_select
@@ -1778,7 +1795,8 @@ let sys_signal signal = function
       let fn signal =
         Logs.debug (fun m ->
             m "[%d] got a signal %d" (Stdlib.Domain.self () :> int) signal);
-        Queue.enqueue signals (Signal_retrieved (signal, fn))
+        Queue.enqueue signals (Signal_retrieved (signal, fn));
+        if (Stdlib.Domain.self () :> int) <> 0 then Atomic.get dom0_interrupt ()
       in
       Sys.signal signal (Signal_handle fn)
 
@@ -1787,6 +1805,10 @@ let run ?(quanta = quanta) ?(g = Random.State.make_self_init ())
   Promise_uid.reset ();
   let dom0 = Domain_uid.of_int 0 in
   let dom0 = Domain.create ~quanta ~events g dom0 in
+  (* NOTE(dinosaure): set [dom0_interrupt] used by [sys_signal] to be able to
+     wake-up [dom0] if it is on the sleeping mode and when we retrieve a signal
+     on another domain. *)
+  Atomic.set dom0_interrupt dom0.events.interrupt;
   let prm0 = Promise.create ~forbid:false dom0.uid in
   Domain.add_into_domain dom0 (Domain_create (prm0, fn));
   let pool, domains = Pool.create ~quanta ~dom0 ~domains ~events () in
@@ -1807,6 +1829,7 @@ let run ?(quanta = quanta) ?(g = Random.State.make_self_init ())
       Error (exn, bt)
   in
   Pool.kill pool;
+  Atomic.set dom0_interrupt ignore;
   dom0.events.finaliser ();
   List.iter Stdlib.Domain.join domains;
   match result with
