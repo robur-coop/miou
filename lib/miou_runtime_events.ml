@@ -104,6 +104,7 @@ type Runtime_events.User.tag +=
   | Run_begin
   | Run_end
   | Run_done
+  | Clean
 
 open Runtime_events
 
@@ -138,6 +139,7 @@ let not_owner =
 let run_begin = User.register "miou.begin" Run_begin uid_type
 let run_end = User.register "miou.end" Run_end uid_type
 let run_done = User.register "miou.done" Run_done uid_type
+let clean = User.register "miou.clean" Clean uid_uid_type
 
 let reporter (event : Miou.Trace.event) =
   match event with
@@ -161,6 +163,8 @@ let reporter (event : Miou.Trace.event) =
   | Miou.Trace.Run_begin uid -> Runtime_events.User.write run_begin uid
   | Miou.Trace.Run_end uid -> Runtime_events.User.write run_end uid
   | Miou.Trace.Run_done uid -> Runtime_events.User.write run_done uid
+  | Miou.Trace.Clean { self; child } ->
+      Runtime_events.User.write clean (self, child)
   | Miou.Trace.Still_has_children uid ->
       Runtime_events.User.write still_has_children uid
   | Miou.Trace.Not_a_child { self; prm } ->
@@ -205,6 +209,7 @@ let add_callbacks ~fn callbacks =
     match Runtime_events.User.tag ev with
     | Attach -> fn ring_id ts (Miou.Trace.Attach { ruid= uid0; puid= uid1 })
     | Detach -> fn ring_id ts (Miou.Trace.Detach { ruid= uid0; puid= uid1 })
+    | Clean -> fn ring_id ts (Miou.Trace.Clean { self= uid0; child= uid1 })
     | Exn_not_a_child ->
         fn ring_id ts (Miou.Trace.Not_a_child { self= uid0; prm= uid1 })
     | Exn_not_owner ->

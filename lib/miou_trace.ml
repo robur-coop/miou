@@ -20,6 +20,7 @@ type event +=
   | Run_begin of int
   | Run_end of int
   | Run_done of int
+  | Clean of { self: int; child: int }
   | Still_has_children of int
   | Not_a_child of { self: int; prm: int }
   | Resource_leaked of int

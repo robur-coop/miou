@@ -142,8 +142,13 @@ let clean_children ~self (child : _ t) =
   in
   let some (Pack prm) = Promise_uid.equal self.uid prm.uid in
   if Option.fold ~none:false ~some child.parent then
-    try Miou_sequence.iter_node ~f self.children
-    with Clean_children node -> Miou_sequence.remove node
+    begin try Miou_sequence.iter_node ~f self.children
+    with Clean_children node ->
+      Miou_sequence.remove node;
+      let self = Promise_uid.to_int self.uid in
+      let child = Promise_uid.to_int child.uid in
+      Trace.trace (Trace.Clean { self; child })
+    end
 
 type syscall = Syscall : string * Syscall_uid.t * Trigger.t * _ t -> syscall
 type signal = Signal : Trigger.t * _ t -> signal
