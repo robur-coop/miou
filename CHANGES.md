@@ -1,10 +1,12 @@
-## v0.8.0 (2026-07-28)
+### v0.8.0 (2026-07-28)
 
 - Be able to run the `dune-configurator` on the host side (@samoht, #117)
 - Add `Miou_unix.{recvfrom,sendto}` (@dinosaure, asked by @pukkamustard, #118)
 - Fix `Miou_unix.connect` when it raises an error (@dinosaure, #119)
-- Add `Miou_trace.Clean` to signal when Miou really clean children (@dinosaure, #121)
-- Fix the behavior of our `dom0` and let it to enter into the sleep mode (bug spotted by @voodoos, fixed by @dinosaure, #120)
+- Add `Miou_trace.Clean` to signal when Miou really clean children (@dinosaure,
+  #121)
+- Fix the behavior of our `dom0` and let it to enter into the sleep mode (bug
+  spotted by @voodoos, fixed by @dinosaure, #120)
 
 ### v0.7.0 (2026-06-08)
 
