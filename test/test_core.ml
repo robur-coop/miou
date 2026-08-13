@@ -105,6 +105,11 @@ let test08 =
 
 let rec infinite () = infinite (Miou.yield ())
 
+let yield n =
+  for _ = 1 to n do
+    Miou.yield ()
+  done
+
 let test09 =
   let description = {text|A test to show up the cancellation.|text} in
   Test.test ~title:"test09" ~description @@ fun () ->
@@ -929,6 +934,159 @@ let test48 =
   | Error Miou.Cancelled -> Test.check true
   | _ -> Test.check false
 
+let owned_resource_is_always_released ~n ~k =
+  let owned = Atomic.make 0 and released = Atomic.make 0 in
+  let prgm () =
+    Miou.run @@ fun () ->
+    let prm =
+      Miou.async @@ fun () ->
+      yield k;
+      let finally () = Atomic.incr released in
+      let t = Miou.Ownership.create ~finally () in
+      Atomic.incr owned; Miou.Ownership.own t; infinite ()
+    in
+    yield n;
+    Miou.cancel prm;
+    match Miou.await prm with
+    | Error Miou.Cancelled -> ()
+    | _ -> failwith "Unexpected state of prm"
+  in
+  prgm ();
+  (Atomic.get owned, Atomic.get released)
+
+let test49 =
+  let description = {text|Miou.Ownership.own is atomic.|text} in
+  Test.test ~title:"test49" ~description @@ fun () ->
+  let owned = ref 0 in
+  let released = ref true in
+  for n = 0 to 8 do
+    for k = 0 to 8 do
+      let a, b = owned_resource_is_always_released ~n ~k in
+      released := !released && a = b;
+      owned := !owned + a
+    done
+  done;
+  (* NOTE(dinosaure): we should always reach a point where we own, at least, one
+     resource (or we are not lucky). *)
+  Test.check (!owned > 0);
+  Test.check !released
+
+let test50 =
+  let description = {text|Resources and parallel tasks.|text} in
+  Test.test ~title:"test50" ~description @@ fun () ->
+  let owned = Atomic.make 0 and released = Atomic.make 0 in
+  let prm () =
+    let finally () = Atomic.incr released in
+    let t = Miou.Ownership.create ~finally () in
+    Atomic.incr owned; Miou.Ownership.own t; infinite ()
+  in
+  let g = Random.State.make [| 0xdeadbeef |] in
+  Miou.run @@ fun () ->
+  for _ = 1 to 200 do
+    let prm =
+      match Random.State.bool g with
+      | true -> Miou.call prm
+      | false -> Miou.async prm
+    in
+    yield (Random.State.int g 12);
+    Miou.cancel prm;
+    match Miou.await prm with
+    | Error Miou.Cancelled -> ()
+    | _ -> failwith "Unexpected state of prm"
+  done;
+  Test.check (Atomic.get owned > 0);
+  Test.check (Atomic.get owned = Atomic.get released)
+
+let test51 =
+  let description = {text|Miou.Ownership.release runs finalizer once.|text} in
+  Test.test ~title:"test51" ~description @@ fun () ->
+  let released = Atomic.make 0 in
+  Miou.run @@ fun () ->
+  let prm =
+    Miou.async @@ fun () ->
+    let finally () = Atomic.incr released in
+    let t = Miou.Ownership.create ~finally () in
+    Miou.Ownership.own t; Miou.Ownership.release t
+  in
+  Miou.await_exn prm;
+  Test.check (Atomic.get released = 1)
+
+let test52 =
+  let description = {text|Finalizer called when we have exception.|text} in
+  Test.test ~title:"test52" ~description @@ fun () ->
+  let released = Atomic.make 0 in
+  Miou.run @@ fun () ->
+  let finally () = Atomic.incr released in
+  let t = Miou.Ownership.create ~finally () in
+  let prm = Miou.async ~give:[ t ] infinite in
+  Miou.yield ();
+  Miou.cancel prm;
+  match Miou.await prm with
+  | Error Miou.Cancelled -> Test.check (Atomic.get released = 1)
+  | _ -> failwith "Unexpected state of prm"
+
+let test53 =
+  let description =
+    {text|Finalizer called when we have exception (even with children).|text}
+  in
+  Test.test ~title:"test53" ~description @@ fun () ->
+  let released = Atomic.make 0 in
+  let prgm () =
+    Miou.run @@ fun () ->
+    let prm =
+      Miou.async @@ fun () ->
+      let finally () = Atomic.incr released in
+      let t = Miou.Ownership.create ~finally () in
+      Miou.Ownership.own t;
+      ignore (Miou.async infinite);
+      Miou.yield ();
+      failwith "prm"
+    in
+    Miou.await_exn prm
+  in
+  match prgm () with
+  | () -> failwith "Unexpected state of prm"
+  | exception Failure _ -> Test.check (Atomic.get released = 1)
+  | exception _ -> Test.check false
+
+let given_resource_is_always_released ~n fn =
+  let released = Atomic.make 0 in
+  Miou.run @@ fun () ->
+  let prm =
+    Miou.async @@ fun () ->
+    let finally () = Atomic.incr released in
+    let t = Miou.Ownership.create ~finally () in
+    fn t; infinite ()
+  in
+  yield n;
+  Miou.cancel prm;
+  match Miou.await prm with
+  | Error Miou.Cancelled -> yield 10; Atomic.get released
+  | _ -> failwith "Unexpected state of prm"
+
+let test54 =
+  let description =
+    {text|We can safely give resource even if we cancel.|text}
+  in
+  Test.test ~title:"test54" ~description @@ fun () ->
+  let prms =
+    [
+      (fun t -> ignore (Miou.async ~give:[ t ] infinite))
+    ; (fun t -> ignore (Miou.call ~give:[ t ] infinite))
+    ; (fun t ->
+        Miou.Ownership.own t;
+        ignore (Miou.async ~give:[ t ] infinite))
+    ]
+  in
+  let released = ref true in
+  let fn fn =
+    for n = 0 to 8 do
+      let x = given_resource_is_always_released ~n fn in
+      released := !released && x = 1
+    done
+  in
+  List.iter fn prms; Test.check !released
+
 let () =
   let tests =
     [
@@ -937,7 +1095,7 @@ let () =
     ; test19; test20; test21; test22; test23; test24; test25; test26; test27
     ; test28; test29; test30; test31; test32; test33; test34; test35; test36
     ; test37; test38; test39; test40; test41; test42; test43; test44; test45
-    ; test46; test47; test48
+    ; test46; test47; test48; test49; test50; test51; test52; test53; test54
     ]
   in
   let ({ Test.directory } as runner) =
