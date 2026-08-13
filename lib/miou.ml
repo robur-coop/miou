@@ -287,6 +287,19 @@ type _ Effect.t += Cancel : Printexc.raw_backtrace * 'a t -> unit Effect.t
 type _ Effect.t += Yield : unit Effect.t
 type _ Effect.t += Transfer : resource -> Trigger.t Effect.t
 
+let free =
+  let free : type a. a Effect.t -> bool = function
+    | Self | Self_domain | Random | Domains -> true
+    | _ -> false
+  in
+  { State.free }
+(* NOTE(dinosaure): It is assumed that certain effects have no impact on the
+   scheduler and how it works, and are considered {i pure}. For this type of
+   effect, we do not want them to consume an {i quanta}, and their use assumes
+   the atomicity of an operation from the user's perspective (in the sense that
+   a [Effect.perform] of these effects {b does not suspend}). It is important to
+   bear in mind that, by default, all effects suspend. *)
+
 let[@coverage off] pp_effect : type a. a Effect.t Fmt.t =
  fun ppf -> function
   | Spawn _ -> Fmt.string ppf "Spawn"
@@ -436,17 +449,6 @@ type signal_retrieved =
 
 let signals = Queue.create ()
 let dom0_interrupt = Atomic.make ignore
-
-let transfer_dom0_signals pool =
-  if not (Queue.is_empty signals) then begin
-    let elts = Queue.transfer signals in
-    let f (Signal_retrieved (signal, fn)) =
-      let prm = Promise.create ~forbid:true pool.dom0.uid in
-      let state = State.make fn signal in
-      add_into_domain pool.dom0 (Domain_signal (prm, signal, state))
-    in
-    Queue.iter ~f elts
-  end
 
 module Domain = struct
   module Uid = Domain_uid
@@ -839,6 +841,20 @@ module Domain = struct
               domain.uid (Printexc.to_string exn))
     | State.Finished (Ok ()) -> ()
 
+  let transfer_dom0_signals pool =
+    if not (Queue.is_empty signals) then begin
+      let elts = Queue.transfer signals in
+      let f (Signal_retrieved (signal, fn)) =
+        let prm = Promise.create ~forbid:true pool.dom0.uid in
+        let state = State.make fn signal in
+        let perform = perform pool pool.dom0 prm in
+        (* NOTE(dinosaure): we consume {i free} effects here. *)
+        let state = State.drain ~free ~perform state in
+        add_into_domain pool.dom0 (Domain_signal (prm, signal, state))
+      in
+      Queue.iter ~f elts
+    end
+
   let once pool domain = function
     | Domain_tick _ -> .
     | Domain_create (prm, fn) -> (
@@ -846,6 +862,9 @@ module Domain = struct
         | None ->
             Event.run_begin prm;
             let state = State.make fn () in
+            let perform = perform pool domain prm in
+            (* NOTE(dinosaure): we consume {i free} effects here. *)
+            let state = State.drain ~free ~perform state in
             Event.run_end prm;
             handle pool domain prm state
         | Some (exn, bt) ->
@@ -871,7 +890,7 @@ module Domain = struct
                violation of our rules, namely that only the domain in charge of
                the promise can continue the continuation [k]. *)
             Event.run_begin prm;
-            let state = State.run ~quanta:domain.quanta ~perform state in
+            let state = State.run ~quanta:domain.quanta ~free ~perform state in
             Event.run_end prm;
             handle pool domain prm state
         | Some (exn, bt) ->
@@ -893,7 +912,7 @@ module Domain = struct
         match Computation.cancelled prm.state with
         | None ->
             Event.run_begin prm;
-            let state = State.run ~quanta:domain.quanta ~perform state in
+            let state = State.run ~quanta:domain.quanta ~free ~perform state in
             Event.run_end prm;
             handle_signal ~signal domain prm state
         | Some (exn, bt) ->
@@ -1839,7 +1858,7 @@ let run ?(quanta = quanta) ?(g = Random.State.make_self_init ())
     try
       while Computation.is_running prm0.state && !(pool.fail) = false do
         transfer_dom0_tasks pool;
-        transfer_dom0_signals pool;
+        Domain.transfer_dom0_signals pool;
         Domain.run pool dom0
       done;
       if not !(pool.fail) then Option.get (Computation.peek prm0.state)

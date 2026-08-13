@@ -758,12 +758,9 @@ let test38 =
     Miou.yield (); Miou.Hook.remove node2; Miou.Hook.remove node1
   in
   prgm ();
-  (* - h1 from Miou.Hook.add h2
-     - h2 from Miou.yield
-     - h1 from Miou.yield
-     - h1 from Miou.Hook.remove node2
-     - h1 from Miou.Hook.remove node1 *)
-  Test.check (Buffer.contents buf = "h1\nh2\nh1\nh1\nh1\n")
+  (* - h2 from Miou.yield (then removed, it raised)
+     - h1 from Miou.yield *)
+  Test.check (Buffer.contents buf = "h2\nh1\n")
 
 let test39 =
   let description =

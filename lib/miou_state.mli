@@ -43,6 +43,11 @@ type perform = { perform: 'a 'b. ('a, 'b) handler } [@@unboxed]
     [perform] is a function which should handle incoming effects and give an
     {i operation} {!type:Operation.t} via the given continuation [k]. *)
 
+type free = { free: 'a. 'a Effect.t -> bool } [@@unboxed]
+(** Predicate describing {i free} effects: pure queries on the scheduler's
+    state, which cost no {i quanta} and on which a task must never be suspended.
+*)
+
 val make : ('a -> 'b) -> 'a -> 'b t
 (** [make fn value] makes a new {i function state} by executing the function
     with the given argument. *)
@@ -67,7 +72,7 @@ val fail : backtrace:Printexc.raw_backtrace -> exn:exn -> 'a t -> 'a t
 val pure : ('a, error) result -> 'a t
 (** [pure value] returns [Finished value]. *)
 
-val run : quanta:int -> perform:perform -> 'a t -> 'a t
+val run : quanta:int -> ?free:free -> perform:perform -> 'a t -> 'a t
 (** [run ~quanta ~perform state] applies {!val:once} [quanta] times. If
     [perform] responds with {!val:Operation.interrupt} (and therefore does
     nothing), even though there may be a few {i quanta} left, the function
@@ -76,6 +81,10 @@ val run : quanta:int -> perform:perform -> 'a t -> 'a t
     The same applies to {!val:Operation.yield}, except that the continuation has
     burnt itself out. In other words, {!val:Operation.yield} is equivalent to
     [send (); interrupt] but costs only one {i quanta}. *)
+
+val drain : free:free -> perform:perform -> 'a t -> 'a t
+(** [drain ~free ~perform] advances the given state as long as it is suspended
+    on a {i free} effect. In our terms, [drain] consumes 0 {i quanta}. *)
 
 (**/**)
 
