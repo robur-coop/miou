@@ -784,8 +784,12 @@ module Domain = struct
     let elts = ref [] in
     let f = function
       | _, Domain_tick _ -> .
-      | _, Domain_cancel _ | _, Domain_clean _ | _, Domain_signal _ -> ()
-      | _, elt ->
+      | _, Domain_cancel _
+      | _, Domain_clean _
+      | _, Domain_signal _
+      | _, Domain_transfer _ ->
+          ()
+      | _, ((Domain_create _ | Domain_task _) as elt) ->
           let (Pack prm) = promise_of_domain_elt elt in
           if Promise_uid.equal prm.uid uid then elts := elt :: !elts
     in
