@@ -540,6 +540,27 @@ module Domain = struct
             Domain_uid.pp domain.uid Resource_uid.pp uid Promise.pp prm
             (Printexc.to_string exn))
 
+  (* NOTE(dinosaure): there may be a situation where a task no longer has the
+     resources and attempts to pass them on to its child (via [~give]), but that
+     child has not yet been executed (or, worse still, the task is cancelled
+     before it even runs).
+
+     In this specific case, the [Spawn] effect has resources that will never be
+     released; these must be released if [prm.finalized] has not been set
+     correctly. *)
+  let release_resources_in_flight domain prm = function
+    | State.Suspended (_, Spawn (_, _, resources, _))
+      when Atomic.get prm.finalized = false ->
+        let f (Resource { uid; _ } as res) =
+          let equal (Resource { uid= uid'; _ }) = Resource_uid.equal uid uid' in
+          (* [not (exists equal resources)] takes the resources that exist in
+             [Spawn] but do not yet exist in [prm.resources]. *)
+          if not (Miou_sequence.exists equal prm.resources) then
+            release_resource domain prm res
+        in
+        List.iter f resources
+    | _ -> ()
+
   (* NOTE(dinosaure): [handle] is actually idempotent which means that it does
      things according to the given [state] only once. It's especially true for
      [State.Finished (Error _)] and [State.Finished (Ok _)] where some
@@ -854,6 +875,7 @@ module Domain = struct
             Event.run_end prm;
             handle pool domain prm state
         | Some (exn, bt) ->
+            release_resources_in_flight domain prm state;
             let state = State.fail ~backtrace:bt ~exn state in
             if Miou_sequence.is_empty prm.children then begin
               Atomic.set prm.cleaned true;
@@ -875,6 +897,7 @@ module Domain = struct
             Event.run_end prm;
             handle_signal ~signal domain prm state
         | Some (exn, bt) ->
+            release_resources_in_flight domain prm state;
             let state = State.fail ~backtrace:bt ~exn state in
             handle_signal ~signal domain prm state)
     | Domain_cancel (prm, bt) as cancellation ->
@@ -896,6 +919,7 @@ module Domain = struct
           | Some (Domain_task (prm', state)) ->
               miou_assert (Promise_uid.equal prm.uid prm'.uid);
               miou_assert (Domain_uid.equal prm.runner domain.uid);
+              release_resources_in_flight domain prm' state;
               let state = State.fail ~backtrace:bt ~exn:Cancelled state in
               handle pool domain prm' state
           | Some (Domain_cancel _)
