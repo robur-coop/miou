@@ -532,6 +532,14 @@ module Domain = struct
     | 0, _ -> miou_assert false
     | _ -> add_into_pool pool (Pool_cancel (prm, bt))
 
+  let release_resource domain prm (Resource { uid; value; finaliser }) =
+    try finaliser value
+    with exn ->
+      Logs.err (fun m ->
+          m "[%a] unexpected exception from the finaliser of [%a](%a): %s"
+            Domain_uid.pp domain.uid Resource_uid.pp uid Promise.pp prm
+            (Printexc.to_string exn))
+
   (* NOTE(dinosaure): [handle] is actually idempotent which means that it does
      things according to the given [state] only once. It's especially true for
      [State.Finished (Error _)] and [State.Finished (Ok _)] where some
@@ -568,20 +576,11 @@ module Domain = struct
     | State.Finished (Error (exn, bt)) ->
         if Atomic.compare_and_set prm.finalized false true then begin
           Event.run_done prm;
-          let f (Resource { uid; value; finaliser }) =
-            try finaliser value
-            with exn ->
-              Logs.err (fun m ->
-                  m
-                    "[%a] unexpected exception from the finaliser of [%a](%a): \
-                     %s"
-                    Domain_uid.pp domain.uid Resource_uid.pp uid Promise.pp prm
-                    (Printexc.to_string exn))
-          in
           Logs.debug (fun m ->
               m "[%a] finished a promise %a with exception %s\n%s" Domain_uid.pp
                 domain.uid Promise.pp prm (Printexc.to_string exn)
                 (Printexc.raw_backtrace_to_string bt));
+          let f = release_resource domain prm in
           Miou_sequence.iter ~f prm.resources;
           Miou_sequence.drop prm.resources;
           let f (Pack prm) = cancel pool domain ~backtrace:bt prm in
@@ -592,16 +591,7 @@ module Domain = struct
         end
     | State.Finished (Ok value) ->
         if Miou_sequence.is_empty prm.resources = false then begin
-          let f (Resource { uid; value; finaliser }) =
-            try finaliser value
-            with exn ->
-              Logs.err (fun m ->
-                  m
-                    "[%a] unexpected exception from the finaliser of [%a](%a): \
-                     %s"
-                    Domain_uid.pp domain.uid Resource_uid.pp uid Promise.pp prm
-                    (Printexc.to_string exn))
-          in
+          let f = release_resource domain prm in
           Miou_sequence.iter ~f prm.resources;
           Miou_sequence.drop prm.resources;
           Event.resource_leaked prm;
