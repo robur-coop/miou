@@ -1087,6 +1087,31 @@ let test54 =
   in
   List.iter fn prms; Test.check !released
 
+let test55 =
+  let description =
+    {text|Cancelling a task while a child transfers a resource.|text}
+  in
+  Test.test ~title:"test55" ~description @@ fun () ->
+  let released = Atomic.make 0 and total = ref 0 in
+  for n = 0 to 8 do
+    for k = 0 to 8 do
+      Miou.run @@ fun () ->
+      let prm =
+        Miou.async @@ fun () ->
+        let finally () = Atomic.incr released in
+        let t = Miou.Ownership.create ~finally () in
+        let _ =
+          Miou.call ~give:[ t ] @@ fun () ->
+          (* no-op, transfer & infinite *)
+          yield k; Miou.Ownership.transfer t; infinite ()
+        in
+        infinite ()
+      in
+      yield n; Miou.cancel prm; yield 10; incr total
+    done
+  done;
+  Test.check (Atomic.get released = !total)
+
 let () =
   let tests =
     [
@@ -1096,6 +1121,7 @@ let () =
     ; test28; test29; test30; test31; test32; test33; test34; test35; test36
     ; test37; test38; test39; test40; test41; test42; test43; test44; test45
     ; test46; test47; test48; test49; test50; test51; test52; test53; test54
+    ; test55
     ]
   in
   let ({ Test.directory } as runner) =
