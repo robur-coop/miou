@@ -903,7 +903,8 @@ module Domain = struct
             else add_into_domain domain (Domain_task (prm, state)))
     | Domain_clean (prm, child) -> clean_children ~self:prm child
     | Domain_transfer (prm, res, trigger) ->
-        Miou_sequence.(add Left) prm.resources res;
+        if Atomic.get prm.finalized then release_resource domain prm res
+        else Miou_sequence.(add Left) prm.resources res;
         Trigger.signal trigger
     | Domain_signal (prm, signal, state) -> (
         miou_assert (Domain_uid.equal prm.runner (Domain_uid.of_int 0));
