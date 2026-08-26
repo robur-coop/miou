@@ -287,6 +287,19 @@ type _ Effect.t += Cancel : Printexc.raw_backtrace * 'a t -> unit Effect.t
 type _ Effect.t += Yield : unit Effect.t
 type _ Effect.t += Transfer : resource -> Trigger.t Effect.t
 
+let free =
+  let free : type a. a Effect.t -> bool = function
+    | Self | Self_domain | Random | Domains -> true
+    | _ -> false
+  in
+  { State.free }
+(* NOTE(dinosaure): It is assumed that certain effects have no impact on the
+   scheduler and how it works, and are considered {i pure}. For this type of
+   effect, we do not want them to consume an {i quanta}, and their use assumes
+   the atomicity of an operation from the user's perspective (in the sense that
+   a [Effect.perform] of these effects {b does not suspend}). It is important to
+   bear in mind that, by default, all effects suspend. *)
+
 let[@coverage off] pp_effect : type a. a Effect.t Fmt.t =
  fun ppf -> function
   | Spawn _ -> Fmt.string ppf "Spawn"
@@ -437,17 +450,6 @@ type signal_retrieved =
 let signals = Queue.create ()
 let dom0_interrupt = Atomic.make ignore
 
-let transfer_dom0_signals pool =
-  if not (Queue.is_empty signals) then begin
-    let elts = Queue.transfer signals in
-    let f (Signal_retrieved (signal, fn)) =
-      let prm = Promise.create ~forbid:true pool.dom0.uid in
-      let state = State.make fn signal in
-      add_into_domain pool.dom0 (Domain_signal (prm, signal, state))
-    in
-    Queue.iter ~f elts
-  end
-
 module Domain = struct
   module Uid = Domain_uid
 
@@ -532,6 +534,35 @@ module Domain = struct
     | 0, _ -> miou_assert false
     | _ -> add_into_pool pool (Pool_cancel (prm, bt))
 
+  let release_resource domain prm (Resource { uid; value; finaliser }) =
+    try finaliser value
+    with exn ->
+      Logs.err (fun m ->
+          m "[%a] unexpected exception from the finaliser of [%a](%a): %s"
+            Domain_uid.pp domain.uid Resource_uid.pp uid Promise.pp prm
+            (Printexc.to_string exn))
+
+  (* NOTE(dinosaure): there may be a situation where a task no longer has the
+     resources and attempts to pass them on to its child (via [~give]), but that
+     child has not yet been executed (or, worse still, the task is cancelled
+     before it even runs).
+
+     In this specific case, the [Spawn] effect has resources that will never be
+     released; these must be released if [prm.finalized] has not been set
+     correctly. *)
+  let release_resources_in_flight domain prm = function
+    | State.Suspended (_, Spawn (_, _, resources, _))
+      when Atomic.get prm.finalized = false ->
+        let f (Resource { uid; _ } as res) =
+          let equal (Resource { uid= uid'; _ }) = Resource_uid.equal uid uid' in
+          (* [not (exists equal resources)] takes the resources that exist in
+             [Spawn] but do not yet exist in [prm.resources]. *)
+          if not (Miou_sequence.exists equal prm.resources) then
+            release_resource domain prm res
+        in
+        List.iter f resources
+    | _ -> ()
+
   (* NOTE(dinosaure): [handle] is actually idempotent which means that it does
      things according to the given [state] only once. It's especially true for
      [State.Finished (Error _)] and [State.Finished (Ok _)] where some
@@ -568,20 +599,11 @@ module Domain = struct
     | State.Finished (Error (exn, bt)) ->
         if Atomic.compare_and_set prm.finalized false true then begin
           Event.run_done prm;
-          let f (Resource { uid; value; finaliser }) =
-            try finaliser value
-            with exn ->
-              Logs.err (fun m ->
-                  m
-                    "[%a] unexpected exception from the finaliser of [%a](%a): \
-                     %s"
-                    Domain_uid.pp domain.uid Resource_uid.pp uid Promise.pp prm
-                    (Printexc.to_string exn))
-          in
           Logs.debug (fun m ->
               m "[%a] finished a promise %a with exception %s\n%s" Domain_uid.pp
                 domain.uid Promise.pp prm (Printexc.to_string exn)
                 (Printexc.raw_backtrace_to_string bt));
+          let f = release_resource domain prm in
           Miou_sequence.iter ~f prm.resources;
           Miou_sequence.drop prm.resources;
           let f (Pack prm) = cancel pool domain ~backtrace:bt prm in
@@ -592,16 +614,7 @@ module Domain = struct
         end
     | State.Finished (Ok value) ->
         if Miou_sequence.is_empty prm.resources = false then begin
-          let f (Resource { uid; value; finaliser }) =
-            try finaliser value
-            with exn ->
-              Logs.err (fun m ->
-                  m
-                    "[%a] unexpected exception from the finaliser of [%a](%a): \
-                     %s"
-                    Domain_uid.pp domain.uid Resource_uid.pp uid Promise.pp prm
-                    (Printexc.to_string exn))
-          in
+          let f = release_resource domain prm in
           Miou_sequence.iter ~f prm.resources;
           Miou_sequence.drop prm.resources;
           Event.resource_leaked prm;
@@ -828,6 +841,20 @@ module Domain = struct
               domain.uid (Printexc.to_string exn))
     | State.Finished (Ok ()) -> ()
 
+  let transfer_dom0_signals pool =
+    if not (Queue.is_empty signals) then begin
+      let elts = Queue.transfer signals in
+      let f (Signal_retrieved (signal, fn)) =
+        let prm = Promise.create ~forbid:true pool.dom0.uid in
+        let state = State.make fn signal in
+        let perform = perform pool pool.dom0 prm in
+        (* NOTE(dinosaure): we consume {i free} effects here. *)
+        let state = State.drain ~free ~perform state in
+        add_into_domain pool.dom0 (Domain_signal (prm, signal, state))
+      in
+      Queue.iter ~f elts
+    end
+
   let once pool domain = function
     | Domain_tick _ -> .
     | Domain_create (prm, fn) -> (
@@ -835,6 +862,9 @@ module Domain = struct
         | None ->
             Event.run_begin prm;
             let state = State.make fn () in
+            let perform = perform pool domain prm in
+            (* NOTE(dinosaure): we consume {i free} effects here. *)
+            let state = State.drain ~free ~perform state in
             Event.run_end prm;
             handle pool domain prm state
         | Some (exn, bt) ->
@@ -860,10 +890,11 @@ module Domain = struct
                violation of our rules, namely that only the domain in charge of
                the promise can continue the continuation [k]. *)
             Event.run_begin prm;
-            let state = State.run ~quanta:domain.quanta ~perform state in
+            let state = State.run ~quanta:domain.quanta ~free ~perform state in
             Event.run_end prm;
             handle pool domain prm state
         | Some (exn, bt) ->
+            release_resources_in_flight domain prm state;
             let state = State.fail ~backtrace:bt ~exn state in
             if Miou_sequence.is_empty prm.children then begin
               Atomic.set prm.cleaned true;
@@ -872,7 +903,8 @@ module Domain = struct
             else add_into_domain domain (Domain_task (prm, state)))
     | Domain_clean (prm, child) -> clean_children ~self:prm child
     | Domain_transfer (prm, res, trigger) ->
-        Miou_sequence.(add Left) prm.resources res;
+        if Atomic.get prm.finalized then release_resource domain prm res
+        else Miou_sequence.(add Left) prm.resources res;
         Trigger.signal trigger
     | Domain_signal (prm, signal, state) -> (
         miou_assert (Domain_uid.equal prm.runner (Domain_uid.of_int 0));
@@ -881,10 +913,11 @@ module Domain = struct
         match Computation.cancelled prm.state with
         | None ->
             Event.run_begin prm;
-            let state = State.run ~quanta:domain.quanta ~perform state in
+            let state = State.run ~quanta:domain.quanta ~free ~perform state in
             Event.run_end prm;
             handle_signal ~signal domain prm state
         | Some (exn, bt) ->
+            release_resources_in_flight domain prm state;
             let state = State.fail ~backtrace:bt ~exn state in
             handle_signal ~signal domain prm state)
     | Domain_cancel (prm, bt) as cancellation ->
@@ -906,6 +939,7 @@ module Domain = struct
           | Some (Domain_task (prm', state)) ->
               miou_assert (Promise_uid.equal prm.uid prm'.uid);
               miou_assert (Domain_uid.equal prm.runner domain.uid);
+              release_resources_in_flight domain prm' state;
               let state = State.fail ~backtrace:bt ~exn:Cancelled state in
               handle pool domain prm' state
           | Some (Domain_cancel _)
@@ -1825,7 +1859,7 @@ let run ?(quanta = quanta) ?(g = Random.State.make_self_init ())
     try
       while Computation.is_running prm0.state && !(pool.fail) = false do
         transfer_dom0_tasks pool;
-        transfer_dom0_signals pool;
+        Domain.transfer_dom0_signals pool;
         Domain.run pool dom0
       done;
       if not !(pool.fail) then Option.get (Computation.peek prm0.state)

@@ -104,10 +104,34 @@ exception Break
 
 let is_finished = function Finished _ -> true | _ -> false
 
+type free = { free: 'a. 'a Effect.t -> bool } [@@unboxed]
+
+let never = { free= (fun _ -> false) }
+
+let is_free free = function
+  | Suspended (_, eff) -> free.free eff
+  | Finished _ | Unhandled _ -> false
+
 [@@@warning "-8"]
 
-let run : type a. quanta:int -> perform:perform -> a t -> a t =
- fun ~quanta ~perform state ->
+let rec drain : type a. free:free -> perform:perform -> a t -> a t =
+ fun ~free ~perform state ->
+  match state with
+  | Suspended (fn, e) when free.free e ->
+      let k : type c. (c, a) continuation -> c Operation.t -> a t =
+       fun fn -> function
+         | Return v -> continue_with fn v
+         | Fail (exn, bt) -> discontinue_with ~backtrace:bt fn exn
+         | Continue e -> suspended_with fn e
+         | Perform e -> unhandled_with fn (Effect.perform e)
+         | Yield -> continue_with fn ()
+         | Interrupt -> state
+      in
+      drain ~free ~perform (perform.perform (k fn) e)
+  | state -> state
+
+let run : type a. quanta:int -> ?free:free -> perform:perform -> a t -> a t =
+ fun ~quanta ?(free = never) ~perform state ->
   let exception Yield of a t in
   let k : type c. (c, a) continuation -> c Operation.t -> a t =
    fun fn -> function
@@ -122,11 +146,11 @@ let run : type a. quanta:int -> perform:perform -> a t -> a t =
   in
   let quanta = ref quanta and state = ref state in
   try
-    while !quanta > 0 && is_finished !state = false do
+    while (!quanta > 0 || is_free free !state) && is_finished !state = false do
       match !state with
       | Suspended (fn, e) ->
           state := perform.perform (k fn) e;
-          quanta := !quanta - 1
+          quanta := !quanta - if free.free e then 0 else 1
       | Unhandled (fn, v) ->
           state := continue_with fn v;
           quanta := !quanta - 1
@@ -134,7 +158,7 @@ let run : type a. quanta:int -> perform:perform -> a t -> a t =
     !state
   with
   | Break -> !state
-  | Yield state -> state
+  | Yield state -> drain ~free ~perform state
   | exn ->
       Logs.err (fun m -> m "Unexpected exception: %S" (Printexc.to_string exn));
       raise exn
