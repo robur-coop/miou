@@ -1905,6 +1905,9 @@ let () =
   | _ -> None
 
 let protect ~on_cancellation ~finally fn =
+  let self = try Some (Effect.perform Self) with _exn -> None in
+  let some (Pack self) = Option.is_some (Computation.cancelled self.state) in
+  let is_cancelled () = Option.fold ~none:false ~some self in
   let finally_no_exn ~cancelled =
     try finally ~cancelled
     with exn ->
@@ -1917,18 +1920,23 @@ let protect ~on_cancellation ~finally fn =
       let bt = Printexc.get_raw_backtrace () in
       Printexc.raise_with_backtrace (On_cancellation_raised exn) bt
   in
+  let terminate () =
+    match is_cancelled () with
+    | false as cancelled -> finally_no_exn ~cancelled
+    | true as cancelled ->
+        begin try on_cancellation_no_exn (); finally_no_exn ~cancelled
+        with exn ->
+          Logs.err (fun m ->
+              m "A cancelled task raised while cleaning up: %s"
+                (Printexc.to_string exn));
+          reraise exn
+        end
+  in
   match fn () with
-  | result ->
-      finally_no_exn ~cancelled:false;
-      result
-  | exception Cancelled ->
-      let bt = Printexc.get_raw_backtrace () in
-      finally_no_exn ~cancelled:true;
-      on_cancellation_no_exn ();
-      Printexc.raise_with_backtrace Cancelled bt
+  | result -> terminate (); result
   | exception exn ->
       let bt = Printexc.get_raw_backtrace () in
-      finally_no_exn ~cancelled:false;
+      terminate ();
       Printexc.raise_with_backtrace exn bt
 
 module Mutex = struct

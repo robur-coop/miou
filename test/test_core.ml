@@ -1,4 +1,5 @@
 let () = Printexc.record_backtrace true
+let strf fmt = Format.asprintf fmt
 
 module Atomic = Stdlib.Atomic
 
@@ -1112,6 +1113,103 @@ let test55 =
   done;
   Test.check (Atomic.get released = !total)
 
+let log fn =
+  let lst = Atomic.make [] in
+  let push v =
+    let rec go () =
+      let seen = Atomic.get lst in
+      if not (Atomic.compare_and_set lst seen (v :: seen)) then go ()
+    in
+    go ()
+  in
+  fn push;
+  String.concat "," (List.rev (Atomic.get lst))
+
+let test56 =
+  let description = {text|protect reports a cancellation.|text} in
+  Test.test ~title:"test56" ~description @@ fun () ->
+  let result =
+    log @@ fun push ->
+    Miou.run @@ fun () ->
+    let prm =
+      Miou.async @@ fun () ->
+      let on_cancellation () = push "cancelled" in
+      let finally ~cancelled = push (strf "fin(%b)" cancelled) in
+      Miou.protect ~on_cancellation ~finally @@ fun () ->
+      try infinite () with _ -> push "caught"
+    in
+    Miou.yield (); Miou.cancel prm
+  in
+  Test.check (result = "caught,cancelled,fin(true)")
+
+let test57 =
+  let description = {text|protect does not mistake a child's Cancelled.|text} in
+  Test.test ~title:"test57" ~description @@ fun () ->
+  let result =
+    log @@ fun push ->
+    Miou.run @@ fun () ->
+    let prm =
+      Miou.async @@ fun () ->
+      let on_cancellation () = push "cancelled" in
+      let finally ~cancelled = push (strf "fin(%b)" cancelled) in
+      Miou.protect ~on_cancellation ~finally @@ fun () ->
+      let prm = Miou.async infinite in
+      Miou.yield (); Miou.cancel prm; Miou.await_exn prm
+    in
+    ignore (Miou.await prm)
+  in
+  Test.check (result = "fin(false)")
+
+let test58 =
+  let description =
+    {text|on_cancellation is executed even if finally raises.|text}
+  in
+  Test.test ~title:"test58" ~description @@ fun () ->
+  let on_finally fn =
+    log @@ fun push ->
+    Miou.run @@ fun () ->
+    let prm =
+      Miou.async @@ fun () ->
+      let on_cancellation () = push "cancelled" in
+      let finally ~cancelled = fn ~cancelled push in
+      Miou.protect ~on_cancellation ~finally infinite
+    in
+    Miou.yield (); Miou.cancel prm
+  in
+  let performs ~cancelled:_ push = push "fin"; Miou.yield (); push "unreachable"
+  and raises ~cancelled:_ push = push "fin"; raise Exit in
+  Test.check (on_finally performs = "cancelled,fin");
+  Test.check (on_finally raises = "cancelled,fin")
+
+let test59 =
+  let description = {text|Miou.protect is like Fun.protect.|text} in
+  Test.test ~title:"test59" ~description @@ fun () ->
+  let result =
+    log @@ fun push ->
+    let on_cancellation () = push "cancelled" in
+    let finally ~cancelled = push (strf "fin(%b)" cancelled) in
+    Miou.protect ~on_cancellation ~finally (fun () -> push "fn");
+    try Miou.protect ~on_cancellation ~finally (fun () -> raise Exit)
+    with Exit -> push "caught"
+  in
+  Test.check (result = "fn,fin(false),fin(false),caught")
+
+let test60 =
+  let description = {text|Raising on on_cancellation blows up.|text} in
+  Test.test ~title:"test60" ~description @@ fun () ->
+  let result =
+    log @@ fun push ->
+    Miou.run @@ fun () ->
+    let prm =
+      Miou.async @@ fun () ->
+      let on_cancellation () = push "cancelled"; raise Exit in
+      let finally ~cancelled = push (strf "fin(%b)" cancelled) in
+      Miou.protect ~on_cancellation ~finally infinite
+    in
+    Miou.yield (); Miou.cancel prm
+  in
+  Test.check (result = "cancelled")
+
 let () =
   let tests =
     [
@@ -1121,7 +1219,7 @@ let () =
     ; test28; test29; test30; test31; test32; test33; test34; test35; test36
     ; test37; test38; test39; test40; test41; test42; test43; test44; test45
     ; test46; test47; test48; test49; test50; test51; test52; test53; test54
-    ; test55
+    ; test55; test56; test57; test58; test59; test60
     ]
   in
   let ({ Test.directory } as runner) =

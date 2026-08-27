@@ -1235,19 +1235,17 @@ val protect :
 (** [protect ~on_cancellation ~finally fn] invokes [fn ()] and then
     [finally ~cancelled] before [fn ()] returns its value or an exception as
     {!val:Fun.protect} or an cancellation. In the case of an abnormal
-    termination, the exception is re-raised after [finally ~cancelled]. If
-    [finally] raises an exception, then the exception {!Fun.Finally_raised} is
-    raised instead. In the case of a cancellation, it invokes [finally ()] and
-    then [on_cancellation ()] before the deletion of [fn ()]. If
-    [on_cancellation ()] raises an exception, then the "uncatchable" exception
-    [On_cancellation_raised] is raised instead.
+    termination, the exception is re-raised after [finally ~cancelled]. In the
+    case of a cancellation, [protect] invokes [on_cancellation ()] and then
+    [finally ()] (with [cancelled:true]).
 
-    [on_cancellation] must {b not} use any effects. Using effects suspends
-    execution and, in the case of cancellation, anything after the effect will
-    never be executed.
+    If [finally] raises an exception, then the exception {!Fun.Finally_raises}
+    is raised instead. If [on_cancellation] raises an exception, then the
+    "uncatchable" exception [On_cancellation_raised] is raised instead.
 
-    [finally] can use effects. [protect] informs the user if [finally] is
-    invoked due to cancellation or not.
+    [on_cancellation] or [finally] must {b not} use any effects. Using effects
+    suspends execution and, in the case of cancellation, anything after the
+    effect will never be executed.
 
     [protect] can be used to enforce local invariants whether [fn ()] returns
     normally or raises an exception or is cancelled. However, it does not
