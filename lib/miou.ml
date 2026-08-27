@@ -56,6 +56,18 @@ let () =
 type 'a r = { uid: Resource_uid.t; value: 'a; finaliser: 'a -> unit }
 type resource = Resource : 'a r -> resource [@@unboxed]
 
+module Handler = struct
+  type t = { handle: 'a. (unit -> 'a) -> 'a } [@@unboxed]
+
+  let none = { handle= (fun fn -> fn ()) }
+
+  let compose h0 h1 =
+    let handle : type a. (unit -> a) -> a =
+     fun fn -> h0.handle (fun () -> h1.handle fn)
+    in
+    { handle }
+end
+
 type 'a t = {
     uid: Promise_uid.t
   ; runner: Domain_uid.t
@@ -67,6 +79,7 @@ type 'a t = {
   ; mutable cancelled: (exn * Printexc.raw_backtrace) option
   ; cleaned: bool Atomic.t
   ; finalized: bool Atomic.t
+  ; handler: Handler.t
 }
 
 and pack = Pack : 'a t -> pack [@@unboxed]
@@ -83,7 +96,14 @@ module Promise = struct
     | Computation.Returned _ -> Finished
     | Computation.Continue _ -> Running
 
-  let create ?parent ~forbid ?resources:(ress = []) runner =
+  let create ?parent ~forbid ?resources:(ress = []) ?handler runner =
+    let some { handler; _ } = handler in
+    let inherited = Option.fold ~none:Handler.none ~some parent in
+    let handler =
+      match handler with
+      | None -> inherited
+      | Some handler -> Handler.compose inherited handler
+    in
     let resources = Miou_sequence.create () in
     List.iter Miou_sequence.(add Left resources) ress;
     {
@@ -97,6 +117,7 @@ module Promise = struct
     ; cancelled= None
     ; cleaned= Atomic.make false
     ; finalized= Atomic.make false
+    ; handler
     }
 
   let[@coverage off] pp ppf ({ uid; runner; _ } as prm) =
@@ -250,6 +271,7 @@ type pool = {
   ; working_counter: int ref
   ; domains_counter: int ref
   ; tasks_is_empty: bool Atomic.t
+  ; handler: Handler.t
 }
 (* NOTE(dinosaure): when we create the pool, we do a copy (eg.
    [{ pool with ... }]) to includes spawned domains. To continue sharing mutable
@@ -275,7 +297,14 @@ type ty = Concurrent | Parallel of Domain_uid.t
 type 'r waiter = { pool: pool; domain: domain; prm: 'r t }
 
 type _ Effect.t +=
-  | Spawn : ty * bool * resource list * (unit -> 'a) -> 'a t Effect.t
+  | Spawn : {
+        ty: ty
+      ; forbid: bool
+      ; resources: resource list
+      ; handler: Handler.t option
+      ; fn: unit -> 'a
+    }
+      -> 'a t Effect.t
 
 type _ Effect.t += Self : pack Effect.t
 type _ Effect.t += Self_domain : domain Effect.t
@@ -551,7 +580,7 @@ module Domain = struct
      released; these must be released if [prm.finalized] has not been set
      correctly. *)
   let release_resources_in_flight domain prm = function
-    | State.Suspended (_, Spawn (_, _, resources, _))
+    | State.Suspended (_, Spawn { resources; _ })
       when Atomic.get prm.finalized = false ->
         let f (Resource { uid; _ } as res) =
           let equal (Resource { uid= uid'; _ }) = Resource_uid.equal uid uid' in
@@ -685,17 +714,23 @@ module Domain = struct
       | Domains ->
           let domains = List.map (fun { uid; _ } -> uid) pool.domains in
           k (Operation.return domains)
-      | Spawn (Concurrent, forbid, resources, fn) ->
+      | Spawn { ty= Concurrent; forbid; resources; handler; fn } ->
           clean_resources prm resources;
-          let prm' = Promise.create ~parent:prm ~forbid ~resources domain.uid in
+          let parent = prm in
+          let prm' =
+            Promise.create ~parent ~forbid ~resources ?handler domain.uid
+          in
           canceller pool ~self:prm prm';
           Miou_sequence.(add Left) prm.children (Pack prm');
           Event.spawn prm';
           add_into_domain domain (Domain_create (prm', fn));
           k (Operation.return prm')
-      | Spawn (Parallel runner, forbid, resources, fn) ->
+      | Spawn { ty= Parallel runner; forbid; resources; handler; fn } ->
           clean_resources prm resources;
-          let prm' = Promise.create ~parent:prm ~forbid ~resources runner in
+          let parent = prm in
+          let prm' =
+            Promise.create ~parent ~forbid ~resources ?handler runner
+          in
           canceller pool ~self:prm prm';
           Miou_sequence.(add Left) prm.children (Pack prm');
           Event.spawn ~kind:`Parallel prm';
@@ -727,7 +762,9 @@ module Domain = struct
           k (Operation.return trigger)
       | Trigger.Await _ -> k Operation.interrupt
       | Yield -> Event.yield prm; k Operation.yield
-      | eff -> k (Operation.perform eff)
+      | eff ->
+          let bt = Printexc.get_callstack max_int in
+          k (Operation.fail ~backtrace:bt (Effect.Unhandled eff))
     in
     { perform }
 
@@ -845,7 +882,8 @@ module Domain = struct
     if not (Queue.is_empty signals) then begin
       let elts = Queue.transfer signals in
       let f (Signal_retrieved (signal, fn)) =
-        let prm = Promise.create ~forbid:true pool.dom0.uid in
+        let handler = pool.handler in
+        let prm = Promise.create ~forbid:true ~handler pool.dom0.uid in
         let state = State.make fn signal in
         let perform = perform pool pool.dom0 prm in
         (* NOTE(dinosaure): we consume {i free} effects here. *)
@@ -861,8 +899,9 @@ module Domain = struct
         match Computation.cancelled prm.state with
         | None ->
             Event.run_begin prm;
-            let state = State.make fn () in
             let perform = perform pool domain prm in
+            let fn () = prm.handler.Handler.handle fn in
+            let state = State.make fn () in
             (* NOTE(dinosaure): we consume {i free} effects here. *)
             let state = State.drain ~free ~perform state in
             Event.run_end prm;
@@ -1205,7 +1244,8 @@ module Pool = struct
     max 0 (Stdlib.Domain.recommended_domain_count () - 1)
 
   let create ?(quanta = 1) ~dom0
-      ?domains:(domains_counter = number_of_domains ()) ~events () =
+      ?domains:(domains_counter = number_of_domains ()) ~events
+      ?(handler = Handler.none) () =
     let pool =
       {
         tasks= Miou_sequence.create ()
@@ -1220,6 +1260,7 @@ module Pool = struct
       ; dom0
       ; to_dom0= Queue.create ()
       ; tasks_is_empty= Atomic.make true
+      ; handler
       }
     in
     let clatch = Clatch.create domains_counter in
@@ -1369,16 +1410,19 @@ let location () =
   in
   Some (filename, line_number)
 
-let async ?loc ?(give = []) ?orphans fn =
+let async ?loc ?(give = []) ?orphans ?handler fn =
   let loc = match loc with Some loc -> Some loc | None -> location () in
   let (Pack self) = Effect.perform Self in
-  let prm = Effect.perform (Spawn (Concurrent, false, give, fn)) in
+  let eff =
+    Spawn { ty= Concurrent; forbid= false; resources= give; handler; fn }
+  in
+  let prm = Effect.perform eff in
   Option.iter (add_into_orphans ~self prm) orphans;
   Option.iter (Event.location prm) loc;
   Logs.debug (fun m -> m "%a spawned" Promise.pp prm);
   prm
 
-let call ?pin ?(give = []) ?orphans fn =
+let call ?pin ?(give = []) ?orphans ?handler fn =
   let domains = Effect.perform Domains in
   if domains = [] then raise No_domain_available;
   let loc = location () in
@@ -1402,7 +1446,10 @@ let call ?pin ?(give = []) ?orphans fn =
         | [] -> raise No_domain_available
         | lst -> List.nth lst (Random.State.int g (List.length lst)))
   in
-  let prm = Effect.perform (Spawn (Parallel runner, false, give, fn)) in
+  let eff =
+    Spawn { ty= Parallel runner; forbid= false; resources= give; handler; fn }
+  in
+  let prm = Effect.perform eff in
   Option.iter (add_into_orphans ~self prm) orphans;
   Option.iter (Event.location prm) loc;
   prm
@@ -1587,7 +1634,7 @@ let await_all prms =
   let prms = List.rev_map (fun prm -> await prm) prms in
   List.rev prms
 
-let async ?give ?orphans fn = async ?give ?orphans fn
+let async ?give ?orphans ?handler fn = async ?give ?orphans ?handler fn
 
 let parallel fn tasks =
   let loc = location () in
@@ -1595,8 +1642,9 @@ let parallel fn tasks =
   let domains = Effect.perform Domains in
   let domains = List.filter (Fun.negate (Domain_uid.equal runner)) domains in
   let spawn runner fn v =
-    let fn () = fn v in
-    let prm = Effect.perform (Spawn (Parallel runner, false, [], fn)) in
+    let fn () = fn v and handler = None and resources = [] and forbid = false in
+    let eff = Spawn { ty= Parallel runner; forbid; resources; handler; fn } in
+    let prm = Effect.perform eff in
     Option.iter (Event.location prm) loc;
     prm
   in
@@ -1844,7 +1892,7 @@ let sys_signal signal = function
       Sys.signal signal (Signal_handle fn)
 
 let run ?(quanta = quanta) ?(g = Random.State.make_self_init ())
-    ?(domains = domains) ?(events = Fun.const dummy_events) fn =
+    ?(domains = domains) ?(events = Fun.const dummy_events) ?handler fn =
   Promise_uid.reset ();
   let dom0 = Domain_uid.of_int 0 in
   let dom0 = Domain.create ~quanta ~events g dom0 in
@@ -1852,9 +1900,9 @@ let run ?(quanta = quanta) ?(g = Random.State.make_self_init ())
      wake-up [dom0] if it is on the sleeping mode and when we retrieve a signal
      on another domain. *)
   Atomic.set dom0_interrupt dom0.events.interrupt;
-  let prm0 = Promise.create ~forbid:false dom0.uid in
+  let prm0 = Promise.create ~forbid:false ?handler dom0.uid in
   Domain.add_into_domain dom0 (Domain_create (prm0, fn));
-  let pool, domains = Pool.create ~quanta ~dom0 ~domains ~events () in
+  let pool, domains = Pool.create ~quanta ~dom0 ~domains ~events ?handler () in
   let result =
     try
       while Computation.is_running prm0.state && !(pool.fail) = false do
