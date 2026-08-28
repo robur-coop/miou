@@ -490,6 +490,54 @@ module Domain : sig
   val all : unit -> Uid.t list
 end
 
+(** {2 Effect handler.}
+
+    A {!type:Handler.t} lets you install your own effect handler around a task.
+    Miou installs it {b inside} the task, so the handler frame belongs to the
+    suspended state of the task: it survives suspension, resumption,
+    cancellation and migration to another domain.
+
+    A handler is {b inherited}: the handler of a task is the handler of its
+    parent composed with its own. A handler given to {!val:run} is therefore in
+    scope for every descendant, including those spawned with {!val:call} on
+    another domain.
+
+    {[
+      type _ Effect.t += Incr unit Effect.t
+
+      let counter () =
+        let c = Atomic.make 0 in
+        let handle : type a. (unit -> a) -> a = fun fn ->
+          match fn () with
+          | value -> value
+          | effect Incr, k -> Atomic.incr c; Effect.Deep.continue k () in
+        (c, { Miou.Handler.handle })
+
+      let () =
+        let c, handler = counter () in
+        Miou.run ~handler @@ fun () ->
+        let prm = Miou.call @@ fun () -> Effect.perform Incr in
+        Effect.perform Incr;
+        Miou.await_exn prm;
+        assert (Atomic.get c = 2)
+    ]}
+
+    An effect which reaches Miou without having been handled by any installed
+    handler {b fails the task} with {!exception:Effect.Unhandled}. It is
+    reported through the promise of the task, like any other exception.
+
+    {b NOTE}: [handle] can run on several domains at once: it must be safe with
+    respect to synchronisation. *)
+
+module Handler : sig
+  type t = { handle: 'a. (unit -> 'a) -> 'a } [@@unboxed]
+  (** The type of handlers. [handle fn] must call [fn ()] and return its value
+      or its exception. *)
+
+  val compose : t -> t -> t
+  (** [(compose h0 h1).handle fn] is [h0.handle (fun () -> h1.handle fn)]. *)
+end
+
 type 'a t
 
 module Promise : sig
@@ -751,7 +799,11 @@ val length : _ orphans -> int
 (** {2 Launch a promise.} *)
 
 val async :
-  ?give:Ownership.t list -> ?orphans:'a orphans -> (unit -> 'a) -> 'a t
+     ?give:Ownership.t list
+  -> ?orphans:'a orphans
+  -> ?handler:Handler.t
+  -> (unit -> 'a)
+  -> 'a t
 (** [async fn] (for Call with Current Continuation) returns a promise {!type:t}
     representing the state of the task given as an argument. The task will be
     executed {b concurrently} with the other tasks in the current domain.
@@ -777,6 +829,7 @@ val call :
      ?pin:Domain.Uid.t
   -> ?give:Ownership.t list
   -> ?orphans:'a orphans
+  -> ?handler:Handler.t
   -> (unit -> 'a)
   -> 'a t
 (** [call fn] returns a promise {!type:t} representing the state of the task
@@ -1214,6 +1267,7 @@ val run :
   -> ?g:Random.State.t
   -> ?domains:int
   -> ?events:(Domain.Uid.t -> events)
+  -> ?handler:Handler.t
   -> (unit -> 'a)
   -> 'a
 

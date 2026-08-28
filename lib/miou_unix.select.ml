@@ -540,4 +540,4 @@ let events domain =
   let finaliser () = Unix.close ic; Unix.close oc in
   { Miou.interrupt= interrupt oc; select; finaliser }
 
-let run ?g ?domains fn = Miou.run ~events ?g ?domains fn
+let run ?g ?domains ?handler fn = Miou.run ~events ?g ?domains ?handler fn

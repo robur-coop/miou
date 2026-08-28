@@ -255,7 +255,12 @@ val sleep : float -> unit
 
 (** {3 First entry point.} *)
 
-val run : ?g:Random.State.t -> ?domains:int -> (unit -> 'a) -> 'a
+val run :
+     ?g:Random.State.t
+  -> ?domains:int
+  -> ?handler:Miou.Handler.t
+  -> (unit -> 'a)
+  -> 'a
 
 module Ownership : sig
   type file_descr
