@@ -1,3 +1,33 @@
+### v0.9.0 (2026-08-28)
+
+- Be exhaustive on our pattern matching to pick a new task, it fix a
+  `assert false` when we use `Miou.Ownership.transfer` specially
+  (@dinosaure, #123)
+- Enforce assumptions on our `Miou.Ownership` module. It exists some leaks
+  possible depending on how we schedule tasks and we enforced the "atomicity"
+  of `Miou.Ownership` functions to ensure attachment of finalizers to tasks and
+  ensure, by this way, release of resources for any situations (normal
+  termination, exception, cancellation).
+
+  **breaking change**: Such pull-request changes the behavior of Miou and some
+  of our effects don't yield anymore (specially our internal `Self` effect).
+  This release will change the behavior of Miou applications. We did benchmarks
+  on [`httpcats`](https://github.com/robur-coop/httpcats) to see if we have
+  any regression and we did not notice some (we also observed a small
+  improvement about the throughput).
+
+  (@dinosaure, #124)
+- A better `Miou.protect`. Since #124, it's possible to provide a more robust
+  `Miou.protect` which is able to attach a real finalizer to a function which
+  can be executed even in the cancellation case. It's adivsed to not use
+  effects in finalizers (as we ask for `Miou.Ownership`) in the case of the
+  cancellation. (@dinosaure, #125)
+- Re-introduce a way to handle user's defined effects. It's basically a
+  re-introduction of #11 but in a better way with an inheritance mechanism. The
+  user is able to attach "forever" a `Effect.Deep` handler and handle locally
+  effects. It gives to us the opportunity to create bridge with some others
+  schedulers as was initially suspected. (@dinosaure, #126)
+
 ### v0.8.0 (2026-07-28)
 
 - Be able to run the `dune-configurator` on the host side (@samoht, #117)
