@@ -56,7 +56,7 @@
     {[
     val my_program : unit -> unit
 
-    let () = Miou.run my_program ()
+    let () = Miou.run my_program
     ]}
 
     {3 A task manager.}
@@ -219,10 +219,9 @@
     {i increase} the points of cooperation that the fibers can emit. This is how
     Miou came up with a fundamental rule: {b an effect yields}.
 
-    All effects (those defined by Miou as well as those defined by the user)
-    reorder task execution. During this reordering, Miou can collect the system
-    events that have just occurred. The objective is to do this as often as
-    possible!
+    Most of the Miou's effects reorder task execution. During this reordering,
+    Miou can collect the system events that have just occurred. The objective is
+    to do this as often as possible!
 
     {4 Performance and events.}
 
