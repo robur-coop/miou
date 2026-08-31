@@ -497,17 +497,20 @@ module Domain = struct
     }
 
   (* NOTE(dinosaure): as far as [event.interrupt] is domain-safe (which should
-     be the case), [interrupt] is domain-safe. *)
+     be the case), [interrupt] is domain-safe. We also avoid the case where a
+     domain would like to interrupt itself (it's a noop). *)
   let interrupt pool ~domain:uid =
     let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
-    Logs.debug (fun m ->
-        m "[%a] interrupts [%a]" Domain_uid.pp runner Domain_uid.pp uid);
-    let domain =
-      List.find
-        (fun dom -> Domain_uid.equal uid dom.uid)
-        (pool.dom0 :: pool.domains)
-    in
-    domain.events.interrupt ()
+    if Domain_uid.equal uid runner = false then begin
+      Logs.debug (fun m ->
+          m "[%a] interrupts [%a]" Domain_uid.pp runner Domain_uid.pp uid);
+      let domain =
+        List.find
+          (fun dom -> Domain_uid.equal uid dom.uid)
+          (pool.dom0 :: pool.domains)
+      in
+      domain.events.interrupt ()
+    end
 
   let interrupt_parent pool prm =
     match prm.parent with
@@ -547,7 +550,7 @@ module Domain = struct
 
   let add_into_dom0 pool elt =
     Queue.enqueue pool.to_dom0 elt;
-    pool.dom0.events.interrupt ()
+    if (Stdlib.Domain.self () :> int) <> 0 then pool.dom0.events.interrupt ()
 
   let cancel pool domain ~backtrace:bt prm =
     (* The promise given does not necessarily belong to the [domain] currently
