@@ -2,35 +2,43 @@ module Bitv = Miou_bitv
 module Poll = Miou_poll
 
 module File_descrs = struct
-  type nonrec 'a t = { mutable contents: (Unix.file_descr * 'a) list }
+  (* NOTE(dinosaure): For performance reasons, we would like to work on the
+     assumption that [Unix.file_descr] is indeed an integer, which is true on
+     Unix systems (but not on Windows; however, this module does not concern the
+     Windows system). In this way, we can index the Miou [syscalls] according to
+     the integer representing the file descriptor. *)
+  let () = assert (Obj.is_int (Obj.repr Unix.stdout))
 
-  let find tbl fd = List.assq fd tbl.contents
-  let find_opt tbl fd = List.assq_opt fd tbl.contents
+  type nonrec t = { mutable contents: Miou.syscall list array }
 
-  let remove tbl fd =
-    let contents =
-      List.fold_left
-        (fun acc (k, v) -> if k == fd then acc else (k, v) :: acc)
-        [] tbl.contents
-    in
-    tbl.contents <- contents
+  let create n = { contents= Array.make (Int.max n 16) [] }
+  let int_of_file_descr : Unix.file_descr -> int = Obj.magic
 
-  let replace tbl fd v' =
-    let contents =
-      List.fold_left
-        (fun acc (k, v) -> if k == fd then (k, v') :: acc else (k, v) :: acc)
-        [] tbl.contents
-    in
-    tbl.contents <- contents
+  let grow tbl needed =
+    let len = Array.length tbl.contents in
+    let len' = ref len in
+    while !len' <= needed do
+      len' := !len' * 2
+    done;
+    let contents = Array.make !len' [] in
+    Array.blit tbl.contents 0 contents 0 len;
+    tbl.contents <- tbl.contents
 
-  let add tbl k v = tbl.contents <- (k, v) :: tbl.contents
-  let clear tbl = tbl.contents <- []
-  let create _ = { contents= [] }
+  let get tbl fd =
+    let idx = int_of_file_descr fd in
+    if idx >= Array.length tbl.contents then [] else tbl.contents.(idx)
+
+  let set tbl fd syscalls =
+    let idx = int_of_file_descr fd in
+    if idx >= Array.length tbl.contents then grow tbl idx;
+    tbl.contents.(idx) <- syscalls
+
+  let clear tbl = Array.fill tbl.contents 0 (Array.length tbl.contents) []
 end
 
 type domain = {
-    readers: Miou.syscall list File_descrs.t
-  ; writers: Miou.syscall list File_descrs.t
+    readers: File_descrs.t
+  ; writers: File_descrs.t
   ; sleepers: Heapq.t
   ; revert: (Miou.uid, Unix.file_descr * int) Hashtbl.t
   ; poll: Poll.t
@@ -39,14 +47,13 @@ type domain = {
 
 let clean domain uids =
   let clean uid' ((fd : Unix.file_descr), index) tbl =
-    match File_descrs.find tbl fd with
-    | exception Not_found -> ()
-    | syscalls -> (
+    match File_descrs.get tbl fd with
+    | [] -> ()
+    | syscalls ->
         Poll.invalidate_index domain.poll index;
         Bitv.set domain.bitv index false;
-        match List.filter (fun s -> uid' <> Miou.uid s) syscalls with
-        | [] -> File_descrs.remove tbl fd
-        | syscalls -> File_descrs.replace tbl fd syscalls)
+        File_descrs.set tbl fd
+          (List.filter (fun s -> uid' <> Miou.uid s) syscalls)
   in
   let clean uid =
     match Hashtbl.find domain.revert uid with
@@ -105,10 +112,7 @@ let domain =
   fun () -> Stdlib.Domain.DLS.get key
 
 let append tbl fd syscall =
-  try
-    let syscalls = File_descrs.find tbl fd in
-    File_descrs.replace tbl fd (syscall :: syscalls)
-  with Not_found -> File_descrs.add tbl fd [ syscall ]
+  File_descrs.set tbl fd (syscall :: File_descrs.get tbl fd)
 
 let blocking_read ?(name = "read") fd =
   let syscall = Miou.syscall ~name () in
@@ -159,11 +163,10 @@ let transmit_and_clean domain syscall =
   Miou.signal syscall
 
 let wakeup domain tbl fd =
-  match File_descrs.find_opt tbl fd with
-  | None -> []
-  | Some [] -> File_descrs.remove tbl fd; []
-  | Some syscalls ->
-      File_descrs.remove tbl fd;
+  match File_descrs.get tbl fd with
+  | [] as empty -> empty
+  | syscalls ->
+      File_descrs.set tbl fd [];
       List.rev_map (transmit_and_clean domain) syscalls
 
 let select _uid ic ~block cancelled_syscalls =
