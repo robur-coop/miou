@@ -8,6 +8,10 @@
  (modules select)
  (libraries dune-configurator))
 
+(executable
+ (name concat)
+ (modules concat))
+
 (library
  (name std)
  (modules std))
