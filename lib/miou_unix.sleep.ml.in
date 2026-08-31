@@ -1,0 +1,36 @@
+module Logs = Miou.Logs.Make (struct
+  let src = "unix"
+end)
+
+type elt = { time: float; syscall: Miou.syscall; mutable cancelled: bool }
+
+module Heapq = Miou.Pqueue.Make (struct
+  type t = elt
+
+  let dummy = { time= 0.0; syscall= Obj.magic (); cancelled= false }
+  let compare { time= a; _ } { time= b; _ } = Float.compare a b
+end)
+
+let rec drop_heapq heapq =
+  try Heapq.delete_min_exn heapq; drop_heapq heapq with _ -> ()
+
+let rec sleeper sleepers =
+  match Heapq.find_min_exn sleepers with
+  | exception Heapq.Empty -> None
+  | { cancelled= true; _ } ->
+      Heapq.delete_min_exn sleepers;
+      sleeper sleepers
+  | { time; _ } -> Some time
+
+let in_the_past t = t = 0. || t <= Unix.gettimeofday ()
+
+let rec collect sleepers signals =
+  match Heapq.find_min_exn sleepers with
+  | exception Heapq.Empty -> signals
+  | { cancelled= true; _ } ->
+      Heapq.delete_min_exn sleepers;
+      collect sleepers signals
+  | { time; syscall; _ } when in_the_past time ->
+      Heapq.delete_min_exn sleepers;
+      collect sleepers (Miou.signal syscall :: signals)
+  | _ -> signals

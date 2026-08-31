@@ -1,0 +1,229 @@
+module Bitv = Miou_bitv
+module Poll = Miou_poll
+
+module File_descrs = struct
+  type nonrec 'a t = { mutable contents: (Unix.file_descr * 'a) list }
+
+  let find tbl fd = List.assq fd tbl.contents
+  let find_opt tbl fd = List.assq_opt fd tbl.contents
+
+  let remove tbl fd =
+    let contents =
+      List.fold_left
+        (fun acc (k, v) -> if k == fd then acc else (k, v) :: acc)
+        [] tbl.contents
+    in
+    tbl.contents <- contents
+
+  let replace tbl fd v' =
+    let contents =
+      List.fold_left
+        (fun acc (k, v) -> if k == fd then (k, v') :: acc else (k, v) :: acc)
+        [] tbl.contents
+    in
+    tbl.contents <- contents
+
+  let add tbl k v = tbl.contents <- (k, v) :: tbl.contents
+  let clear tbl = tbl.contents <- []
+  let create _ = { contents= [] }
+end
+
+type domain = {
+    readers: Miou.syscall list File_descrs.t
+  ; writers: Miou.syscall list File_descrs.t
+  ; sleepers: Heapq.t
+  ; revert: (Miou.uid, Unix.file_descr * int) Hashtbl.t
+  ; poll: Poll.t
+  ; bitv: Bitv.t
+}
+
+let clean domain uids =
+  let clean uid' ((fd : Unix.file_descr), index) tbl =
+    match File_descrs.find tbl fd with
+    | exception Not_found -> ()
+    | syscalls -> (
+        Poll.invalidate_index domain.poll index;
+        Bitv.set domain.bitv index false;
+        match List.filter (fun s -> uid' <> Miou.uid s) syscalls with
+        | [] -> File_descrs.remove tbl fd
+        | syscalls -> File_descrs.replace tbl fd syscalls)
+  in
+  let clean uid =
+    match Hashtbl.find domain.revert uid with
+    | fd ->
+        clean uid fd domain.readers;
+        clean uid fd domain.writers
+    | exception Not_found -> ()
+  in
+  List.iter clean uids;
+  List.iter (Hashtbl.remove domain.revert) uids;
+  let clean ({ syscall; _ } as elt) =
+    if List.exists (( = ) (Miou.uid syscall)) uids then elt.cancelled <- true
+  in
+  Heapq.iter clean domain.sleepers
+
+let domain =
+  (* NOTE(dinosaure): the semantic of [DLS.new_key] is a bit odd. Here, we call
+     [make ()] when we would like to [DLS.get] our global value. Then, for
+     domains other than [dom0], we use [split_from_parent]. We must _clear_
+     everything except for the file descriptor used for the interrupt (still
+     used by our [dom0]).
+
+     We have two cases:
+     - the usual case where the user call [Miou_unix.run]. In that case, we
+       dont't clean anything because everything has just been freshly created.
+     - the case where the user calls [Miou_unix.run] again. Here, we must clean
+       everything from [dom0] and create new values for the new domains via
+       [split_from_parent]. TODO(dinosaure): we probably should clean our [dom0]
+       via our [events.finaliser]... *)
+  let rec split_from_parent v =
+    File_descrs.clear v.readers;
+    File_descrs.clear v.writers;
+    drop_heapq v.sleepers;
+    Hashtbl.clear v.revert;
+    for i = 1 to Bitv.length v.bitv - 1 do
+      Poll.invalidate_index v.poll i;
+      Bitv.set v.bitv i false
+    done;
+    make ()
+  and make () =
+    let poll = Poll.create () in
+    Logs.debug (fun m ->
+        m "create a poll on [%d] with %d file-descriptors"
+          (Stdlib.Domain.self () :> int)
+          (Poll.maxfds poll));
+    {
+      readers= File_descrs.create 0x100
+    ; writers= File_descrs.create 0x100
+    ; sleepers= Heapq.create ()
+    ; revert= Hashtbl.create 0x100
+    ; poll
+    ; bitv= Bitv.create (Poll.maxfds poll) false
+    }
+  in
+  let key = Stdlib.Domain.DLS.new_key ~split_from_parent make in
+  fun () -> Stdlib.Domain.DLS.get key
+
+let append tbl fd syscall =
+  try
+    let syscalls = File_descrs.find tbl fd in
+    File_descrs.replace tbl fd (syscall :: syscalls)
+  with Not_found -> File_descrs.add tbl fd [ syscall ]
+
+let blocking_read ?(name = "read") fd =
+  let syscall = Miou.syscall ~name () in
+  let uid = Miou.uid syscall in
+  let domain = domain () in
+  let fn () =
+    match Bitv.next domain.bitv with
+    | Some next ->
+        Logs.debug (fun m ->
+            m "poll.set-index on [%d:%d] with POLLIN"
+              (Stdlib.Domain.self () :> int)
+              next);
+        Hashtbl.replace domain.revert uid (fd, next);
+        append domain.readers fd syscall;
+        Poll.set_index domain.poll next fd Poll.Flags.pollin;
+        Bitv.set domain.bitv next true
+    | None -> failwith "Too many open files"
+  in
+  Miou.suspend ~fn syscall
+
+let blocking_write ?(name = "write") fd =
+  let syscall = Miou.syscall ~name () in
+  let uid = Miou.uid syscall in
+  let domain = domain () in
+  let fn () =
+    match Bitv.next domain.bitv with
+    | Some next ->
+        Logs.debug (fun m ->
+            m "poll.set-index on [%d:%d] with POLLIN"
+              (Stdlib.Domain.self () :> int)
+              next);
+        Hashtbl.replace domain.revert uid (fd, next);
+        append domain.writers fd syscall;
+        Poll.set_index domain.poll next fd Poll.Flags.pollout;
+        Bitv.set domain.bitv next true
+    | None -> failwith "Too many open files"
+  in
+  Miou.suspend ~fn syscall
+
+let intr fd =
+  let buf = Bytes.create 0x100 in
+  match Unix.read fd buf 0 (Bytes.length buf) with
+  | _ -> ()
+  | exception Unix.(Unix_error (EAGAIN, _, _)) -> ()
+
+let transmit_and_clean domain syscall =
+  Hashtbl.remove domain.revert (Miou.uid syscall);
+  Miou.signal syscall
+
+let wakeup domain tbl fd =
+  match File_descrs.find_opt tbl fd with
+  | None -> []
+  | Some [] -> File_descrs.remove tbl fd; []
+  | Some syscalls ->
+      File_descrs.remove tbl fd;
+      List.rev_map (transmit_and_clean domain) syscalls
+
+let select _uid ic ~block cancelled_syscalls =
+  let domain = domain () in
+  clean domain cancelled_syscalls;
+  let timeout : Poll.ppoll_timeout =
+    match (sleeper domain.sleepers, block) with
+    | None, true -> Poll.Infinite
+    | (None | Some _), false -> Poll.No_wait
+    | Some value, true ->
+        let value = value -. Unix.gettimeofday () in
+        let value = Float.max value 0.0 *. 1e9 in
+        Poll.Nanoseconds (Int64.of_float value)
+  in
+  let nready = Bitv.max domain.bitv in
+  match Poll.ppoll_or_poll domain.poll nready timeout with
+  | exception Unix.(Unix_error (EINTR, _, _)) -> collect domain.sleepers []
+  | nready ->
+      let acc = ref (collect domain.sleepers []) in
+      let fn index fd flags =
+        if index == 0 then intr ic
+        else begin
+          let err = Poll.Flags.(mem flags (pollerr + pollhup + pollnval)) in
+          let readable = err || Poll.Flags.mem flags Poll.Flags.pollin in
+          let writable = err || Poll.Flags.mem flags Poll.Flags.pollout in
+          if readable || writable then begin
+            Poll.invalidate_index domain.poll index;
+            Bitv.set domain.bitv index false;
+            let x = if readable then wakeup domain domain.readers fd else [] in
+            let y = if writable then wakeup domain domain.writers fd else [] in
+            acc := List.rev_append y (List.rev_append x !acc)
+          end
+        end
+      in
+      Poll.iter domain.poll nready fn;
+      !acc
+
+let signal = Bytes.make 1 '\000'
+
+let interrupt oc () =
+  match Unix.single_write oc signal 0 1 with
+  | n -> assert (n = 1) (* XXX(dinosaure): paranoid mode. *)
+  | exception Unix.(Unix_error (EAGAIN, _, _)) -> ()
+  | exception Unix.(Unix_error (EBADF, _, _)) ->
+      (* NOTE(dinosaure): it's a special case when we fallback to an abnormal
+         situation. The user breaks a rule ([Still_has_children], [Not_a_child],
+         etc.) and we desperately try to stop all domains. We can have a
+         mix between [interrupt] and our finaliser which close [oc] but that's
+         fine. We can just ignore this error and continue to stop everything. *)
+      ()
+
+let events uid =
+  let domain = domain () in
+  let ic, oc = Unix.pipe ~cloexec:true () in
+  Unix.set_nonblock ic;
+  Unix.set_nonblock oc;
+  Bitv.set domain.bitv 0 true;
+  Poll.set_index domain.poll 0 ic Poll.Flags.pollin;
+  let select = select uid ic in
+  let finaliser () = Unix.close ic; Unix.close oc in
+  { Miou.interrupt= interrupt oc; select; finaliser }
+
+let run ?g ?domains ?handler fn = Miou.run ~events ?g ?domains ?handler fn
