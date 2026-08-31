@@ -550,7 +550,7 @@ module Domain = struct
 
   let add_into_dom0 pool elt =
     Queue.enqueue pool.to_dom0 elt;
-    pool.dom0.events.interrupt ()
+    if (Stdlib.Domain.self () :> int) <> 0 then pool.dom0.events.interrupt ()
 
   let cancel pool domain ~backtrace:bt prm =
     (* The promise given does not necessarily belong to the [domain] currently
