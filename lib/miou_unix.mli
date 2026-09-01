@@ -286,7 +286,9 @@ val sleep : float -> unit
 (** {3 First entry point.} *)
 
 val run :
-     ?g:Random.State.t
+     ?quanta:int
+  -> ?poll:int
+  -> ?g:Random.State.t
   -> ?domains:int
   -> ?handler:Miou.Handler.t
   -> (unit -> 'a)

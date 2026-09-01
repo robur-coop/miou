@@ -1263,6 +1263,7 @@ type events = {
 
 val run :
      ?quanta:int
+  -> ?poll:int
   -> ?g:Random.State.t
   -> ?domains:int
   -> ?events:(Domain.Uid.t -> events)

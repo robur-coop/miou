@@ -119,7 +119,8 @@ let arm domain fd =
 
 let forget domain fd =
   let idx = int_of_file_descr fd in
-  if idx < Bytes.length domain.armed then Bytes.unsafe_set domain.armed idx '\000';
+  if idx < Bytes.length domain.armed then
+    Bytes.unsafe_set domain.armed idx '\000';
   if idx < Bytes.length domain.drained then
     Bytes.unsafe_set domain.drained idx '\000'
 
@@ -341,4 +342,5 @@ let events uid =
   let finaliser () = Unix.close ic; Unix.close oc in
   { Miou.interrupt= interrupt oc; select; finaliser }
 
-let run ?g ?domains ?handler fn = Miou.run ~events ?g ?domains ?handler fn
+let run ?quanta ?poll ?g ?domains ?handler fn =
+  Miou.run ?quanta ?poll ~events ?g ?domains ?handler fn
