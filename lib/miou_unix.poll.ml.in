@@ -1,6 +1,12 @@
 module Bitv = Miou_bitv
 module Poll = Miou_poll
 
+type kind = STREAM | DGRAM
+type file_descr = { fd: Unix.file_descr; kind: kind option; non_blocking: bool }
+
+type bigstring =
+  (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
+
 module File_descrs = struct
   (* NOTE(dinosaure): For performance reasons, we would like to work on the
      assumption that [Unix.file_descr] is indeed an integer, which is true on
@@ -133,6 +139,41 @@ let blocking_read ?(name = "read") fd =
   in
   Miou.suspend ~fn syscall
 
+let rec unsafe_read ({ fd; non_blocking; _ } as file_descr) off len buf =
+  if non_blocking then
+    match Unix.read fd buf off len with
+    | exception Unix.(Unix_error (EINTR, _, _)) ->
+        unsafe_read file_descr off len buf
+    | exception Unix.(Unix_error ((EAGAIN | EWOULDBLOCK), _, _)) ->
+        blocking_read fd;
+        unsafe_read file_descr off len buf
+    | value -> value
+  else
+    let rec go () =
+      match Unix.read fd buf off len with
+      | exception Unix.(Unix_error (EINTR, _, _)) -> go ()
+      | value -> value
+    in
+    blocking_read fd; go ()
+
+let rec unsafe_read_bigstring ({ fd; non_blocking; _ } as file_descr) off len
+    bstr =
+  if non_blocking then
+    match Unix.read_bigarray fd bstr off len with
+    | exception Unix.(Unix_error (EINTR, _, _)) ->
+        unsafe_read_bigstring file_descr off len bstr
+    | exception Unix.(Unix_error ((EAGAIN | EWOULDBLOCK), _, _)) ->
+        blocking_read fd;
+        unsafe_read_bigstring file_descr off len bstr
+    | value -> value
+  else
+    let rec go () =
+      match Unix.read_bigarray fd bstr off len with
+      | exception Unix.(Unix_error (EINTR, _, _)) -> go ()
+      | value -> value
+    in
+    blocking_read fd; go ()
+
 let blocking_write ?(name = "write") fd =
   let syscall = Miou.syscall ~name () in
   let uid = Miou.uid syscall in
@@ -151,6 +192,8 @@ let blocking_write ?(name = "write") fd =
     | None -> failwith "Too many open files"
   in
   Miou.suspend ~fn syscall
+
+let close { fd; _ } = Unix.close fd
 
 let intr fd =
   let buf = Bytes.create 0x100 in

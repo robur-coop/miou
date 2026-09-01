@@ -150,7 +150,7 @@ miou_unix_poll_get_fd(value v_fds, value v_index) {
 #define __unit() value __unused(unit)
 
 CAMLprim value /* noalloc */
-miou_unix_poll_max_open_files(value __unused(v_unit)) {
+miou_unix_poll_max_open_files(__unit()) {
   return (Val_int(sysconf(_SC_OPEN_MAX)));
 }
 

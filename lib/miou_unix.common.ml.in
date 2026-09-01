@@ -1,9 +1,3 @@
-type kind = STREAM | DGRAM
-type file_descr = { fd: Unix.file_descr; kind: kind option; non_blocking: bool }
-
-type bigstring =
-  (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
-
 let is_dgram { kind; _ } = match kind with Some DGRAM -> true | _ -> false
 
 let of_file_descr ?(non_blocking = true) fd =
@@ -47,47 +41,12 @@ let bind_and_listen ?(backlog = 64) ?(reuseaddr = true) ?(reuseport = true)
      that UDP servers can share the same entry-point. *)
   if not (is_dgram file_descr) then listen fd backlog
 
-let rec unsafe_read ({ fd; non_blocking; _ } as file_descr) off len buf =
-  if non_blocking then
-    match Unix.read fd buf off len with
-    | exception Unix.(Unix_error (EINTR, _, _)) ->
-        unsafe_read file_descr off len buf
-    | exception Unix.(Unix_error ((EAGAIN | EWOULDBLOCK), _, _)) ->
-        blocking_read fd;
-        unsafe_read file_descr off len buf
-    | value -> value
-  else
-    let rec go () =
-      match Unix.read fd buf off len with
-      | exception Unix.(Unix_error (EINTR, _, _)) -> go ()
-      | value -> value
-    in
-    blocking_read fd; go ()
-
 let read file_descr ?(off = 0) ?len buf =
   let len = match len with None -> Bytes.length buf - off | Some len -> len in
   if off < 0 || len < 0 || off > Bytes.length buf - len then
     invalid_arg "Miou_unix.read";
   if is_dgram file_descr then invalid_arg "Miou_unix.read: invalid file-descr";
   unsafe_read file_descr off len buf
-
-let rec unsafe_read_bigstring ({ fd; non_blocking; _ } as file_descr) off len
-    bstr =
-  if non_blocking then
-    match Unix.read_bigarray fd bstr off len with
-    | exception Unix.(Unix_error (EINTR, _, _)) ->
-        unsafe_read_bigstring file_descr off len bstr
-    | exception Unix.(Unix_error ((EAGAIN | EWOULDBLOCK), _, _)) ->
-        blocking_read fd;
-        unsafe_read_bigstring file_descr off len bstr
-    | value -> value
-  else
-    let rec go () =
-      match Unix.read_bigarray fd bstr off len with
-      | exception Unix.(Unix_error (EINTR, _, _)) -> go ()
-      | value -> value
-    in
-    blocking_read fd; go ()
 
 let read_bigstring file_descr ?(off = 0) ?len bstr =
   let len =
@@ -270,8 +229,6 @@ let rec connect ({ fd; non_blocking; _ } as file_descr) sockaddr =
       | None -> ()
       | Some err -> raise (Unix.Unix_error (err, "connect", "")))
 
-let close { fd; _ } = Unix.close fd
-
 let sleep until =
   let syscall = Miou.syscall () in
   let domain = domain () in
@@ -320,9 +277,9 @@ module Ownership = struct
     Miou.Ownership.check resource;
     connect { fd; non_blocking; kind } sockaddr
 
-  let close { fd; resource; _ } =
+  let close { fd; non_blocking; resource; kind } =
     Miou.Ownership.disown resource;
-    Unix.close fd
+    close { fd; non_blocking; kind }
 
   let of_file_descr ?(non_blocking = true) fd =
     let resource = Miou.Ownership.create ~finally:Unix.close fd in

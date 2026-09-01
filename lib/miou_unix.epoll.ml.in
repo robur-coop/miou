@@ -1,0 +1,344 @@
+module Bitv = Miou_bitv
+module Epoll = Miou_epoll
+
+type kind = STREAM | DGRAM
+type file_descr = { fd: Unix.file_descr; kind: kind option; non_blocking: bool }
+
+type bigstring =
+  (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
+
+let () = assert (Obj.is_int (Obj.repr Unix.stdout))
+let int_of_file_descr : Unix.file_descr -> int = Obj.magic
+
+module File_descrs = struct
+  type t = { mutable contents: Miou.syscall list array }
+
+  let create n = { contents= Array.make (Stdlib.max n 16) [] }
+
+  let grow tbl needed =
+    let len = Array.length tbl.contents in
+    let len' = ref len in
+    while !len' <= needed do
+      len' := !len' * 2
+    done;
+    let contents = Array.make !len' [] in
+    Array.blit tbl.contents 0 contents 0 len;
+    tbl.contents <- contents
+
+  let get tbl fd =
+    let i = int_of_file_descr fd in
+    if i >= Array.length tbl.contents then [] else tbl.contents.(i)
+
+  let set tbl fd syscalls =
+    let i = int_of_file_descr fd in
+    if i >= Array.length tbl.contents then grow tbl i;
+    tbl.contents.(i) <- syscalls
+
+  let clear tbl = Array.fill tbl.contents 0 (Array.length tbl.contents) []
+end
+
+(* NOTE(dinosaure): [epoll] has a rather unusual instruction that is of
+   interest to us here: [EPOLLONESHOT]. The idea is to let the kernel remove a
+   file descriptor from [epoll] if it has been signalled (whether IN or OUT, it
+   doesn’t matter). We will therefore take advantage of this feature so as not
+   to have to call [Epoll.del] systematically when we want to stop monitoring a
+   [file_descr] (after having signalled it).
+
+   We therefore maintain an [armed] table for the current domain, which should
+   mirror what the kernel observes regarding file descriptors. This flag table
+   is of size [_SC_OPEN_MAX] (we should not have a [file_descr]/[int] larger
+   than this number). Based on this table and depending on what we wish to
+   monitor, we always add [EPOLLONESHOT]. Finally, when the user considers that
+   their [file_descr] should be released (using [Miou_unix]), we ‘forget’ its
+   flag in [armed] so that [armed] is always synchronised with what the kernel
+   observes.
+
+   Finally, there is a final table, [drained], which allows us to optimise a
+   very specific scenario: this is when we want confirmation that there is
+   nothing left to read (that [Unix.read] returns [0]) without actually calling
+   [Unix.read], which would probably return [EAGAIN] whilst waiting for the
+   client-side closure. This final optimisation involves an [unsafe_read] that
+   is slightly different from what [miou_unix.{select,poll}.ml.in] provides -
+   which is why it is not included in [miou_unix.common.ml.in]). *)
+
+type domain = {
+    readers: File_descrs.t
+  ; writers: File_descrs.t
+  ; sleepers: Heapq.t
+  ; revert: (Miou.uid, Unix.file_descr) Hashtbl.t
+  ; epoll: Epoll.t
+  ; events: Epoll.events
+  ; drained: bytes
+  ; armed: bytes
+}
+
+external max_open_files : unit -> int = "miou_unix_epoll_max_open_files"
+[@@noalloc]
+
+let flags_by_fd () = Bytes.make (max_open_files ()) '\000'
+
+let is_drained domain fd =
+  let idx = int_of_file_descr fd in
+  idx < Bytes.length domain.drained
+  && Bytes.unsafe_get domain.drained idx <> '\000'
+
+let set_drained domain fd v =
+  let idx = int_of_file_descr fd in
+  if idx < Bytes.length domain.drained then
+    Bytes.unsafe_set domain.drained idx (if v then '\001' else '\000')
+
+let is_armed domain fd =
+  let idx = int_of_file_descr fd in
+  idx < Bytes.length domain.armed && Bytes.unsafe_get domain.armed idx <> '\000'
+
+let set_armed domain fd v =
+  let idx = int_of_file_descr fd in
+  if idx < Bytes.length domain.armed then
+    Bytes.unsafe_set domain.armed idx (if v then '\001' else '\000')
+
+let arm domain fd =
+  let flags =
+    let rfd = File_descrs.get domain.readers fd in
+    let wfd = File_descrs.get domain.writers fd in
+    match (rfd, wfd) with
+    | [], [] -> Epoll.Flags.empty
+    | _ :: _, [] -> Epoll.Flags.epollin
+    | [], _ :: _ -> Epoll.Flags.epollout
+    | _ :: _, _ :: _ -> Epoll.Flags.(epollin + epollout)
+  in
+  if flags <> Epoll.Flags.empty then begin
+    let flags = Epoll.Flags.(flags + epolloneshot) in
+    if is_armed domain fd then
+      begin if Epoll.upd domain.epoll fd flags <> 0 then
+        if Epoll.add domain.epoll fd flags = 0 then set_armed domain fd true
+        else set_armed domain fd false
+      end
+    else if Epoll.add domain.epoll fd flags = 0 then set_armed domain fd true
+    else if Epoll.upd domain.epoll fd flags = 0 then set_armed domain fd true
+  end
+
+let forget domain fd =
+  let idx = int_of_file_descr fd in
+  if idx < Bytes.length domain.armed then Bytes.unsafe_set domain.armed idx '\000';
+  if idx < Bytes.length domain.drained then
+    Bytes.unsafe_set domain.drained idx '\000'
+
+let clean domain uids =
+  let clean uid' (fd : Unix.file_descr) tbl =
+    match File_descrs.get tbl fd with
+    | [] -> ()
+    | syscalls ->
+        File_descrs.set tbl fd
+          (List.filter (fun s -> uid' <> Miou.uid s) syscalls);
+        arm domain fd
+  in
+  let clean uid =
+    match Hashtbl.find domain.revert uid with
+    | fd ->
+        clean uid fd domain.readers;
+        clean uid fd domain.writers
+    | exception Not_found -> ()
+  in
+  List.iter clean uids;
+  List.iter (Hashtbl.remove domain.revert) uids;
+  let clean ({ syscall; _ } as elt) =
+    if List.exists (( = ) (Miou.uid syscall)) uids then elt.cancelled <- true
+  in
+  Heapq.iter clean domain.sleepers
+
+let domain =
+  (* NOTE(dinosaure): see [miou_unix.poll.ml.in] for an explanation about
+     [split_from_parent]. *)
+  let rec split_from_parent v =
+    File_descrs.clear v.readers;
+    File_descrs.clear v.writers;
+    drop_heapq v.sleepers;
+    Hashtbl.clear v.revert;
+    Bytes.fill v.drained 0 (Bytes.length v.drained) '\000';
+    for i = 0 to Bytes.length v.armed - 1 do
+      if Bytes.unsafe_get v.armed i <> '\000' then begin
+        ignore (Epoll.del v.epoll (Obj.magic i : Unix.file_descr));
+        Bytes.unsafe_set v.armed i '\000'
+      end
+    done;
+    make ()
+  and make () =
+    let epoll = Epoll.create () in
+    Logs.debug (fun m ->
+        m "create an epoll instance on [%d]" (Stdlib.Domain.self () :> int));
+    {
+      readers= File_descrs.create 0x100
+    ; writers= File_descrs.create 0x100
+    ; sleepers= Heapq.create ()
+    ; revert= Hashtbl.create 0x100
+    ; epoll
+    ; events= Epoll.make_events 256
+    ; drained= flags_by_fd ()
+    ; armed= flags_by_fd ()
+    }
+  in
+  let key = Stdlib.Domain.DLS.new_key ~split_from_parent make in
+  fun () -> Stdlib.Domain.DLS.get key
+
+let append tbl fd syscall =
+  File_descrs.set tbl fd (syscall :: File_descrs.get tbl fd)
+
+let blocking_read ?(name = "read") fd =
+  let syscall = Miou.syscall ~name () in
+  let uid = Miou.uid syscall in
+  let domain = domain () in
+  let fn () =
+    Hashtbl.replace domain.revert uid fd;
+    append domain.readers fd syscall;
+    arm domain fd
+  in
+  Miou.suspend ~fn syscall
+
+let blocking_write ?(name = "write") fd =
+  let syscall = Miou.syscall ~name () in
+  let uid = Miou.uid syscall in
+  let domain = domain () in
+  let fn () =
+    Hashtbl.replace domain.revert uid fd;
+    append domain.writers fd syscall;
+    arm domain fd
+  in
+  Miou.suspend ~fn syscall
+
+let rec unsafe_read ({ fd; non_blocking; _ } as file_descr) off len buf =
+  if non_blocking then begin
+    let domain = domain () in
+    if is_drained domain fd then begin
+      set_drained domain fd false;
+      (* NOTE(dinosaure): here, we would like to do an [Unix.read] which will
+         probably return EAGAIN, as the previous read gave us a few bytes but
+         not everything we’d like to have. We therefore assume that we should
+         wait for an [epoll_wait2]/[select] to notify us that the read has
+         completed, rather than trying and failing. *)
+      blocking_read fd;
+      unsafe_read file_descr off len buf
+    end
+    else
+      match Unix.read fd buf off len with
+      | exception Unix.(Unix_error (EINTR, _, _)) ->
+          unsafe_read file_descr off len buf
+      | exception Unix.(Unix_error ((EAGAIN | EWOULDBLOCK), _, _)) ->
+          blocking_read fd;
+          unsafe_read file_descr off len buf
+      | value ->
+          if value > 0 && value < len then set_drained domain fd true;
+          value
+  end
+  else
+    let rec go () =
+      match Unix.read fd buf off len with
+      | exception Unix.(Unix_error (EINTR, _, _)) -> go ()
+      | value -> value
+    in
+    blocking_read fd; go ()
+
+let rec unsafe_read_bigstring ({ fd; non_blocking; _ } as file_descr) off len
+    bstr =
+  if non_blocking then begin
+    let domain = domain () in
+    if is_drained domain fd then begin
+      set_drained domain fd false;
+      blocking_read fd;
+      unsafe_read_bigstring file_descr off len bstr
+    end
+    else
+      match Unix.read_bigarray fd bstr off len with
+      | exception Unix.(Unix_error (EINTR, _, _)) ->
+          unsafe_read_bigstring file_descr off len bstr
+      | exception Unix.(Unix_error ((EAGAIN | EWOULDBLOCK), _, _)) ->
+          blocking_read fd;
+          unsafe_read_bigstring file_descr off len bstr
+      | value ->
+          if value > 0 && value < len then set_drained domain fd true;
+          value
+  end
+  else
+    let rec go () =
+      match Unix.read_bigarray fd bstr off len with
+      | exception Unix.(Unix_error (EINTR, _, _)) -> go ()
+      | value -> value
+    in
+    blocking_read fd; go ()
+
+let close { fd; _ } =
+  forget (domain ()) fd;
+  Unix.close fd
+
+let intr fd =
+  let buf = Bytes.create 0x100 in
+  match Unix.read fd buf 0 (Bytes.length buf) with
+  | _ -> ()
+  | exception Unix.(Unix_error (EAGAIN, _, _)) -> ()
+
+let transmit_and_clean domain syscall =
+  Hashtbl.remove domain.revert (Miou.uid syscall);
+  Miou.signal syscall
+
+let wakeup domain tbl fd =
+  match File_descrs.get tbl fd with
+  | [] -> []
+  | syscalls ->
+      File_descrs.set tbl fd [];
+      List.rev_map (transmit_and_clean domain) syscalls
+
+let select _uid ic ~block cancelled_syscalls =
+  let domain = domain () in
+  clean domain cancelled_syscalls;
+  let timeout : Epoll.timeout =
+    match (sleeper domain.sleepers, block) with
+    | None, true -> Epoll.Infinite
+    | (None | Some _), false -> Epoll.No_wait
+    | Some value, true ->
+        let value = value -. Unix.gettimeofday () in
+        let value = Float.max value 0.0 *. 1e9 in
+        Epoll.Nanoseconds (Int64.of_float value)
+  in
+  match Epoll.wait domain.epoll domain.events timeout with
+  | exception Unix.(Unix_error (EINTR, _, _)) -> collect domain.sleepers []
+  | nready ->
+      let acc = ref (collect domain.sleepers []) in
+      let fn fd flags =
+        if fd == ic then intr ic
+        else begin
+          let err = Epoll.Flags.(mem flags (epollerr + epollhup)) in
+          let readable = err || Epoll.Flags.mem flags Epoll.Flags.epollin in
+          let writable = err || Epoll.Flags.mem flags Epoll.Flags.epollout in
+          if readable || writable then begin
+            let x = if readable then wakeup domain domain.readers fd else [] in
+            let y = if writable then wakeup domain domain.writers fd else [] in
+            (* NOTE(dinosaure): [EPOLLONESHOT] already disarmed it kernel-side;
+               anything still waiting on it is re-armed here. *)
+            arm domain fd;
+            acc := List.rev_append y (List.rev_append x !acc)
+          end
+        end
+      in
+      Epoll.iter domain.events nready fn;
+      !acc
+
+let signal = Bytes.make 1 '\000'
+
+let interrupt oc () =
+  match Unix.single_write oc signal 0 1 with
+  | n -> assert (n = 1)
+  | exception Unix.(Unix_error (EAGAIN, _, _)) -> ()
+  | exception Unix.(Unix_error (EBADF, _, _)) -> ()
+
+let events uid =
+  let domain = domain () in
+  let ic, oc = Unix.pipe ~cloexec:true () in
+  Unix.set_nonblock ic;
+  Unix.set_nonblock oc;
+  (* NOTE(dinosaure): the interrupt pipe stays armed for the lifetime of the
+     domain, so it is registered without [EPOLLONESHOT] and never re-armed. *)
+  ignore (Epoll.add domain.epoll ic Epoll.Flags.epollin);
+  let select = select uid ic in
+  let finaliser () = Unix.close ic; Unix.close oc in
+  { Miou.interrupt= interrupt oc; select; finaliser }
+
+let run ?g ?domains ?handler fn = Miou.run ~events ?g ?domains ?handler fn
