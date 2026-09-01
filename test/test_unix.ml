@@ -1,9 +1,3 @@
-let system =
-  let ic = Unix.open_process_in "uname -s" in
-  let system = input_line ic in
-  ignore (Unix.close_process_in ic);
-  system
-
 let test01 =
   let description = {text|Test waiting for EOF|text} in
   Test.test ~title:"test01" ~description @@ fun () ->
@@ -20,24 +14,8 @@ let test01 =
   and wait =
     Miou.async @@ fun () ->
     let _, status = Unix.waitpid [] pid in
-    if not (status = Unix.WEXITED 0 && system = "Darwin") then
-      failwith "Unexpected case";
-    true
+    status = Unix.WEXITED 0
   in
-  (* NOTE(dinosaure): only on MacOS, it seems that the kernel does not
-     immediately close our pipe. So we fallback to the [timeout] case which is
-     not expected. We have a special case for MacOS where we returns [true] if
-     our process ends successfully.
-
-             | [read] | [timeout] | [wait] |
-     MacOS   | hang   | false     | true   |
-     FreeBSD | true   | false     | exn    |
-     Linux   | true   | false     | exn    |
-
-     The goal here is to prevent the [timeout] case by something else:
-     - for Linux/FreeBSD, by the fact that we have successfully received the EOF
-       signal from our pipe
-     - for MacOS, by the fact that our programme ended successfully *)
   let jobs = [ read; timeout; wait ] in
   begin match Miou.await_one jobs with
   | Ok x -> Test.check x
