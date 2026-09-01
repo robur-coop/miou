@@ -91,6 +91,10 @@
     [Miou] and [Miou_unix] from doing things implicitly just because you want to
     depend on these libraries. *)
 
+type bigstring =
+  (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
+(** Type of a byte sequence located outside the {i caml heap}. *)
+
 type file_descr
 (** Type of file-descriptors. *)
 
@@ -161,6 +165,19 @@ val read : file_descr -> ?off:int -> ?len:int -> bytes -> int
       if [off] and [len] do not designate a valid range of [buf] or if [fd] does
       not designate a {!constructor:Unix.SOCK_STREAM} socket. *)
 
+val read_bigstring : file_descr -> ?off:int -> ?len:int -> bigstring -> int
+(** [read_bigstring fd bstr ~off ~len] is like {!val:read} but for
+    {!type:bigstring}.
+
+    @raise Unix.Unix_error
+      raised by the system call {!val:Unix.read}. The function handles
+      {!constructor:Unix.EINTR}, {!constructor:Unix.EAGAIN} and
+      {!constructor:Unix.EWOULDBLOCK} exceptions and redo the system call.
+
+    @raise Invalid_argument
+      if [off] and [len] do not designate a valid range of [buf] or if [fd] does
+      not designate a {!constructor:Unix.SOCK_STREAM} socket. *)
+
 val really_read : file_descr -> ?off:int -> ?len:int -> bytes -> unit
 (** [really_read fd buf ~off ~len] reads [len] bytes (defaults to
     [Bytes.length buf - off]) from the given file-descriptor [fd], storing them
@@ -183,6 +200,19 @@ val write : file_descr -> ?off:int -> ?len:int -> string -> unit
 (** [write fd str ~off ~len] writes [len] bytes (defaults to
     [String.length str - off]) from byte sequence [str], starting at offset
     [off] (defaults to [0]), to the given file-descriptor [fd].
+
+    @raise Unix.Unix_error
+      raised by the system call {!val:Unix.read}. The function handles
+      {!constructor:Unix.EINTR}, {!constructor:Unix.EAGAIN} and
+      {!constructor:Unix.EWOULDBLOCK} exceptions and redo the system call.
+
+    @raise Invalid_argument
+      if [off] and [len] do not designate a valid range of [buf] or if [fd] does
+      not designate a {!constructor:Unix.SOCK_STREAM} socket. *)
+
+val write_bigstring : file_descr -> ?off:int -> ?len:int -> bigstring -> unit
+(** [write_bigstring fd bstr ~off ~len] is like {!val:write} but for
+    {!type:bigstring}.
 
     @raise Unix.Unix_error
       raised by the system call {!val:Unix.read}. The function handles
