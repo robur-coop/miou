@@ -1,6 +1,9 @@
 type kind = STREAM | DGRAM
 type file_descr = { fd: Unix.file_descr; kind: kind option; non_blocking: bool }
 
+type bigstring =
+  (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
+
 let is_dgram { kind; _ } = match kind with Some DGRAM -> true | _ -> false
 
 let of_file_descr ?(non_blocking = true) fd =
@@ -67,6 +70,34 @@ let read file_descr ?(off = 0) ?len buf =
     invalid_arg "Miou_unix.read";
   if is_dgram file_descr then invalid_arg "Miou_unix.read: invalid file-descr";
   unsafe_read file_descr off len buf
+
+let rec unsafe_read_bigstring ({ fd; non_blocking; _ } as file_descr) off len
+    bstr =
+  if non_blocking then
+    match Unix.read_bigarray fd bstr off len with
+    | exception Unix.(Unix_error (EINTR, _, _)) ->
+        unsafe_read_bigstring file_descr off len bstr
+    | exception Unix.(Unix_error ((EAGAIN | EWOULDBLOCK), _, _)) ->
+        blocking_read fd;
+        unsafe_read_bigstring file_descr off len bstr
+    | value -> value
+  else
+    let rec go () =
+      match Unix.read_bigarray fd bstr off len with
+      | exception Unix.(Unix_error (EINTR, _, _)) -> go ()
+      | value -> value
+    in
+    blocking_read fd; go ()
+
+let read_bigstring file_descr ?(off = 0) ?len bstr =
+  let len =
+    match len with None -> Bigarray.Array1.dim bstr - off | Some len -> len
+  in
+  if off < 0 || len < 0 || off > Bigarray.Array1.dim bstr - len then
+    invalid_arg "Miou_unix.read_bigstring";
+  if is_dgram file_descr then
+    invalid_arg "Miou_unix.read_bigstring: invalid file-descr";
+  unsafe_read_bigstring file_descr off len bstr
 
 let rec unsafe_recvfrom ({ fd; non_blocking; _ } as file_descr) off len buf
     flags =
@@ -136,6 +167,42 @@ let write file_descr ?(off = 0) ?len str =
     invalid_arg "Miou_unix.write";
   if is_dgram file_descr then invalid_arg "Miou_unix.write: invalid file-descr";
   unsafe_write file_descr off len str
+
+let rec unsafe_write_bigstring ({ fd; non_blocking; _ } as file_descr) off len
+    bstr =
+  if len > 0 then
+    begin if non_blocking then
+      match Unix.single_write_bigarray fd bstr off len with
+      | exception Unix.(Unix_error (EINTR, _, _)) ->
+          unsafe_write_bigstring file_descr off len bstr
+      | exception Unix.(Unix_error ((EAGAIN | EWOULDBLOCK), _, _)) ->
+          blocking_write fd;
+          unsafe_write_bigstring file_descr off len bstr
+      | written ->
+          let off = off + written in
+          let len = len - written in
+          unsafe_write_bigstring file_descr off len bstr
+    else
+      let rec go off len =
+        match Unix.single_write_bigarray fd bstr off len with
+        | exception Unix.(Unix_error (EINTR, _, _)) -> go off len
+        | written ->
+            let off = off + written in
+            let len = len - written in
+            blocking_write fd; go off len
+      in
+      blocking_write fd; go off len
+    end
+
+let write_bigstring file_descr ?(off = 0) ?len bstr =
+  let len =
+    match len with None -> Bigarray.Array1.dim bstr - off | Some len -> len
+  in
+  if off < 0 || len < 0 || off > Bigarray.Array1.dim bstr - len then
+    invalid_arg "Miou_unix.write_bigstring";
+  if is_dgram file_descr then
+    invalid_arg "Miou_unix.write_bigstring: invalid file-descr";
+  unsafe_write_bigstring file_descr off len bstr
 
 let rec unsafe_sendto ({ fd; non_blocking; _ } as file_descr) off len str flags
     sockaddr =

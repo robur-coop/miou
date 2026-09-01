@@ -91,6 +91,9 @@
     [Miou] and [Miou_unix] from doing things implicitly just because you want to
     depend on these libraries. *)
 
+type bigstring =
+  (char, Bigarray.int8_unsigned_elt, Bigarray.c_layout) Bigarray.Array1.t
+
 type file_descr
 (** Type of file-descriptors. *)
 
@@ -161,6 +164,8 @@ val read : file_descr -> ?off:int -> ?len:int -> bytes -> int
       if [off] and [len] do not designate a valid range of [buf] or if [fd] does
       not designate a {!constructor:Unix.SOCK_STREAM} socket. *)
 
+val read_bigstring : file_descr -> ?off:int -> ?len:int -> bigstring -> int
+
 val really_read : file_descr -> ?off:int -> ?len:int -> bytes -> unit
 (** [really_read fd buf ~off ~len] reads [len] bytes (defaults to
     [Bytes.length buf - off]) from the given file-descriptor [fd], storing them
@@ -192,6 +197,8 @@ val write : file_descr -> ?off:int -> ?len:int -> string -> unit
     @raise Invalid_argument
       if [off] and [len] do not designate a valid range of [buf] or if [fd] does
       not designate a {!constructor:Unix.SOCK_STREAM} socket. *)
+
+val write_bigstring : file_descr -> ?off:int -> ?len:int -> bigstring -> unit
 
 val close : file_descr -> unit
 (** [close fd] closes properly the given [fd]. *)
