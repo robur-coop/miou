@@ -192,19 +192,69 @@ type domain_elt =
   | Domain_signal : unit t * int * unit State.t -> domain_elt
   | Domain_tick : impossible -> domain_elt
 
-module Domain_elt = struct
-  type t = int * domain_elt
+module Run_queue = struct
+  type ring = {
+      mutable buf: domain_elt array
+    ; mutable off: int
+    ; mutable len: int
+  }
 
-  let to_int = function Domain_clean _ -> 1 | Domain_cancel _ -> 2 | _ -> 3
+  type t = { clean: ring; cancel: ring; other: ring }
 
-  let compare (t0, a) (t1, b) =
-    let value = to_int a - to_int b in
-    if value = 0 then Int.compare t0 t1 else value
+  let dummy : domain_elt = Domain_tick (Obj.magic ())
+  let ring () = { buf= Array.make 16 dummy; off= 0; len= 0 }
+  let create () = { clean= ring (); cancel= ring (); other= ring () }
 
-  let dummy = (0, Domain_tick (Obj.magic ()))
+  let grow ring =
+    let cap = Array.length ring.buf in
+    let buf = Array.make (cap * 2) dummy in
+    for i = 0 to ring.len - 1 do
+      let v = Array.unsafe_get ring.buf ((ring.off + i) land (cap - 1)) in
+      Array.unsafe_set buf i v
+    done;
+    ring.buf <- buf;
+    ring.off <- 0
+
+  let push ring value =
+    if ring.len = Array.length ring.buf then grow ring;
+    Array.unsafe_set ring.buf
+      ((ring.off + ring.len) land (Array.length ring.buf - 1))
+      value;
+    ring.len <- ring.len + 1
+
+  let pop ring =
+    let v = Array.unsafe_get ring.buf ring.off in
+    Array.unsafe_set ring.buf ring.off dummy;
+    ring.off <- (ring.off + 1) land (Array.length ring.buf - 1);
+    ring.len <- ring.len - 1;
+    v
+
+  let ring_of t = function
+    | Domain_clean _ -> t.clean
+    | Domain_cancel _ -> t.cancel
+    | _ -> t.other
+
+  let add t elt = push (ring_of t elt) elt
+  let is_empty t = t.clean.len = 0 && t.cancel.len = 0 && t.other.len = 0
+
+  exception Empty
+
+  let take t =
+    if t.clean.len > 0 then pop t.clean
+    else if t.cancel.len > 0 then pop t.cancel
+    else if t.other.len > 0 then pop t.other
+    else raise Empty
+
+  let iter fn t =
+    let iter_ring ring =
+      let cap = Array.length ring.buf in
+      for i = 0 to ring.len - 1 do
+        let v = Array.unsafe_get ring.buf ((ring.off + i) land (cap - 1)) in
+        fn v
+      done
+    in
+    iter_ring t.clean; iter_ring t.cancel; iter_ring t.other
 end
-
-module Heapq = Pqueue.Make (Domain_elt)
 
 let promise_of_domain_elt = function
   | Domain_tick _ -> .
@@ -217,8 +267,7 @@ let promise_of_domain_elt = function
 
 type domain = {
     uid: Domain_uid.t
-  ; tasks: Heapq.t
-  ; tick: int Atomic.t
+  ; tasks: Run_queue.t
   ; quanta: int
   ; g: Random.State.t
   ; events: events
@@ -453,8 +502,7 @@ end
 let add_into_domain domain elt =
   let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
   miou_assert (Domain_uid.equal runner domain.uid);
-  let tick = Atomic.fetch_and_add domain.tick 1 in
-  Heapq.insert (tick, elt) domain.tasks
+  Run_queue.add domain.tasks elt
 
 let transfer_dom0_tasks pool =
   if not (Queue.is_empty pool.to_dom0) then
@@ -483,11 +531,10 @@ module Domain = struct
   module Uid = Domain_uid
 
   let create ?(quanta = 1) ~events g uid =
-    let tasks = Heapq.create () in
+    let tasks = Run_queue.create () in
     {
       uid
     ; tasks
-    ; tick= Atomic.make 0
     ; quanta
     ; g
     ; events= events uid
@@ -835,18 +882,16 @@ module Domain = struct
 
   let get_elt_into_domain ~uid (domain : domain) =
     let elts = ref [] in
-    let f = function
-      | _, Domain_tick _ -> .
-      | _, Domain_cancel _
-      | _, Domain_clean _
-      | _, Domain_signal _
-      | _, Domain_transfer _ ->
+    let fn = function
+      | Domain_tick _ -> .
+      | Domain_cancel _ | Domain_clean _ | Domain_signal _ | Domain_transfer _
+        ->
           ()
-      | _, ((Domain_create _ | Domain_task _) as elt) ->
+      | (Domain_create _ | Domain_task _) as elt ->
           let (Pack prm) = promise_of_domain_elt elt in
           if Promise_uid.equal prm.uid uid then elts := elt :: !elts
     in
-    Heapq.iter f domain.tasks;
+    Run_queue.iter fn domain.tasks;
     match !elts with
     | [] -> None
     | [ (Domain_create _ as elt) ] | [ (Domain_task _ as elt) ] -> Some elt
@@ -1027,14 +1072,17 @@ module Domain = struct
   let unblock_awaits_with_system_events pool (domain : domain) =
     if (Stdlib.Domain.self () :> int) = 0 then synchronize_dom0_tasks pool
     else wakeup_dom0_if_needed pool;
-    let block = Heapq.size domain.tasks = 0 in
-    let cancelled =
-      if Queue.is_empty domain.cancelled_syscalls = false then
-        Queue.(to_list (transfer domain.cancelled_syscalls))
-      else list_empty
-    in
-    let syscalls = domain.events.select ~block cancelled in
-    List.iter (signal_system_events domain) syscalls
+    let block = Run_queue.is_empty domain.tasks in
+    let has_cancelled = Queue.is_empty domain.cancelled_syscalls = false in
+    if block || has_cancelled then begin
+      let cancelled =
+        if has_cancelled then
+          Queue.(to_list (transfer domain.cancelled_syscalls))
+        else list_empty
+      in
+      let syscalls = domain.events.select ~block cancelled in
+      List.iter (signal_system_events domain) syscalls
+    end
 
   let system_events_suspended domain =
     (* NOTE(dinosaure): we consider a signal as a system event which can
@@ -1060,8 +1108,8 @@ module Domain = struct
 
   let rec run pool (domain : domain) =
     run_hooks domain;
-    match Heapq.extract_min_exn domain.tasks with
-    | exception Heapq.Empty ->
+    match Run_queue.take domain.tasks with
+    | exception Run_queue.Empty ->
         if system_events_suspended domain then
           unblock_awaits_with_system_events pool domain
         else if (domain.uid :> int) = 0 then
@@ -1079,7 +1127,7 @@ module Domain = struct
           begin try unblock_awaits_with_system_events pool domain
           with No_select_provided -> ()
           end
-    | _, elt ->
+    | elt ->
         once pool domain elt;
         if system_events_suspended domain then
           unblock_awaits_with_system_events pool domain;
@@ -1094,7 +1142,7 @@ module Domain = struct
 
            we can re-call [run]. *)
         if
-          Heapq.is_empty domain.tasks = false
+          Run_queue.is_empty domain.tasks = false
           && Atomic.get pool.tasks_is_empty
           && Atomic.get pool.stop = false
           && no_transfer pool
@@ -1143,7 +1191,7 @@ module Pool = struct
     with Yes -> true
 
   let nothing_to_do (pool : pool) (domain : domain) =
-    Heapq.is_empty domain.tasks
+    Run_queue.is_empty domain.tasks
     && one_task_for ~domain pool = false
     && Atomic.get domain.syscalls = 0
 
