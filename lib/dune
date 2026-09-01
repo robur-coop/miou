@@ -73,13 +73,13 @@
 
 (rule
  (targets miou_unix.ml)
- (deps miou_unix.poll.ml miou_unix.select.ml)
+ (deps miou_unix.poll.ml miou_unix.select.ml miou_unix.epoll.ml)
  (action
   (copy miou_unix.%{read-strings:conf/impl.out}.ml %{targets})))
 
 (rule
  (targets miou_unix.c)
- (deps miou_unix.poll.c miou_unix.select.c)
+ (deps miou_unix.poll.c miou_unix.select.c miou_unix.epoll.c)
  (action
   (copy miou_unix.%{read-strings:conf/impl.out}.c %{targets})))
 
@@ -91,6 +91,11 @@
 (rule
  (targets miou_unix.select.ml)
  (deps miou_unix.sleep.ml.in miou_unix.select.ml.in miou_unix.common.ml.in)
+ (action (with-stdout-to %{targets} (run %{exe:conf/concat.exe} %{deps}))))
+
+(rule
+ (targets miou_unix.epoll.ml)
+ (deps miou_unix.sleep.ml.in miou_unix.epoll.ml.in miou_unix.common.ml.in)
  (action (with-stdout-to %{targets} (run %{exe:conf/concat.exe} %{deps}))))
 
 (rule
