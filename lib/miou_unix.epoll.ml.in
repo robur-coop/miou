@@ -38,28 +38,31 @@ module File_descrs = struct
 end
 
 (* NOTE(dinosaure): [epoll] has a rather unusual instruction that is of
-   interest to us here: [EPOLLONESHOT]. The idea is to let the kernel remove a
+   interest to us here: [EPOLLONESHOT]. The idea is to let the kernel disables a
    file descriptor from [epoll] if it has been signalled (whether IN or OUT, it
-   doesn’t matter). We will therefore take advantage of this feature so as not
-   to have to call [Epoll.del] systematically when we want to stop monitoring a
-   [file_descr] (after having signalled it).
+   doesn’t matter). Note that the registration of the file-descriptor is kept
+   but no further event is reported until we {i re-arm} it. We will therefore
+   take advantage of this feature so as not to have to call [Epoll.del]
+   systematically when we want to stop monitoring a [file_descr] (after having
+   signalled it).
 
    We therefore maintain an [armed] table for the current domain, which should
    mirror what the kernel observes regarding file descriptors. This flag table
    is of size [_SC_OPEN_MAX] (we should not have a [file_descr]/[int] larger
    than this number). Based on this table and depending on what we wish to
    monitor, we always add [EPOLLONESHOT]. Finally, when the user considers that
-   their [file_descr] should be released (using [Miou_unix]), we ‘forget’ its
+   their [file_descr] should be released (using [Miou_unix]), we {i forget} its
    flag in [armed] so that [armed] is always synchronised with what the kernel
    observes.
 
-   Finally, there is a final table, [drained], which allows us to optimise a
-   very specific scenario: this is when we want confirmation that there is
-   nothing left to read (that [Unix.read] returns [0]) without actually calling
-   [Unix.read], which would probably return [EAGAIN] whilst waiting for the
-   client-side closure. This final optimisation involves an [unsafe_read] that
-   is slightly different from what [miou_unix.{select,poll}.ml.in] provides -
-   which is why it is not included in [miou_unix.common.ml.in]). *)
+   Finally, there is a final table, [drained], which notifies us that the
+   kernel's buffer of the given socket is empty. A next [Unix.read] call will
+   terminate directly with a [EAGAIN] and we would like to save us from such
+   useless syscall. So, if [is_drained fd], we fallbacks directly to a
+   [blocking_read] without a confirmation from the kernel (via [Unix.read]) that
+   its buffer is actually empty. We are sure that such buffer is empty because
+   the last [Unix.read] gives to us few bytes ([> 0]) but not enough to fill
+   our buffer ([< len]). *)
 
 type domain = {
     readers: File_descrs.t

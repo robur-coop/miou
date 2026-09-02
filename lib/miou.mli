@@ -121,6 +121,21 @@
     function. We recommend using [Domain.recommended_domain_count () - 1]
     domains.
 
+    Miou provides an environment variable, [MIOU_DOMAINS], which can be used to
+    specify the number of domains that a Miou application can allocate. For
+    example, [MIOU_DOMAINS=3] allocates 4 domains (3 domains plus dom0).
+    [MIOU_DOMAINS=0] ensures that no domains are allocated (and therefore only
+    [Miou.async] is available). For some applications, it may be useful to have
+    a function such as [call_or_async] in order to test your application with or
+    without parallelism:
+
+    {[
+    let call_or_async ?give ?orphans ?handler fn =
+      if Miou.Domain.available () <= 0 then
+        Miou.async ?give ?orphans ?handler fn
+      else Miou.call ?give ?orphans ?handler fn
+    ]}
+
     {2 Design.}
 
     After this brief introduction to the basics of Miou (i.e. the use of effects
@@ -217,13 +232,61 @@
 
     If we want to be in the best position to manage system events, we need to
     {i increase} the points of cooperation that the fibers can emit. This is how
-    Miou came up with a fundamental rule: {b an effect yields}.
+    Miou came up with a fundamental rule: {b an effect yields}. Most of the
+    Miou's effects reorder task execution. During this reordering, Miou can
+    collect the system events that have just occurred. The objective is to do
+    this as often as possible!
 
-    Most of the Miou's effects reorder task execution. During this reordering,
-    Miou can collect the system events that have just occurred. The objective is
-    to do this as often as possible!
+    More specifically, Miou introduces a new metric: {e the quanta}. A quanta is
+    the execution of a task between two suspensions of that task: we say that a
+    quanta is consumed when a task {i progresses} up to its suspension. This
+    suspension occurs when a [Effect.perform] is called, because
+    {e an effect yields}. In other words, a quanta represents the execution of a
+    task up to an [Effect.perform].
 
-    {4 Performance and events.}
+    Not every effect costs a quanta: those Miou considers {i free} (pure queries
+    on the scheduler's state, which never suspend the task) are performed
+    without consuming anything, whatever [MIOU_QUANTA] is set to. For instance,
+    {!val:Miou.Domain.available} is a {i free} effect and does not re-schedule
+    tasks:
+
+    {[
+      # Miou.run @@ fun () ->
+        let prm = Miou.async @@ fun () -> Miou.Domain.available () in
+        print_endline "> foo";
+        let a = Miou.Domain.available () in
+        print_endline "> bar";
+        assert (a = Miou.await_exn prm)
+      > foo
+      > bar
+      - : unit = ()
+    ]}
+
+    In certain contexts (particularly with regard to benchmarks), it may be
+    useful to consume more than one [Effect.perform] before the task is
+    suspended: and thus to consume more than one quanta.
+
+    Miou provides an environment variable [MIOU_QUANTA] which allows you to
+    specify the number of quanta that Miou permits in the execution of a task
+    before it is suspended (in other words, how many [Effect.perform] operations
+    are permitted before the task is suspended).
+
+    For example, [MIOU_QUANTA=64] can make the execution of multiple tasks
+    fairer, whereas [MIOU_QUANTA=1] makes the execution of effects fairer. The
+    issue is that a task generally executes several effects: fairness regarding
+    effects does not therefore imply fairness regarding tasks! [MIOU_QUANTA]
+    allows you to approximate this fairness at the task level, depending on your
+    application.
+
+    {b NOTE}: raising the quanta changes the order in which tasks run, and that
+    order is itself documented. The second example given for {!val:yield} prints
+    [Hello] then [World], because the child runs before the parent resumes; with
+    [MIOU_QUANTA=64] the very same program prints [World] then [Hello].
+    Generally speaking, it is strongly advised not to rely on the order in which
+    tasks are executed (for all schedulers). It should therefore be noted that
+    [MIOU_QUANTA] has a real impact on the order in which tasks are executed.
+
+    {4:performance Performance and events.}
 
     At this point, we need to make clear to our future users a crucial choice we
     made for Miou: we prefer a scheduler that's available for system events,
@@ -234,6 +297,32 @@
     do nothing but calculations, the latter will be {i "polluted"} by these
     unnecessary points of cooperation. So, by default, Miou is {b less}
     efficient than other schedulers.
+
+    The aim of ensuring an application’s availability means that it should call
+    [events.select] frequently. The problem is that this function generally
+    corresponds to a {i syscall} ([select(3)], [poll(2)] or [epoll(7)]) which
+    can be time-consuming and degrade the performance of a Miou application. By
+    default, [events.select] is called {e each} time a task has been executed
+    (once per task, whatever [MIOU_QUANTA] allowed that task to do in the
+    meantime). The two variables are orthogonal: [MIOU_QUANTA] bounds how far a
+    task goes before it is rescheduled, [MIOU_POLL] how many tasks run between
+    two readiness checks. It is also possible therefor to specify a {i budget}
+    and allow several tasks to run before calling [events.select] (which reduces
+    availability).
+
+    This is why there is an environment variable [MIOU_POLL] which allows you to
+    specify this budget, i.e. how many tasks should be executed before events
+    are monitored. In some cases, it is preferable to have lower availability
+    (for example, with [MIOU_POLL=32]) in order to increase the throughput of a
+    service (such as an HTTP service).
+
+    Two things are deliberately kept, whatever the budget is. A domain whose
+    run-queue is {b empty} always calls [events.select], and blocks in it: a
+    domain with nothing else to do is never delayed, so the budget only ever
+    applies when there is other work to run right now. And a cancellation always
+    forces the call, since a cancelled syscall must leave the poll set promptly.
+    What the budget trades is therefore narrower than it looks: a {i busy}
+    domain notices new I/O within [n] tasks instead of immediately.
 
     {3 Miou and the system.}
 
@@ -1118,7 +1207,10 @@ val yield : unit -> unit
       Hello
       World
       - : unit = ()
-    ]} *)
+    ]}
+
+    {b NOTE}: this ordering is that of the default [MIOU_QUANTA=1]. Raising the
+    quanta reorders these two examples; see {!section:performance} above. *)
 
 module Hook : sig
   type t
@@ -1293,7 +1385,7 @@ val protect :
     case of a cancellation, [protect] invokes [on_cancellation ()] and then
     [finally ()] (with [cancelled:true]).
 
-    If [finally] raises an exception, then the exception {!Fun.Finally_raises}
+    If [finally] raises an exception, then the exception {!Fun.Finally_raised}
     is raised instead. If [on_cancellation] raises an exception, then the
     "uncatchable" exception [On_cancellation_raised] is raised instead.
 
