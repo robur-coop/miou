@@ -69,7 +69,7 @@ type domain = {
   ; writers: File_descrs.t
   ; sleepers: Heapq.t
   ; revert: (Miou.uid, Unix.file_descr) Hashtbl.t
-  ; epoll: Epoll.t
+  ; mutable epoll: Epoll.t
   ; events: Epoll.events
   ; drained: bytes
   ; armed: bytes
@@ -100,6 +100,7 @@ let set_armed domain fd v =
     Bytes.unsafe_set domain.armed idx (if v then '\001' else '\000')
 
 let arm domain fd =
+  let epoll = domain.epoll in
   let flags =
     let rfd = File_descrs.get domain.readers fd in
     let wfd = File_descrs.get domain.writers fd in
@@ -112,12 +113,12 @@ let arm domain fd =
   if flags <> Epoll.Flags.empty then begin
     let flags = Epoll.Flags.(flags + epolloneshot) in
     if is_armed domain fd then
-      begin if Epoll.upd domain.epoll fd flags <> 0 then
-        if Epoll.add domain.epoll fd flags = 0 then set_armed domain fd true
+      begin if Epoll.upd epoll fd flags <> 0 then
+        if Epoll.add epoll fd flags = 0 then set_armed domain fd true
         else set_armed domain fd false
       end
-    else if Epoll.add domain.epoll fd flags = 0 then set_armed domain fd true
-    else if Epoll.upd domain.epoll fd flags = 0 then set_armed domain fd true
+    else if Epoll.add epoll fd flags = 0 then set_armed domain fd true
+    else if Epoll.upd epoll fd flags = 0 then set_armed domain fd true
   end
 
 let forget domain fd =
@@ -167,16 +168,13 @@ let domain =
     done;
     make ()
   and make () =
-    let epoll = Epoll.create () in
-    Logs.debug (fun m ->
-        m "create an epoll instance on [%d]" (Stdlib.Domain.self () :> int));
     {
       readers= File_descrs.create 0x100
     ; writers= File_descrs.create 0x100
     ; sleepers= Heapq.create ()
     ; revert= Hashtbl.create 0x100
-    ; epoll
-    ; events= Epoll.make_events 256
+    ; epoll= Epoll.invalid_fd
+    ; events= Epoll.events 256
     ; drained= flags_by_fd ()
     ; armed= flags_by_fd ()
     }
@@ -293,7 +291,7 @@ let wakeup domain tbl fd =
 let select _uid ic ~block cancelled_syscalls =
   let domain = domain () in
   clean domain cancelled_syscalls;
-  let timeout : Epoll.timeout =
+  let timeout =
     match (sleeper domain.sleepers, block) with
     | None, true -> Epoll.Infinite
     | (None | Some _), false -> Epoll.No_wait
@@ -335,6 +333,7 @@ let interrupt oc () =
 
 let events uid =
   let domain = domain () in
+  domain.epoll <- Epoll.create ();
   let ic, oc = Unix.pipe ~cloexec:true () in
   Unix.set_nonblock ic;
   Unix.set_nonblock oc;
@@ -342,7 +341,14 @@ let events uid =
      domain, so it is registered without [EPOLLONESHOT] and never re-armed. *)
   ignore (Epoll.add domain.epoll ic Epoll.Flags.epollin);
   let select = select uid ic in
-  let finaliser () = Unix.close ic; Unix.close oc in
+  let finaliser () =
+    Unix.close ic;
+    Unix.close oc;
+    Epoll.close domain.epoll;
+    domain.epoll <- Epoll.invalid_fd;
+    Bytes.fill domain.armed 0 (Bytes.length domain.armed) '\000';
+    Bytes.fill domain.drained 0 (Bytes.length domain.drained) '\000'
+  in
   { Miou.interrupt= interrupt oc; select; finaliser }
 
 let run ?quanta ?poll ?g ?domains ?handler fn =
