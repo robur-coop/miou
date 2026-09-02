@@ -1,9 +1,11 @@
 module C = struct
-  external create : unit -> int = "miou_epoll_create"
-  external ctl : int -> int -> Unix.file_descr -> int -> int = "miou_epoll_ctl"
+  external create : unit -> Unix.file_descr = "miou_epoll_create"
+
+  external ctl : Unix.file_descr -> int -> Unix.file_descr -> int -> int
+    = "miou_epoll_ctl"
 
   external wait :
-       int
+       Unix.file_descr
     -> (int32, Bigarray.int32_elt, Bigarray.c_layout) Bigarray.Array1.t
     -> int
     -> int64
@@ -17,7 +19,7 @@ module C = struct
   external flag_oneshot : unit -> int = "miou_epoll_flag_oneshot" [@@noalloc]
 end
 
-type t = int
+type t = Unix.file_descr
 
 module Flags = struct
   type t = int
@@ -35,18 +37,18 @@ module Flags = struct
 end
 
 let () = assert (Obj.is_int (Obj.repr Unix.stdout))
+let invalid_fd : Unix.file_descr = Obj.magic (-1)
 let create () = C.create ()
-let close t = Unix.close (Obj.magic t : Unix.file_descr) (* TODO *)
+let close t = if t <> invalid_fd then Unix.close t
 let add t fd flags = C.ctl t 0 fd flags
 let upd t fd flags = C.ctl t 1 fd flags
 let del t fd = C.ctl t 2 fd 0
 
 type events = (int32, Bigarray.int32_elt, Bigarray.c_layout) Bigarray.Array1.t
 
-let make_events n =
-  Bigarray.Array1.create Bigarray.int32 Bigarray.c_layout (n * 2)
+let events n = Bigarray.Array1.create Bigarray.int32 Bigarray.c_layout (n * 2)
 
-type timeout = Infinite | No_wait | Nanoseconds of int64
+type epoll_timeout = Infinite | No_wait | Nanoseconds of int64
 
 let wait t events timeout =
   let timeout =

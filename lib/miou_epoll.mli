@@ -18,6 +18,7 @@ module Flags : sig
   val of_int : int -> t
 end
 
+val invalid_fd : t
 val create : unit -> t
 val close : t -> unit
 
@@ -36,11 +37,11 @@ val del : t -> Unix.file_descr -> int
 type events
 (** A buffer holding the descriptors reported ready by the last {!val:wait}. *)
 
-val make_events : int -> events
+val events : int -> events
 
-type timeout = Infinite | No_wait | Nanoseconds of int64
+type epoll_timeout = Infinite | No_wait | Nanoseconds of int64
 
-val wait : t -> events -> timeout -> int
+val wait : t -> events -> epoll_timeout -> int
 (** [wait t events timeout] fills [events] and returns how many descriptors are
     ready. An interruption by a signal returns [0]. *)
 
