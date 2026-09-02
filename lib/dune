@@ -86,17 +86,26 @@
 (rule
  (targets miou_unix.poll.ml)
  (deps miou_unix.sleep.ml.in miou_unix.poll.ml.in miou_unix.common.ml.in)
- (action (with-stdout-to %{targets} (run %{exe:conf/concat.exe} %{deps}))))
+ (action
+  (with-stdout-to
+   %{targets}
+   (run %{exe:conf/concat.exe} %{deps}))))
 
 (rule
  (targets miou_unix.select.ml)
  (deps miou_unix.sleep.ml.in miou_unix.select.ml.in miou_unix.common.ml.in)
- (action (with-stdout-to %{targets} (run %{exe:conf/concat.exe} %{deps}))))
+ (action
+  (with-stdout-to
+   %{targets}
+   (run %{exe:conf/concat.exe} %{deps}))))
 
 (rule
  (targets miou_unix.epoll.ml)
  (deps miou_unix.sleep.ml.in miou_unix.epoll.ml.in miou_unix.common.ml.in)
- (action (with-stdout-to %{targets} (run %{exe:conf/concat.exe} %{deps}))))
+ (action
+  (with-stdout-to
+   %{targets}
+   (run %{exe:conf/concat.exe} %{deps}))))
 
 (rule
  (targets miou_poll_config.ml miou_ppoll.h)

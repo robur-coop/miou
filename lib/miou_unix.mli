@@ -58,7 +58,7 @@
     Here are some explanations of the code above.
     + There is no reference to the [Miou_unix] module (although there are
       references to [Unix]). As we said, [Miou_unix] only manages
-      {!type:file-descr}. In the code above, it is more about signal management.
+      {!type:file_descr}. In the code above, it is more about signal management.
     + First, a program is launched with [Unix.create_process] and a {i handler}
       is installed on the [SIGCHLD] signal. Please refer to the
       {!val:Miou.sys_signal} documentation.
@@ -247,7 +247,7 @@ val recvfrom :
     actual number of characters received, between 0 and [len] (inclusive) and
     the peer which sent these bytes.
 
-    @raise Unix.Unixerror
+    @raise Unix.Unix_error
       raised by the system call {!val:unix.recvfrom}. The function handles
       {!constructor:Unix.EINTR}, {!constructor:Unix.EAGAIN} and
       {!constructor:Unix.EWOULDBLOCK} exceptions and redo the system call.
@@ -286,7 +286,9 @@ val sleep : float -> unit
 (** {3 First entry point.} *)
 
 val run :
-     ?g:Random.State.t
+     ?quanta:int
+  -> ?poll:int
+  -> ?g:Random.State.t
   -> ?domains:int
   -> ?handler:Miou.Handler.t
   -> (unit -> 'a)

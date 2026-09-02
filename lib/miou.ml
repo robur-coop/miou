@@ -269,11 +269,13 @@ type domain = {
     uid: Domain_uid.t
   ; tasks: Run_queue.t
   ; quanta: int
+  ; budget: int
   ; g: Random.State.t
   ; events: events
   ; cancelled_syscalls: Syscall_uid.t Queue.t
   ; syscalls: int Atomic.t
   ; hooks: (unit -> unit) Miou_sequence.t
+  ; mutable credit: int
 }
 
 type 'r continuation = (State.error option, 'r) State.continuation
@@ -530,17 +532,19 @@ let dom0_interrupt = Atomic.make ignore
 module Domain = struct
   module Uid = Domain_uid
 
-  let create ?(quanta = 1) ~events g uid =
+  let create ?(quanta = 1) ?poll:(budget = 0) ~events g uid =
     let tasks = Run_queue.create () in
     {
       uid
     ; tasks
     ; quanta
+    ; budget
     ; g
     ; events= events uid
     ; syscalls= Atomic.make 0
     ; cancelled_syscalls= Queue.create ()
     ; hooks= Miou_sequence.create ()
+    ; credit= 0
     }
 
   (* NOTE(dinosaure): as far as [event.interrupt] is domain-safe (which should
@@ -1074,7 +1078,8 @@ module Domain = struct
     else wakeup_dom0_if_needed pool;
     let block = Run_queue.is_empty domain.tasks in
     let has_cancelled = Queue.is_empty domain.cancelled_syscalls = false in
-    if block || has_cancelled then begin
+    if block || has_cancelled || domain.credit <= 0 then begin
+      domain.credit <- domain.budget;
       let cancelled =
         if has_cancelled then
           Queue.(to_list (transfer domain.cancelled_syscalls))
@@ -1083,6 +1088,7 @@ module Domain = struct
       let syscalls = domain.events.select ~block cancelled in
       List.iter (signal_system_events domain) syscalls
     end
+    else domain.credit <- domain.credit - 1
 
   let system_events_suspended domain =
     (* NOTE(dinosaure): we consider a signal as a system event which can
@@ -1907,12 +1913,23 @@ end
 
 let quanta =
   match Sys.getenv_opt "MIOU_QUANTA" with
-  | Some str -> ( try int_of_string str with _ -> 1)
+  | Some str ->
+      let n = try int_of_string str with _ -> 1 in
+      Int.max 1 n
   | None -> 1
+
+let poll =
+  match Sys.getenv_opt "MIOU_POLL" with
+  | Some str ->
+      let n = try int_of_string str with _ -> 0 in
+      Int.max 0 n
+  | None -> 0
 
 let domains =
   match Sys.getenv_opt "MIOU_DOMAINS" with
-  | Some str -> ( try int_of_string str with _ -> Pool.number_of_domains ())
+  | Some str ->
+      let n = try int_of_string str with _ -> Pool.number_of_domains () in
+      Int.max 0 n
   | None -> Pool.number_of_domains ()
 
 let error_select =
@@ -1942,11 +1959,11 @@ let sys_signal signal = function
       in
       Sys.signal signal (Signal_handle fn)
 
-let run ?(quanta = quanta) ?(g = Random.State.make_self_init ())
+let run ?(quanta = quanta) ?(poll = poll) ?(g = Random.State.make_self_init ())
     ?(domains = domains) ?(events = Fun.const dummy_events) ?handler fn =
   Promise_uid.reset ();
   let dom0 = Domain_uid.of_int 0 in
-  let dom0 = Domain.create ~quanta ~events g dom0 in
+  let dom0 = Domain.create ~quanta ~poll ~events g dom0 in
   (* NOTE(dinosaure): set [dom0_interrupt] used by [sys_signal] to be able to
      wake-up [dom0] if it is on the sleeping mode and when we retrieve a signal
      on another domain. *)
