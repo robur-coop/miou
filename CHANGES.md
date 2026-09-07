@@ -1,3 +1,19 @@
+### v0.10.0 (2026-09-02)
+
+- Delete some useless files for another compilation scheme (@dinosaure, #131)
+- Optimize a bit when we do an interruption and when we add something into our
+  dom0 (@dinosaure, #129)
+- Optimize our `Miou_unix` internal table of file-descriptors (@dinosaure, #130)
+- Provide `Miou_unix.{read,write}_bigstring` (since OCaml 5.2)
+  (@dinosaure, #133)
+- Add the support of `epoll(7)` on Linux (@dinosaure, #134)
+- Optimize our run-queue (replace our proved implementation of our priority
+  queue by something more straightforward, a simple ring buffer and duplicate it
+  by priorities - clean, cancel, others) (@dinosaure, #135, related to #40)
+- Introduce a new environment variable `MIOU_POLL` which gives a budget to let
+  Miou to execute tasks before to observe events (@dinosaure, #137)
+- Fix leak of epoll instance per domains (@dinosaure, #138)
+
 ### v0.9.0 (2026-08-28)
 
 - Be exhaustive on our pattern matching to pick a new task, it fix a
