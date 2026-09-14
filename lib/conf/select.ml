@@ -26,15 +26,15 @@ int main(void) {
   struct timespec ts;
   int fd = epoll_create1(EPOLL_CLOEXEC);
 
-  if (fd < 0)
-    return (errno == ENOSYS);
+  if (fd < 0 && errno == ENOSYS)
+    return 1;
 
   ts.tv_sec = 0; ts.tv_nsec = 0;
   ev.events = EPOLLIN | EPOLLONESHOT;
   ev.data.fd = 0;
 
   if (epoll_pwait2(fd, &ev, 1, &ts, NULL) < 0)
-    return (errno == ENOSYS);
+    return 1;
 
   return 0;
 }
@@ -44,7 +44,7 @@ let epoll_is_implemented c =
   let split str = String.split_on_char ' ' str |> List.filter (( <> ) "") in
   let var name = Option.fold ~none:[] ~some:split (C.ocaml_config_var c name) in
   match var "c_compiler" with
-  | [] -> true
+  | [] -> false
   | cc :: cc_args -> begin
       let src = Filename.temp_file "has_epoll" ".c" in
       let exe = Filename.temp_file "has_epoll" ".exe" in
@@ -60,7 +60,7 @@ let epoll_is_implemented c =
         @ var "ocamlc_cppflags"
         @ [ src; "-o"; exe ]
       in
-      if not (C.Process.run_ok c cc args) then true
+      if not (C.Process.run_ok c cc args) then false
       else
         match C.Process.run c exe [] with
         | { C.Process.exit_code= 0; _ } -> true
