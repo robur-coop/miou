@@ -19,18 +19,54 @@ let has_epoll_code =
 #include <sys/epoll.h>
 #include <stddef.h>
 
+#include <errno.h>
+
 int main(void) {
   struct epoll_event ev;
   struct timespec ts;
   int fd = epoll_create1(EPOLL_CLOEXEC);
 
+  if (fd < 0)
+    return (errno == ENOSYS);
+
   ts.tv_sec = 0; ts.tv_nsec = 0;
   ev.events = EPOLLIN | EPOLLONESHOT;
   ev.data.fd = 0;
 
-  return (epoll_pwait2(fd, &ev, 1, &ts, NULL));
+  if (epoll_pwait2(fd, &ev, 1, &ts, NULL) < 0)
+    return (errno == ENOSYS);
+
+  return 0;
 }
 |c}
+
+let epoll_is_implemented c =
+  let split str = String.split_on_char ' ' str |> List.filter (( <> ) "") in
+  let var name = Option.fold ~none:[] ~some:split (C.ocaml_config_var c name) in
+  match var "c_compiler" with
+  | [] -> true
+  | cc :: cc_args -> begin
+      let src = Filename.temp_file "has_epoll" ".c" in
+      let exe = Filename.temp_file "has_epoll" ".exe" in
+      let fn filename = try Sys.remove filename with _ -> () in
+      let finally () = List.iter fn [ src; exe ] in
+      Fun.protect ~finally @@ fun () ->
+      let oc = open_out_bin src in
+      output_string oc has_epoll_code;
+      close_out oc;
+      let args =
+        cc_args
+        @ var "ocamlc_cflags"
+        @ var "ocamlc_cppflags"
+        @ [ src; "-o"; exe ]
+      in
+      if not (C.Process.run_ok c cc args) then true
+      else
+        match C.Process.run c exe [] with
+        | { C.Process.exit_code= 0; _ } -> true
+        | _ -> false
+        | exception _ -> false
+    end
 
 let () =
   C.main ~name:"select" @@ fun c ->
@@ -38,6 +74,7 @@ let () =
   let has_epoll =
     (not (C.ocaml_config_var_exn c "system" = "win32"))
     && C.c_test c has_epoll_code
+    && epoll_is_implemented c
   in
   C.C_define.gen_header_file c ~fname:"miou_poll.h"
     [ ("HAS_POLL", Switch has_poll); ("HAS_EPOLL", Switch has_epoll) ];
