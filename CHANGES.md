@@ -1,3 +1,7 @@
+### v0.10.1 (2026-09-14)
+
+- Fix how we recognize the support of `epoll` (@dinosaure, @hannesm, #140)
+
 ### v0.10.0 (2026-09-02)
 
 - Delete some useless files for another compilation scheme (@dinosaure, #131)
