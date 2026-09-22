@@ -28,7 +28,7 @@ module File_descrs = struct
     done;
     let contents = Array.make !len' [] in
     Array.blit tbl.contents 0 contents 0 len;
-    tbl.contents <- tbl.contents
+    tbl.contents <- contents
 
   let get tbl fd =
     let idx = int_of_file_descr fd in
