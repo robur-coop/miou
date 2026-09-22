@@ -2181,12 +2181,10 @@ module Mutex = struct
   let try_lock t =
     try
       let (Pack prm) = Effect.perform Self in
-      Atomic.get t == Unlocked
-      || Atomic.compare_and_set t Unlocked
-           (Locked { prm= Some prm; head= []; tail= [] })
+      Atomic.compare_and_set t Unlocked
+        (Locked { prm= Some prm; head= []; tail= [] })
     with Effect.Unhandled Self ->
-      Atomic.get t == Unlocked
-      || Atomic.compare_and_set t Unlocked locked_nothing
+      Atomic.compare_and_set t Unlocked locked_nothing
 
   let inhibit fn = try fn () with _ -> ()
 
