@@ -1210,6 +1210,22 @@ let test60 =
   in
   Test.check (result = "cancelled")
 
+let test61 =
+  let description = "regression on try_lock" in
+  Test.test ~title:"test61" ~description @@ fun () ->
+  Miou.run @@ fun () ->
+  let mutex = Miou.Mutex.create () in
+  let prm =
+    Miou.async @@ fun () ->
+    let res = Miou.Mutex.try_lock mutex in
+    Test.check res;
+    if res then
+      match Miou.Mutex.unlock mutex with
+      | exception _exn -> Test.check false
+      | () -> Test.check true
+  in
+  Miou.await_exn prm
+
 let () =
   let tests =
     [
@@ -1219,7 +1235,7 @@ let () =
     ; test28; test29; test30; test31; test32; test33; test34; test35; test36
     ; test37; test38; test39; test40; test41; test42; test43; test44; test45
     ; test46; test47; test48; test49; test50; test51; test52; test53; test54
-    ; test55; test56; test57; test58; test59; test60
+    ; test55; test56; test57; test58; test59; test60; test61
     ]
   in
   let ({ Test.directory } as runner) =
