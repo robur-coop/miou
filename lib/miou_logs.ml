@@ -67,12 +67,14 @@ let kmsg : type a b. (unit -> b) -> ?src:string -> level -> (a, b) msgf -> b =
       fun msgf ->
         let over () = Mutex.unlock mutex_logs in
         Mutex.lock mutex_logs;
-        report src level ~over k msgf
+        begin try report src level ~over k msgf with _exn -> over (); k ()
+        end
   | _, Error ->
       fun msgf ->
         let over () = Mutex.unlock mutex_logs in
         Mutex.lock mutex_logs;
-        report src level ~over k msgf
+        begin try report src level ~over k msgf with _exn -> over (); k ()
+        end
   | _ -> fun _ -> k ()
 
 let msg level msgf = kmsg (Fun.const ()) level msgf
