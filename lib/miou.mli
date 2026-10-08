@@ -680,7 +680,74 @@ module Ownership : sig
       released).
 
       The aim of this module is to ensure that when a task is completed, all
-      resources have been released. *)
+      resources have been released.
+
+      {3 Examples where [Miou.Ownership] is needed.}
+
+      Resource management (their allocation and, above all, their deallocation)
+      has been greatly simplified by the introduction of [Fun.protect], which
+      attaches what is known as a {i finaliser} to a piece of code. Here is a
+      fairly common example of how [Fun.protect] is used.
+
+      {[
+      let ( let@ ) finally fn = Fun.protect ~finally fn
+
+      let string_of_file filename =
+        let ic = open_in_bin filename in
+        let@ () = fun () -> close_in ic in
+        let len = in_channel_length ic in
+        let buf = Bytes.create len in
+        really_input ic buf 0 len;
+        Bytes.unsafe_to_string buf
+      ]}
+
+      Using [Fun.protect] can be useful, but it does not handle effects, the
+      scheduler and cancellation very well. Furthermore, there may be a
+      situation where the [finally] function is only partially executed if it
+      performs an effect when a task is cancelled:
+
+      {[
+      let ( let@ ) finally fn = Fun.protect ~finally fn
+
+      let run filename =
+        Miou_unix.run @@ fun () ->
+        let prm =
+          Miou.async @@ fun () ->
+          let ic = open_in_bin filename in
+          let@ () =
+            Miou.yield ();
+            close_in ic;
+            print_endline "Released!"
+          in
+          Miou_unix.sleep 10.
+        in
+        Miou.yield (); Miou.cancel prm
+      ]}
+
+      In this particular case, [close_in] is never called. For this reason, it
+      is strongly recommended that you use the [Miou.Ownership] module whenever
+      you need to handle resources (such as files or sockets):
+
+      {[
+      let finally ic =
+        close_in ic;
+        print_endline "Released!"
+
+      let run filename =
+        Miou_unix.run @@ fun () ->
+        let prm =
+          Miou.async @@ fun () ->
+          let ic = open_in_bin filename in
+          let resource = Miou.Ownership.create ~finally ic in
+          Miou.Ownership.own resource;
+          Miou_unix.sleep 10.;
+          Miou.Ownership.release resource
+        in
+        Miou.yield (); Miou.cancel prm
+      ]}
+
+      This ensures that, should the task throw an exception and/or be cancelled,
+      Miou will properly release the resources associated with it. *)
 
   type t
   (** The type of resources. *)
