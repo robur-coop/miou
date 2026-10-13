@@ -1,3 +1,11 @@
+### v0.10.2 (2026-10-13)
+
+- Fix how we grow our internal table of file-descrs (@dinosaure, #143)
+- Fix `Miou.Mutex.try_lock` and do effectively a compare and swap
+  (@dinosaure, #142)
+- Be safe about our logs (and avoid a deadlock) (@dinosaure, #144)
+- Add documentation about `Miou.Ownership` (@dinosaure, @kit-ty-kate, #145)
+
 ### v0.10.1 (2026-09-14)
 
 - Fix how we recognize the support of `epoll` (@dinosaure, @hannesm, #140)
