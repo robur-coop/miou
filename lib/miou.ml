@@ -245,15 +245,14 @@ module Run_queue = struct
     else if t.other.len > 0 then pop t.other
     else raise Empty
 
-  let iter fn t =
-    let iter_ring ring =
-      let cap = Array.length ring.buf in
-      for i = 0 to ring.len - 1 do
-        let v = Array.unsafe_get ring.buf ((ring.off + i) land (cap - 1)) in
-        fn v
-      done
-    in
-    iter_ring t.clean; iter_ring t.cancel; iter_ring t.other
+  let iter_tasks fn t =
+    let ring = t.other in
+    let cap = Array.length ring.buf in
+    for i = 0 to ring.len - 1 do
+      let idx = (ring.off + i) land (cap - 1) in
+      let v = Array.unsafe_get ring.buf idx in
+      fn v
+    done
 end
 
 let promise_of_domain_elt = function
@@ -895,7 +894,7 @@ module Domain = struct
           let (Pack prm) = promise_of_domain_elt elt in
           if Promise_uid.equal prm.uid uid then elts := elt :: !elts
     in
-    Run_queue.iter fn domain.tasks;
+    Run_queue.iter_tasks fn domain.tasks;
     match !elts with
     | [] -> None
     | [ (Domain_create _ as elt) ] | [ (Domain_task _ as elt) ] -> Some elt
