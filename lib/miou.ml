@@ -1459,13 +1459,15 @@ let rec add_into_orphans : type a.
       else invalid_arg "The given orphans is owned by another promise"
 
 let location () =
-  let bt = Printexc.get_callstack 10 in
-  let ( let* ) = Option.bind in
-  let* slots = Printexc.backtrace_slots bt in
-  let* { Printexc.filename; line_number; _ } =
-    Printexc.Slot.location slots.(2)
-  in
-  Some (filename, line_number)
+  if not Trace.enabled then None
+  else
+    let bt = Printexc.get_callstack 10 in
+    let ( let* ) = Option.bind in
+    let* slots = Printexc.backtrace_slots bt in
+    let* { Printexc.filename; line_number; _ } =
+      Printexc.Slot.location slots.(2)
+    in
+    Some (filename, line_number)
 
 let async ?loc ?(give = []) ?orphans ?handler fn =
   let loc = match loc with Some loc -> Some loc | None -> location () in
