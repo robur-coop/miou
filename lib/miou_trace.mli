@@ -28,3 +28,4 @@ type event +=
 
 val set_reporter : (event -> unit) -> unit
 val trace : event -> unit
+val enabled : bool

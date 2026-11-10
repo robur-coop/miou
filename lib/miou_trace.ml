@@ -29,6 +29,7 @@ type event +=
 let reporter : (event -> unit) Atomic.t = Atomic.make ignore
 let set_reporter fn = Atomic.set reporter fn
 let miou_trace = Sys.getenv_opt "MIOU_TRACE"
+let enabled = Option.is_some miou_trace
 
 let trace event =
   match miou_trace with Some _ -> (Atomic.get reporter) event | _ -> ()
