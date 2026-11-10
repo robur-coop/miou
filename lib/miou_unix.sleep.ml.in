@@ -24,13 +24,14 @@ let rec sleeper sleepers =
 
 let in_the_past t = t = 0. || t <= Unix.gettimeofday ()
 
-let rec collect sleepers signals =
+let rec collect sleepers rsleepers signals =
   match Heapq.find_min_exn sleepers with
   | exception Heapq.Empty -> signals
   | { cancelled= true; _ } ->
       Heapq.delete_min_exn sleepers;
-      collect sleepers signals
+      collect sleepers rsleepers signals
   | { time; syscall; _ } when in_the_past time ->
       Heapq.delete_min_exn sleepers;
-      collect sleepers (Miou.signal syscall :: signals)
+      Hashtbl.remove rsleepers (Miou.uid syscall);
+      collect sleepers rsleepers (Miou.signal syscall :: signals)
   | _ -> signals

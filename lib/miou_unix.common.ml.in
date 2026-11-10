@@ -235,7 +235,10 @@ let sleep until =
   let elt =
     { time= Unix.gettimeofday () +. until; syscall; cancelled= false }
   in
-  let fn () = Heapq.insert elt domain.sleepers in
+  let fn () =
+    Hashtbl.replace domain.rsleepers (Miou.uid syscall) elt;
+    Heapq.insert elt domain.sleepers
+  in
   Miou.suspend ~fn syscall
 
 module Ownership = struct
