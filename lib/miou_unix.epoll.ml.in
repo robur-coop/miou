@@ -68,6 +68,7 @@ type domain = {
     readers: File_descrs.t
   ; writers: File_descrs.t
   ; sleepers: Heapq.t
+  ; rsleepers: (Miou.uid, elt) Hashtbl.t
   ; revert: (Miou.uid, Unix.file_descr) Hashtbl.t
   ; mutable epoll: Epoll.t
   ; events: Epoll.events
@@ -146,10 +147,14 @@ let clean domain uids =
   in
   List.iter clean uids;
   List.iter (Hashtbl.remove domain.revert) uids;
-  let clean ({ syscall; _ } as elt) =
-    if List.exists (( = ) (Miou.uid syscall)) uids then elt.cancelled <- true
+  let clean uid =
+    match Hashtbl.find_opt domain.rsleepers uid with
+    | Some elt ->
+      elt.cancelled <- true;
+      Hashtbl.remove domain.rsleepers uid
+    | None -> ()
   in
-  Heapq.iter clean domain.sleepers
+  List.iter clean uids
 
 let domain =
   (* NOTE(dinosaure): see [miou_unix.poll.ml.in] for an explanation about
@@ -158,6 +163,7 @@ let domain =
     File_descrs.clear v.readers;
     File_descrs.clear v.writers;
     drop_heapq v.sleepers;
+    Hashtbl.clear v.rsleepers;
     Hashtbl.clear v.revert;
     Bytes.fill v.drained 0 (Bytes.length v.drained) '\000';
     for i = 0 to Bytes.length v.armed - 1 do
@@ -172,6 +178,7 @@ let domain =
       readers= File_descrs.create 0x100
     ; writers= File_descrs.create 0x100
     ; sleepers= Heapq.create ()
+    ; rsleepers= Hashtbl.create 0x100
     ; revert= Hashtbl.create 0x100
     ; epoll= Epoll.invalid_fd
     ; events= Epoll.events 256
@@ -301,9 +308,10 @@ let select _uid ic ~block cancelled_syscalls =
         Epoll.Nanoseconds (Int64.of_float value)
   in
   match Epoll.wait domain.epoll domain.events timeout with
-  | exception Unix.(Unix_error (EINTR, _, _)) -> collect domain.sleepers []
+  | exception Unix.(Unix_error (EINTR, _, _)) ->
+    collect domain.sleepers domain.rsleepers []
   | nready ->
-      let acc = ref (collect domain.sleepers []) in
+      let acc = ref (collect domain.sleepers domain.rsleepers []) in
       let fn fd flags =
         if fd == ic then intr ic
         else begin
