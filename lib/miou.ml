@@ -77,6 +77,7 @@ type 'a t = {
   ; children: pack Miou_sequence.t
   ; resources: resource Miou_sequence.t
   ; mutable cancelled: (exn * Printexc.raw_backtrace) option
+  ; mutable in_parent_children: pack Miou_sequence.node option
   ; cleaned: bool Atomic.t
   ; finalized: bool Atomic.t
   ; handler: Handler.t
@@ -115,6 +116,7 @@ module Promise = struct
     ; children= Miou_sequence.create ()
     ; resources
     ; cancelled= None
+    ; in_parent_children= None
     ; cleaned= Atomic.make false
     ; finalized= Atomic.make false
     ; handler
@@ -142,15 +144,11 @@ module Promise = struct
   type nonrec 'a t = 'a t
 end
 
-exception Clean_children of pack Miou_sequence.node
-
 (* - the domain which runs this function **must** be the runner of [self].
    - [self] is **probably** the parent of [child] but, in some situation,
      [clean_children] is called when [self] is a /proxy promise/ like the one
      created and used in [await_{first,one}]. From our previous assertion, even
      if [self] is not the parent of [child], we can safely execute this code.
-   - we prevent the case where [self] is not the parent of [child], and undoes
-     an unnecessary iteration ([Miou_sequence.iter_node])
 *)
 let clean_children ~self (child : _ t) =
   let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
@@ -158,18 +156,16 @@ let clean_children ~self (child : _ t) =
   Logs.debug (fun m ->
       m "[%a] clean %a into %a" Domain_uid.pp runner Promise.pp child Promise.pp
         self);
-  let f (Miou_sequence.{ data= Pack prm; _ } as node) =
-    if Promise_uid.equal child.uid prm.uid then
-      raise_notrace (Clean_children node)
-  in
   let some (Pack prm) = Promise_uid.equal self.uid prm.uid in
   if Option.fold ~none:false ~some child.parent then
-    begin try Miou_sequence.iter_node ~f self.children
-    with Clean_children node ->
-      Miou_sequence.remove node;
-      let self = Promise_uid.to_int self.uid in
-      let child = Promise_uid.to_int child.uid in
-      Trace.trace (Trace.Clean { self; child })
+    begin match child.in_parent_children with
+    | None -> ()
+    | Some node ->
+        child.in_parent_children <- None;
+        Miou_sequence.remove node;
+        let self = Promise_uid.to_int self.uid in
+        let child = Promise_uid.to_int child.uid in
+        Trace.trace (Trace.Clean { self; child })
     end
 
 type syscall = Syscall : string * Syscall_uid.t * Trigger.t * _ t -> syscall
@@ -775,6 +771,8 @@ module Domain = struct
           in
           canceller pool ~self:prm prm';
           Miou_sequence.(add Left) prm.children (Pack prm');
+          prm'.in_parent_children <-
+            Some Miou_sequence.(peek_node Left prm.children);
           Event.spawn prm';
           add_into_domain domain (Domain_create (prm', fn));
           k (Operation.return prm')
@@ -786,6 +784,8 @@ module Domain = struct
           in
           canceller pool ~self:prm prm';
           Miou_sequence.(add Left) prm.children (Pack prm');
+          prm'.in_parent_children <-
+            Some Miou_sequence.(peek_node Left prm.children);
           Event.spawn ~kind:`Parallel prm';
           add_into_pool pool (Pool_create (prm', fn));
           k (Operation.return prm')
