@@ -1536,6 +1536,11 @@ let await_exn prm =
   | Ok value -> value
   | Error (exn, bt) -> Printexc.raise_with_backtrace exn bt
 
+let const x =
+  let prm = async (fun () -> x) in
+  await_exn prm;
+  prm
+
 let await prm = await prm |> Result.map_error fst
 
 let await_one prms =
