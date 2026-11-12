@@ -1692,7 +1692,9 @@ let await_all prms =
   let prms = List.rev_map (fun prm -> await prm) prms in
   List.rev prms
 
-let async ?give ?orphans ?handler fn = async ?give ?orphans ?handler fn
+let async ?give ?orphans ?handler fn =
+  let loc = location () in
+  async ?loc ?give ?orphans ?handler fn
 
 let parallel fn tasks =
   let loc = location () in
