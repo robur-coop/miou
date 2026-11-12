@@ -980,6 +980,17 @@ val async :
       Exception: Invalid_argument "The given orphans is owned by another promise".
     ]} *)
 
+val const : 'a -> 'a t
+(** [const x] is a promise {!type:t} that has already been terminated.
+    It is equivalent to:
+
+    {[
+      let const x =
+        let prm = async (fun () -> x) in
+        await_exn x;
+        prm
+    ]} *)
+
 val call :
      ?pin:Domain.Uid.t
   -> ?give:Ownership.t list
