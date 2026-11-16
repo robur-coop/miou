@@ -1299,7 +1299,7 @@ module Pool = struct
   let number_of_domains () =
     max 0 (Stdlib.Domain.recommended_domain_count () - 1)
 
-  let create ?(quanta = 1) ~dom0
+  let create ?(quanta = 1) ?poll ~dom0
       ?domains:(domains_counter = number_of_domains ()) ~events
       ?(handler = Handler.none) () =
     let pool =
@@ -1324,7 +1324,7 @@ module Pool = struct
     let spawn () =
       Stdlib.Domain.spawn @@ fun () ->
       let runner = Domain_uid.of_int (Stdlib.Domain.self () :> int) in
-      let domain = Domain.create ~quanta ~events dom0.g runner in
+      let domain = Domain.create ~quanta ?poll ~events dom0.g runner in
       Queue.enqueue domains domain;
       Logs.debug (fun m -> m "spawn the domain [%a]" Domain_uid.pp runner);
       Clatch.count_down clatch;
@@ -1973,7 +1973,9 @@ let run ?(quanta = quanta) ?(poll = poll) ?(g = Random.State.make_self_init ())
   Atomic.set dom0_interrupt dom0.events.interrupt;
   let prm0 = Promise.create ~forbid:false ?handler dom0.uid in
   Domain.add_into_domain dom0 (Domain_create (prm0, fn));
-  let pool, domains = Pool.create ~quanta ~dom0 ~domains ~events ?handler () in
+  let pool, domains =
+    Pool.create ~quanta ~poll ~dom0 ~domains ~events ?handler ()
+  in
   let result =
     try
       while Computation.is_running prm0.state && !(pool.fail) = false do
