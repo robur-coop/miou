@@ -1436,24 +1436,35 @@ end
 
 type 'a orphans = {
     orphans: 'a t Miou_sequence.t
+  ; finished: ('a t Miou_sequence.node * 'a t) Queue.t
   ; owner: Promise_uid.t option Atomic.t
   ; length: int Atomic.t
 }
 
+let watch v node prm =
+  let push _ v (node, prm) = Queue.enqueue v.finished (node, prm) in
+  let t = Trigger.create () in
+  if Trigger.on_signal t v (node, prm) push then
+    begin if not (Computation.try_attach prm.state t) then
+      Queue.enqueue v.finished (node, prm)
+    end
+  else Queue.enqueue v.finished (node, prm)
+
 let rec add_into_orphans : type a.
     ?backoff:Backoff.t -> self:'x t -> a t -> a orphans -> unit =
- fun ?(backoff = Backoff.default) ~self prm ({ orphans; owner; length } as v) ->
+ fun ?(backoff = Backoff.default) ~self prm
+     ({ orphans; owner; length; _ } as v) ->
   match Atomic.get owner with
   | None ->
       if Atomic.compare_and_set owner None (Some self.uid) then begin
-        Miou_sequence.(add Left) orphans prm;
-        Atomic.incr length
+        let node = Miou_sequence.(add_into Left) orphans prm in
+        Atomic.incr length; watch v node prm
       end
       else add_into_orphans ~backoff:(Backoff.once backoff) ~self prm v
   | Some uid ->
       if Promise_uid.equal uid self.uid then begin
-        Miou_sequence.(add Left) orphans prm;
-        Atomic.incr length
+        let node = Miou_sequence.(add_into Left) orphans prm in
+        Atomic.incr length; watch v node prm
       end
       else invalid_arg "The given orphans is owned by another promise"
 
@@ -1787,6 +1798,7 @@ let uid (Syscall (_, uid, _, _)) = uid
 let orphans () =
   {
     orphans= Miou_sequence.create ()
+  ; finished= Queue.create ()
   ; owner= Atomic.make None
   ; length= Atomic.make 0
   }
@@ -1804,22 +1816,32 @@ let rec acquire_orphans ?(backoff = Backoff.default) ~(self : _ t)
         invalid_arg "The given orphans is owned by another promise"
 
 let care : type a. a orphans -> a t option option =
- fun ({ orphans; length; _ } as v) ->
+ fun ({ orphans; length; finished; _ } as v) ->
   let (Pack self) = Effect.perform Self in
   acquire_orphans ~self v;
-  if Miou_sequence.is_empty orphans then None
-  else
-    let exception Orphan of a t Miou_sequence.node in
-    let f ({ Miou_sequence.data= prm; _ } as node) =
-      if Computation.is_running prm.state = false then
-        raise_notrace (Orphan node)
-    in
-    try
-      Miou_sequence.iter_node ~f orphans;
-      Some None
-    with Orphan node ->
-      let prm = Miou_sequence.data node in
-      Miou_sequence.remove node; Atomic.decr length; Some (Some prm)
+  (* NOTE(dinosaure): [orphans] is our source of trust and **after**
+     [acquire_orphans], we are sure that only one domain manipulate it.
+     [finished] can be manipulated by multiple domains but it's an atomic queue.
+     If [orphans] is empty, we can drop everything and just return [None]
+     ([orphans] does not have any pending promises). If not, we try to dequeue
+     [finished] and see the state of the actual node returned, it's related to
+     the internal of [Miou_sequence], if [active = false], the node was already
+     removed (and returned): we can retry. *)
+  let rec go () =
+    if Miou_sequence.is_empty orphans then begin
+      if not (Queue.is_empty finished) then Queue.drop ~f:ignore finished;
+      None
+    end
+    else
+      match Queue.dequeue finished with
+      | exception Queue.Empty -> Some None
+      | node, prm ->
+          if node.Miou_sequence.active then begin
+            Miou_sequence.remove node; Atomic.decr length; Some (Some prm)
+          end
+          else go ()
+  in
+  go ()
 
 let take ({ orphans; length; _ } as v) =
   let (Pack self) = Effect.perform Self in
