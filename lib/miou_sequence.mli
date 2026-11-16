@@ -34,6 +34,10 @@ val add : direction -> 'a t -> 'a -> unit
 (** [add direction t] adds a new element into [t] to the specified [direction].
 *)
 
+val add_into : direction -> 'a t -> 'a -> 'a node
+(** Same as {!val:add} but returns the new fresh node which represents the value
+    into the given sequence. *)
+
 val drop : 'a t -> unit
 (** Removes all nodes from the given sequence. The nodes are not actually
     mutated to not their removal. Only the sequence's pointers are update. *)

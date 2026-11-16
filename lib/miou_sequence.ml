@@ -48,6 +48,19 @@ let peek_node direction (t : _ t) =
 let add direction t data =
   match direction with Left -> add_l data t | Right -> add_r data t
 
+let add_into direction (t : 'a t) data =
+  match direction with
+  | Left ->
+      let node = { prev= t; next= t.next; data; active= true } in
+      t.next.prev <- t_of_node node;
+      t.next <- t_of_node node;
+      node
+  | Right ->
+      let node = { prev= t.prev; next= t; data; active= true } in
+      t.prev.next <- t_of_node node;
+      t.prev <- t_of_node node;
+      node
+
 let length t =
   let rec go curr len =
     if curr == t then len
