@@ -12,6 +12,7 @@ module Flags : sig
   val epollhup : t
   val epollrdhup : t
   val epolloneshot : t
+  val epollet : t
   val empty : t
   val ( + ) : t -> t -> t
   val mem : t -> t -> bool
