@@ -115,7 +115,10 @@ let blocking_write ?(name = "write") fd =
   in
   Miou.suspend ~fn syscall
 
-let close { fd; _ } = Unix.close fd
+let retry_read ?name fd = blocking_read ?name fd
+let retry_write ?name fd = blocking_write ?name fd
+let close_fd = Unix.close
+let close { fd; _ } = close_fd fd
 
 let file_descrs tbl =
   let res = ref [] in
