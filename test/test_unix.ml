@@ -137,8 +137,225 @@ let test05 =
   Miou_unix.close socket;
   Test.check (result = Ok `Refused)
 
+(* NOTE(dinosaure): the following tests are regressions for the
+   edge-triggered [epoll] backend. Without the fixes, they do not fail: they
+   hang forever (sometimes the whole domain is blocked into a [Unix.read]). We
+   therefore run them into a child process killed after [timeout] seconds. *)
+
+let with_watchdog ?(timeout = 5.) fn =
+  flush_all ();
+  match Unix.fork () with
+  | 0 ->
+      let code =
+        match fn () with
+        | true -> 0
+        | false -> 1
+        | exception exn ->
+            Format.eprintf "Unexpected exception: %s\n%!"
+              (Printexc.to_string exn);
+            2
+      in
+      Unix._exit code
+  | pid ->
+      let deadline = Unix.gettimeofday () +. timeout in
+      let rec go () =
+        match Unix.waitpid [ Unix.WNOHANG ] pid with
+        | 0, _ when Unix.gettimeofday () < deadline -> Unix.sleepf 0.01; go ()
+        | 0, _ ->
+            Format.eprintf "Timeout: the child process is killed\n%!";
+            Unix.kill pid Sys.sigkill;
+            ignore (Unix.waitpid [] pid);
+            false
+        | _, Unix.WEXITED 0 -> true
+        | _, _ -> false
+      in
+      go ()
+
+let int_of_fd : Unix.file_descr -> int = Obj.magic
+
+let test06 =
+  let description = {text|Partial reads on a blocking file-descriptor|text} in
+  Test.test ~title:"test06" ~description @@ fun () ->
+  Test.check @@ with_watchdog
+  @@ fun () ->
+  Miou_unix.run ~domains:0 @@ fun () ->
+  let a, b = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  let a = Miou_unix.of_file_descr ~non_blocking:false a in
+  let writer =
+    Miou.async @@ fun () ->
+    Miou_unix.sleep 0.1;
+    ignore (Unix.write_substring b "0123456789" 0 10)
+  in
+  let buf = Bytes.create 0x100 in
+  let n1 = Miou_unix.read a ~len:4 buf in
+  (* NOTE(dinosaure): 6 bytes remain but no new edge will come. *)
+  let n2 = Miou_unix.read a buf in
+  Miou.await_exn writer;
+  Miou_unix.close a;
+  Unix.close b;
+  n1 = 4 && n2 = 6 && Bytes.sub_string buf 0 6 = "456789"
+
+let test07 =
+  let description =
+    {text|A stale readiness on a blocking file-descriptor|text}
+  in
+  Test.test ~title:"test07" ~description @@ fun () ->
+  Test.check @@ with_watchdog
+  @@ fun () ->
+  Miou_unix.run ~domains:0 @@ fun () ->
+  let a, b = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  let a' = Miou_unix.of_file_descr ~non_blocking:false a in
+  let writer =
+    Miou.async @@ fun () ->
+    Miou_unix.sleep 0.05;
+    ignore (Unix.write_substring b "abcd" 0 4)
+  in
+  let buf = Bytes.create 0x100 in
+  let n1 = Miou_unix.read a' buf in
+  Miou.await_exn writer;
+  (* NOTE(dinosaure): an edge arrives while nobody waits for [a] *)
+  ignore (Unix.write_substring b "efgh" 0 4);
+  Miou_unix.sleep 0.05;
+  (* NOTE(dinosaure): and these bytes are consumed elsewhere. *)
+  let n2 = Unix.read a buf 0 (Bytes.length buf) in
+  let writer =
+    Miou.async @@ fun () ->
+    Miou_unix.sleep 0.1;
+    ignore (Unix.write_substring b "ijkl" 0 4)
+  in
+  (* NOTE(dinosaure): we must wait for [writer] and not block the domain into
+     [Unix.read] because of a stale readiness. *)
+  let n3 = Miou_unix.read a' buf in
+  Miou.await_exn writer;
+  Miou_unix.close a';
+  Unix.close b;
+  n1 = 4 && n2 = 4 && n3 = 4 && Bytes.sub_string buf 0 4 = "ijkl"
+
+let test08 =
+  let description =
+    {text|Re-use a file-descriptor released by a cancelled owner|text}
+  in
+  Test.test ~title:"test08" ~description @@ fun () ->
+  Test.check @@ with_watchdog
+  @@ fun () ->
+  Miou_unix.run ~domains:0 @@ fun () ->
+  let a, b = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  let owner =
+    Miou.async @@ fun () ->
+    let a = Miou_unix.Ownership.of_file_descr a in
+    let buf = Bytes.create 0x100 in
+    ignore (Miou_unix.Ownership.read a buf)
+  in
+  Miou_unix.sleep 0.05;
+  (* NOTE(dinosaure): [a] is closed by the finaliser of its resource. *)
+  Miou.cancel owner;
+  Unix.close b;
+  let c, d = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  let reused = int_of_fd c = int_of_fd a in
+  let c = Miou_unix.of_file_descr c in
+  let writer =
+    Miou.async @@ fun () ->
+    Miou_unix.sleep 0.1;
+    ignore (Unix.write_substring d "hello" 0 5)
+  in
+  let buf = Bytes.create 0x100 in
+  let n = Miou_unix.read c buf in
+  Miou.await_exn writer;
+  Miou_unix.close c;
+  Unix.close d;
+  reused && n = 5 && Bytes.sub_string buf 0 5 = "hello"
+
+let test09 =
+  let description =
+    {text|Re-use a file-descriptor closed by another domain|text}
+  in
+  Test.test ~title:"test09" ~description @@ fun () ->
+  Test.check @@ with_watchdog
+  @@ fun () ->
+  Miou_unix.run ~domains:1 @@ fun () ->
+  let a, b = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  let a' = Miou_unix.of_file_descr a in
+  let writer =
+    Miou.async @@ fun () ->
+    Miou_unix.sleep 0.05;
+    ignore (Unix.write_substring b "x" 0 1)
+  in
+  let buf = Bytes.create 0x100 in
+  let n1 = Miou_unix.read a' buf in
+  Miou.await_exn writer;
+  (* NOTE(dinosaure): [a] is watched by this domain but closed by another one. *)
+  Miou.await_exn (Miou.call @@ fun () -> Miou_unix.close a');
+  Unix.close b;
+  let c, d = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  let reused = int_of_fd c = int_of_fd a in
+  let c = Miou_unix.of_file_descr c in
+  let writer =
+    Miou.async @@ fun () ->
+    Miou_unix.sleep 0.1;
+    ignore (Unix.write_substring d "hello" 0 5)
+  in
+  let n2 = Miou_unix.read c buf in
+  Miou.await_exn writer;
+  Miou_unix.close c;
+  Unix.close d;
+  reused && n1 = 1 && n2 = 5
+
+let test10 =
+  let description = {text|connect must wait for the connection|text} in
+  Test.test ~title:"test10" ~description @@ fun () ->
+  Test.check @@ with_watchdog
+  @@ fun () ->
+  Miou_unix.run ~domains:0 @@ fun () ->
+  (* NOTE(dinosaure): a listening socket with a full accept queue drops SYNs,
+     the next [connect] stays in progress. *)
+  let listener = Miou_unix.tcpv4 () in
+  Miou_unix.bind_and_listen ~backlog:0 listener
+    (Unix.ADDR_INET (Unix.inet_addr_loopback, 0));
+  let sockaddr = Unix.getsockname (Miou_unix.to_file_descr listener) in
+  let fillers =
+    List.init 2 @@ fun _ ->
+    let fd = Unix.socket ~cloexec:true Unix.PF_INET Unix.SOCK_STREAM 0 in
+    Unix.set_nonblock fd;
+    (try Unix.connect fd sockaddr with Unix.Unix_error _ -> ());
+    fd
+  in
+  Miou_unix.sleep 0.05;
+  (* NOTE(dinosaure): set a readiness (writable) on [a] while nobody writes. *)
+  let a, b = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
+  let a' = Miou_unix.of_file_descr a in
+  let writer =
+    Miou.async @@ fun () ->
+    Miou_unix.sleep 0.05;
+    ignore (Unix.write_substring b "x" 0 1)
+  in
+  ignore (Miou_unix.read a' (Bytes.create 0x100));
+  Miou.await_exn writer;
+  (* NOTE(dinosaure): the user closes the file-descriptor by himself. *)
+  Unix.close (Miou_unix.to_file_descr a');
+  Unix.close b;
+  let socket = Miou_unix.tcpv4 () in
+  let reused = int_of_fd (Miou_unix.to_file_descr socket) = int_of_fd a in
+  let connect =
+    Miou.async @@ fun () ->
+    match Miou_unix.connect socket sockaddr with
+    | () -> `Connected
+    | exception Unix.Unix_error (err, _, _) -> `Error err
+  and timeout = Miou.async @@ fun () -> Miou_unix.sleep 0.5; `Timeout in
+  let jobs = [ connect; timeout ] in
+  let result = Miou.await_one jobs in
+  List.iter Miou.cancel jobs;
+  Miou_unix.close socket;
+  List.iter Unix.close fillers;
+  Miou_unix.close listener;
+  reused && result = Ok `Timeout
+
 let () =
-  let tests = [| test01; test02; test03; test04; test05 |] in
+  let tests =
+    [|
+       test01; test02; test03; test04; test05; test06; test07; test08; test09
+     ; test10
+    |]
+  in
   let ({ Test.directory } as runner) =
     Test.runner (Filename.concat (Sys.getcwd ()) "_tests")
   in
