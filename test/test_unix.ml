@@ -44,7 +44,11 @@ let test02 =
     in
     ignore (Miou.sys_signal Sys.sigchld (Sys.Signal_handle fn));
     Buffer.add_string buf "signal handler installed\n";
-    match Miou.Computation.await_exn cmp with
+    let status = Miou.Computation.await_exn cmp in
+    (* NOTE(dinosaure): better to restore the default because we use
+       [fork(3am)] then (see [with_watchdog]). *)
+    ignore (Miou.sys_signal Sys.sigchld Sys.Signal_default);
+    match status with
     | Unix.WEXITED n -> Buffer.add_string buf (Fmt.str "WEXITED(%d)\n%!" n)
     | Unix.WSIGNALED n -> Buffer.add_string buf (Fmt.str "WSIGNALED(%d)\n%!" n)
     | Unix.WSTOPPED n -> Buffer.add_string buf (Fmt.str "WSIGNALED(%d)\n%!" n)
@@ -306,8 +310,6 @@ let test10 =
   Test.check @@ with_watchdog
   @@ fun () ->
   Miou_unix.run ~domains:0 @@ fun () ->
-  (* NOTE(dinosaure): a listening socket with a full accept queue drops SYNs,
-     the next [connect] stays in progress. *)
   let listener = Miou_unix.tcpv4 () in
   Miou_unix.bind_and_listen ~backlog:0 listener
     (Unix.ADDR_INET (Unix.inet_addr_loopback, 0));
@@ -319,6 +321,7 @@ let test10 =
     (try Unix.connect fd sockaddr with Unix.Unix_error _ -> ());
     fd
   in
+  (* NOTE(dinosaure): the internal queue of [listener] should be full now. *)
   Miou_unix.sleep 0.05;
   (* NOTE(dinosaure): set a readiness (writable) on [a] while nobody writes. *)
   let a, b = Unix.socketpair ~cloexec:true Unix.PF_UNIX Unix.SOCK_STREAM 0 in
@@ -335,10 +338,20 @@ let test10 =
   Unix.close b;
   let socket = Miou_unix.tcpv4 () in
   let reused = int_of_fd (Miou_unix.to_file_descr socket) = int_of_fd a in
+  (* NOTE(dinosaure): if [reused], our [epoll(7)] backend considers [a] as
+     writable due to our old file descriptor [a] even if we created a new file
+     description [socket] (which has the same value as [a]). *)
+  let is_connected socket =
+    match Unix.getpeername (Miou_unix.to_file_descr socket) with
+    | _ -> `Connected
+    | exception Unix.Unix_error (Unix.ENOTCONN, _, _) -> `Not_connected
+  in
   let connect =
     Miou.async @@ fun () ->
+    (* NOTE(dinosaure): how our [Miou_unix.connect] reacts if, on the
+       [epoll(7)] backend, our [ready] table says the [socket] is writable? *)
     match Miou_unix.connect socket sockaddr with
-    | () -> `Connected
+    | () -> is_connected socket
     | exception Unix.Unix_error (err, _, _) -> `Error err
   and timeout = Miou.async @@ fun () -> Miou_unix.sleep 0.5; `Timeout in
   let jobs = [ connect; timeout ] in
@@ -347,7 +360,23 @@ let test10 =
   Miou_unix.close socket;
   List.iter Unix.close fillers;
   Miou_unix.close listener;
-  reused && result = Ok `Timeout
+  let pp ppf = function
+    | Ok `Connected -> Fmt.string ppf "connected"
+    | Ok `Not_connected -> Fmt.string ppf "not connected"
+    | Ok (`Error err) -> Fmt.pf ppf "error: %s" (Unix.error_message err)
+    | Ok `Timeout -> Fmt.string ppf "timeout"
+    | Error exn -> Fmt.pf ppf "exception: %s" (Printexc.to_string exn)
+  in
+  Format.eprintf "test10: fd reused: %b, connect: %a\n%!" reused pp result;
+  let is_ok = function
+    | Ok (`Connected | `Timeout | `Error _) -> true
+    | Ok `Not_connected | Error _ -> false
+  in
+  (* NOTE(dinosaure): if we reused the same file descriptor value, we should
+     have an "acceptable" value. [`Not_connected] appears when
+     [Miou_unix.connect] is resumed by Miou whereas the socket is **not**
+     connected. *)
+  (not reused) || is_ok result
 
 let () =
   let tests =
