@@ -37,32 +37,80 @@ module File_descrs = struct
   let clear tbl = Array.fill tbl.contents 0 (Array.length tbl.contents) []
 end
 
-(* NOTE(dinosaure): [epoll] has a rather unusual instruction that is of
-   interest to us here: [EPOLLONESHOT]. The idea is to let the kernel disables a
-   file descriptor from [epoll] if it has been signalled (whether IN or OUT, it
-   doesn’t matter). Note that the registration of the file-descriptor is kept
-   but no further event is reported until we {i re-arm} it. We will therefore
-   take advantage of this feature so as not to have to call [Epoll.del]
-   systematically when we want to stop monitoring a [file_descr] (after having
-   signalled it).
+(* NOTE(dinosaure): design note about [epoll(7)]:
+   The main objective here is to provide four functions:
+   - [blocking_read] / [blocking_write] (a suspension mechanism that Miou is
+     able to _unblock_ or _resume_). These retain the _level-triggered_
+     semantics (the semantics of [select]/[poll]/[ppoll]).
+   - [retry_read] / [retry_write] corresponds to an execution path for file
+     descriptors that are in _edge-triggered_ mode. It's a faster path, only
+     valid right after a non-blocking syscall failed with [EAGAIN]
 
-   We therefore maintain an [armed] table for the current domain, which should
-   mirror what the kernel observes regarding file descriptors. This flag table
-   is of size [_SC_OPEN_MAX] (we should not have a [file_descr]/[int] larger
-   than this number). Based on this table and depending on what we wish to
-   monitor, we always add [EPOLLONESHOT]. Finally, when the user considers that
-   their [file_descr] should be released (using [Miou_unix]), we {i forget} its
-   flag in [armed] so that [armed] is always synchronised with what the kernel
-   observes.
+   ### Note about level-triggered/edge-triggered modes
 
-   Finally, there is a final table, [drained], which notifies us that the
-   kernel's buffer of the given socket is empty. A next [Unix.read] call will
-   terminate directly with a [EAGAIN] and we would like to save us from such
-   useless syscall. So, if [is_drained fd], we fallbacks directly to a
-   [blocking_read] without a confirmation from the kernel (via [Unix.read]) that
-   its buffer is actually empty. We are sure that such buffer is empty because
-   the last [Unix.read] gives to us few bytes ([> 0]) but not enough to fill
-   our buffer ([< len]). *)
+   On other platforms, Miou uses [select]/[poll]/[ppoll], which only offer a
+   _level-triggered_ semantic: a file descriptor is reported as long as it is
+   ready (to read or write). [blocking_{read,write}] are exposed with this
+   semantic: if a socket holds 512 bytes and the user reads only 256 of them,
+   the next [blocking_read] resumes immediately, as 256 bytes remain.
+
+   [epoll(7)] can provide the same semantic, but at a cost: with
+   [EPOLLONESHOT], each wait requires an [epoll_ctl] to re-arm (re-register)
+   the file descriptor, and without it, [EPOLLOUT] is reported again and again
+   (a socket is almost always writable). We therefore register file descriptors
+   in _edge-triggered_ mode: the kernel reports a file descriptor only when
+   its state changes.
+
+   ### How do we record file descriptors in the _edge triggered_ mode?
+
+   A file descriptor is registered once, the first time a task waits on it,
+   with [et_flags] ([IN | OUT | RDHUP | ET] = [read | write | shutdown
+   | edge-triggered mode]): both directions (read & write), for the whole
+   lifetime. The kernel can not tell us whether a file descriptor is
+   registered, so each domain keeps an [armed] table which mirrors the kernel's
+   registrations and saves us a redundant [EPOLL_CTL_ADD] on each wait. The
+   expected invariant, for the domain which owns [domain.epoll], is:
+
+   {[
+     (Epoll.upd domain.epoll fd et_flags = 0) = is_armed domain fd
+   ]}
+
+   There are two ways to register a file descriptor. The first involves
+   registration in _edge-triggered_ mode using [arm], which only calls
+   [epoll_ctl] when absolutely necessary. The second method, [arm_and_poll],
+   allows us to simulate _level-triggered_ mode by always calling
+   [epoll_ctl]i: the kernel then re-evaluates the readiness of the file
+   descriptor and queues an event if it is already ready, even if this
+   readiness was already reported. Otherwise, nothing is reported until a new
+   edge.
+
+   ### How do we know that a file descriptor is ready?
+
+   In edge-triggered mode, the kernel notifies us **only once** that there has
+   been a change in the state of our file descriptors. The problem is that the
+   information about this transition may arrive even when the user is not
+   attempting to read from or write to the file descriptor whose state has
+   changed.
+
+   We must therefore _keep track of_ this state change in our [ready] array so
+   as not to cause a suspension when the user attempts to read or write. Since
+   the file descriptor is in non-blocking mode, the worst-case scenario is that
+   we receive an [EAGAIN] error (if [ready] provides us with out-of-date
+   information).
+
+   The [select] function will therefore scan all events and, if the file
+   descriptor has already been recorded in our table, we instruct Miou to
+   resume the fibre that had been suspended. Otherwise, we record this
+   information in our [ready] array (see [set_ready]).
+
+   When the user wishes to read or write, we will check our [ready] array and
+   decide whether or not to suspend operation based on this array (and
+   depending on whether we want to be in level-triggered or edge-triggered
+   mode). It is the [wait] function that decides whether or not to suspend
+   operation. The read/write functions (in [miou_unix.common.ml.in]) must use
+   [retry_{read,write}] if an [EAGAIN] error is encountered, or
+   [blocking_{read,write}] in all other cases.
+*)
 
 type domain = {
     readers: File_descrs.t
@@ -72,24 +120,14 @@ type domain = {
   ; revert: (Miou.uid, Unix.file_descr) Hashtbl.t
   ; mutable epoll: Epoll.t
   ; events: Epoll.events
-  ; drained: bytes
   ; armed: bytes
+  ; ready: bytes
 }
 
 external max_open_files : unit -> int = "miou_unix_epoll_max_open_files"
 [@@noalloc]
 
 let flags_by_fd () = Bytes.make (max_open_files ()) '\000'
-
-let is_drained domain fd =
-  let idx = int_of_file_descr fd in
-  idx < Bytes.length domain.drained
-  && Bytes.unsafe_get domain.drained idx <> '\000'
-
-let set_drained domain fd v =
-  let idx = int_of_file_descr fd in
-  if idx < Bytes.length domain.drained then
-    Bytes.unsafe_set domain.drained idx (if v then '\001' else '\000')
 
 let is_armed domain fd =
   let idx = int_of_file_descr fd in
@@ -100,34 +138,89 @@ let set_armed domain fd v =
   if idx < Bytes.length domain.armed then
     Bytes.unsafe_set domain.armed idx (if v then '\001' else '\000')
 
-let arm domain fd =
-  let epoll = domain.epoll in
-  let flags =
-    let rfd = File_descrs.get domain.readers fd in
-    let wfd = File_descrs.get domain.writers fd in
-    match (rfd, wfd) with
-    | [], [] -> Epoll.Flags.empty
-    | _ :: _, [] -> Epoll.Flags.epollin
-    | [], _ :: _ -> Epoll.Flags.epollout
-    | _ :: _, _ :: _ -> Epoll.Flags.(epollin + epollout)
-  in
-  if flags <> Epoll.Flags.empty then begin
-    let flags = Epoll.Flags.(flags + epolloneshot) in
-    if is_armed domain fd then
-      begin if Epoll.upd epoll fd flags <> 0 then
-        if Epoll.add epoll fd flags = 0 then set_armed domain fd true
-        else set_armed domain fd false
-      end
-    else if Epoll.add epoll fd flags = 0 then set_armed domain fd true
-    else if Epoll.upd epoll fd flags = 0 then set_armed domain fd true
+let ready_r = 1
+let ready_w = 2
+
+let take_ready domain fd bit =
+  let idx = int_of_file_descr fd in
+  if idx < Bytes.length domain.ready then begin
+    let v = Char.code (Bytes.unsafe_get domain.ready idx) in
+    if v land bit <> 0 then begin
+      Bytes.unsafe_set domain.ready idx (Char.unsafe_chr (v land lnot bit));
+      true
+    end
+    else false
   end
+  else false
+
+let set_ready domain fd bit =
+  let idx = int_of_file_descr fd in
+  if idx < Bytes.length domain.ready then
+    let v = Char.code (Bytes.unsafe_get domain.ready idx) in
+    Bytes.unsafe_set domain.ready idx (Char.unsafe_chr (v lor bit))
+
+let et_flags = Epoll.Flags.(epollin + epollout + epollrdhup + epollet)
+
+let arm domain fd =
+  if not (is_armed domain fd) then begin
+    if Epoll.add domain.epoll fd et_flags = 0 then set_armed domain fd true
+    else if Epoll.upd domain.epoll fd et_flags = 0 then set_armed domain fd true
+  end
+
+(* NOTE(dinosaure): for level-triggered mode, see [blocking_{read,write}]. *)
+let arm_and_poll domain fd =
+  let epoll = domain.epoll in
+  if is_armed domain fd then begin
+    if Epoll.upd epoll fd et_flags <> 0 then
+      set_armed domain fd (Epoll.add epoll fd et_flags = 0)
+  end
+  else if Epoll.add epoll fd et_flags = 0 || Epoll.upd epoll fd et_flags = 0
+  then set_armed domain fd true
 
 let forget domain fd =
   let idx = int_of_file_descr fd in
   if idx < Bytes.length domain.armed then
     Bytes.unsafe_set domain.armed idx '\000';
-  if idx < Bytes.length domain.drained then
-    Bytes.unsafe_set domain.drained idx '\000'
+  if idx < Bytes.length domain.ready then
+    Bytes.unsafe_set domain.ready idx '\000'
+
+(* NOTE(dinosaure): here, we keep domains to be able to forget a file
+   descriptor across all of them. A file-descriptor can be used by one domain
+   and closed by another. *)
+let domains = Atomic.make []
+
+let rec register domain =
+  let old = Atomic.get domains in
+  if not (Atomic.compare_and_set domains old (domain :: old)) then
+    register domain
+
+let rec unregister domain =
+  let old = Atomic.get domains in
+  let lst = List.filter (fun d -> d != domain) old in
+  if not (Atomic.compare_and_set domains old lst) then unregister domain
+
+(* NOTE(dinosaure): There are two scenarios in which the fact that a domain can
+   modify [armed] and [ready] is not domain-safe. The first is an invalid POSIX
+   scenario in which one domain attempts to close a file descriptor whilst, at
+   the same time, another domain is attempting to read from or write to it. The
+   second case is if an attempt is made to close a file descriptor A whilst a
+   domain has just created a new one with the same value A (since, according to
+   the kernel, slot A is now available following the closure):
+
+   dom0: forget dom0.armed[A] <- 0; close(A)
+   dom1: socket() -> A
+   dom1: dom1.armed[A]
+
+   In practice, close() and socket() access a global table shared across
+   domains and internal to the kernel, which is protected by a lock. The order
+   of [close_fd] is therefore very important:
+   1) first [forget]
+   2) then [Unix.close fd] (release [fd], cleaned on our side) *)
+let forget_everywhere fd = List.iter (fun d -> forget d fd) (Atomic.get domains)
+
+let close_fd fd =
+  forget_everywhere fd;
+  Unix.close fd
 
 let clean domain uids =
   let clean uid' (fd : Unix.file_descr) tbl =
@@ -135,8 +228,7 @@ let clean domain uids =
     | [] -> ()
     | syscalls ->
         File_descrs.set tbl fd
-          (List.filter (fun s -> uid' <> Miou.uid s) syscalls);
-        arm domain fd
+          (List.filter (fun s -> uid' <> Miou.uid s) syscalls)
   in
   let clean uid =
     match Hashtbl.find domain.revert uid with
@@ -165,7 +257,7 @@ let domain =
     drop_heapq v.sleepers;
     Hashtbl.clear v.rsleepers;
     Hashtbl.clear v.revert;
-    Bytes.fill v.drained 0 (Bytes.length v.drained) '\000';
+    Bytes.fill v.ready 0 (Bytes.length v.ready) '\000';
     for i = 0 to Bytes.length v.armed - 1 do
       if Bytes.unsafe_get v.armed i <> '\000' then begin
         ignore (Epoll.del v.epoll (Obj.magic i : Unix.file_descr));
@@ -182,8 +274,8 @@ let domain =
     ; revert= Hashtbl.create 0x100
     ; epoll= Epoll.invalid_fd
     ; events= Epoll.events 256
-    ; drained= flags_by_fd ()
     ; armed= flags_by_fd ()
+    ; ready= flags_by_fd ()
     }
   in
   let key = Stdlib.Domain.DLS.new_key ~split_from_parent make in
@@ -192,31 +284,35 @@ let domain =
 let append tbl fd syscall =
   File_descrs.set tbl fd (syscall :: File_descrs.get tbl fd)
 
-let blocking_read ?(name = "read") fd =
-  let syscall = Miou.syscall ~name () in
-  let uid = Miou.uid syscall in
+let wait ~strict tbl bit ~name fd =
   let domain = domain () in
-  let fn () =
-    Hashtbl.replace domain.revert uid fd;
-    append domain.readers fd syscall;
-    arm domain fd
-  in
-  Miou.suspend ~fn syscall
+  let ready = take_ready domain fd bit in
+  if strict || not ready then begin
+    let syscall = Miou.syscall ~name () in
+    let uid = Miou.uid syscall in
+    let fn () =
+      Hashtbl.replace domain.revert uid fd;
+      append (tbl domain) fd syscall;
+      if strict then arm_and_poll domain fd else arm domain fd
+    in
+    Miou.suspend ~fn syscall
+  end
+
+let readers domain = domain.readers
+let writers domain = domain.writers
+
+let blocking_read ?(name = "read") fd =
+  wait ~strict:true readers ready_r ~name fd
 
 let blocking_write ?(name = "write") fd =
-  let syscall = Miou.syscall ~name () in
-  let uid = Miou.uid syscall in
-  let domain = domain () in
-  let fn () =
-    Hashtbl.replace domain.revert uid fd;
-    append domain.writers fd syscall;
-    arm domain fd
-  in
-  Miou.suspend ~fn syscall
+  wait ~strict:true writers ready_w ~name fd
 
-let close { fd; _ } =
-  forget (domain ()) fd;
-  Unix.close fd
+let retry_read ?(name = "read") fd = wait ~strict:false readers ready_r ~name fd
+
+let retry_write ?(name = "write") fd =
+  wait ~strict:false writers ready_w ~name fd
+
+let close { fd; _ } = close_fd fd
 
 let intr fd =
   let buf = Bytes.create 0x100 in
@@ -258,12 +354,22 @@ let select _uid ic ~block cancelled_syscalls =
           let err = Epoll.Flags.(mem flags (epollerr + epollhup)) in
           let readable = err || Epoll.Flags.mem flags Epoll.Flags.epollin in
           let writable = err || Epoll.Flags.mem flags Epoll.Flags.epollout in
+          let readable = readable || Epoll.Flags.(mem flags epollrdhup) in
           if readable || writable then begin
-            let x = if readable then wakeup domain domain.readers fd else [] in
-            let y = if writable then wakeup domain domain.writers fd else [] in
-            (* NOTE(dinosaure): [EPOLLONESHOT] already disarmed it kernel-side;
-               anything still waiting on it is re-armed here. *)
-            arm domain fd;
+            let x =
+              if readable then
+                match wakeup domain domain.readers fd with
+                | [] -> set_ready domain fd ready_r; []
+                | x -> x
+              else []
+            in
+            let y =
+              if writable then
+                match wakeup domain domain.writers fd with
+                | [] -> set_ready domain fd ready_w; []
+                | y -> y
+              else []
+            in
             acc := List.rev_append y (List.rev_append x !acc)
           end
         end
@@ -286,16 +392,19 @@ let events uid =
   Unix.set_nonblock ic;
   Unix.set_nonblock oc;
   (* NOTE(dinosaure): the interrupt pipe stays armed for the lifetime of the
-     domain, so it is registered without [EPOLLONESHOT] and never re-armed. *)
+     domain, so it is registered level-triggered (without [EPOLLET]): [intr]
+     does not need to drain it. *)
   ignore (Epoll.add domain.epoll ic Epoll.Flags.epollin);
+  register domain;
   let select = select uid ic in
   let finaliser () =
+    unregister domain;
     Unix.close ic;
     Unix.close oc;
     Epoll.close domain.epoll;
     domain.epoll <- Epoll.invalid_fd;
     Bytes.fill domain.armed 0 (Bytes.length domain.armed) '\000';
-    Bytes.fill domain.drained 0 (Bytes.length domain.drained) '\000'
+    Bytes.fill domain.ready 0 (Bytes.length domain.ready) '\000'
   in
   { Miou.interrupt= interrupt oc; select; finaliser }
 
