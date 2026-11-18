@@ -307,7 +307,7 @@ module Ownership = struct
     let ({ fd; non_blocking; kind } : old), sockaddr =
       accept ?cloexec { fd; non_blocking; kind }
     in
-    let resource = Miou.Ownership.create ~finally:Unix.close fd in
+    let resource = Miou.Ownership.create ~finally:close_fd fd in
     Miou.Ownership.own resource;
     ({ fd; non_blocking; resource; kind }, sockaddr)
 
@@ -320,7 +320,7 @@ module Ownership = struct
     close { fd; non_blocking; kind }
 
   let of_file_descr ?(non_blocking = true) fd =
-    let resource = Miou.Ownership.create ~finally:Unix.close fd in
+    let resource = Miou.Ownership.create ~finally:close_fd fd in
     if non_blocking then Unix.set_nonblock fd else Unix.clear_nonblock fd;
     Miou.Ownership.own resource;
     match Unix.getsockopt_int fd Unix.SO_TYPE with
@@ -337,28 +337,28 @@ module Ownership = struct
 
   let tcpv4 () =
     let fd = Unix.socket Unix.PF_INET Unix.SOCK_STREAM 0 in
-    let resource = Miou.Ownership.create ~finally:Unix.close fd in
+    let resource = Miou.Ownership.create ~finally:close_fd fd in
     Unix.set_nonblock fd;
     Miou.Ownership.own resource;
     { fd; non_blocking= true; resource; kind= Some STREAM }
 
   let tcpv6 () =
     let fd = Unix.socket Unix.PF_INET6 Unix.SOCK_STREAM 0 in
-    let resource = Miou.Ownership.create ~finally:Unix.close fd in
+    let resource = Miou.Ownership.create ~finally:close_fd fd in
     Unix.set_nonblock fd;
     Miou.Ownership.own resource;
     { fd; non_blocking= true; resource; kind= Some STREAM }
 
   let udpv4 () =
     let fd = Unix.socket Unix.PF_INET Unix.SOCK_DGRAM 0 in
-    let resource = Miou.Ownership.create ~finally:Unix.close fd in
+    let resource = Miou.Ownership.create ~finally:close_fd fd in
     Unix.set_nonblock fd;
     Miou.Ownership.own resource;
     { fd; non_blocking= true; resource; kind= Some DGRAM }
 
   let udpv6 () =
     let fd = Unix.socket Unix.PF_INET6 Unix.SOCK_DGRAM 0 in
-    let resource = Miou.Ownership.create ~finally:Unix.close fd in
+    let resource = Miou.Ownership.create ~finally:close_fd fd in
     Unix.set_nonblock fd;
     Miou.Ownership.own resource;
     { fd; non_blocking= true; resource; kind= Some DGRAM }
