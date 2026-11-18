@@ -17,6 +17,7 @@ module C = struct
   external flag_hup : unit -> int = "miou_epoll_flag_hup" [@@noalloc]
   external flag_rdhup : unit -> int = "miou_epoll_flag_rdhup" [@@noalloc]
   external flag_oneshot : unit -> int = "miou_epoll_flag_oneshot" [@@noalloc]
+  external flag_et : unit -> int = "miou_epoll_flag_et" [@@noalloc]
 end
 
 type t = Unix.file_descr
@@ -30,6 +31,7 @@ module Flags = struct
   let epollhup = C.flag_hup ()
   let epollrdhup = C.flag_rdhup ()
   let epolloneshot = C.flag_oneshot ()
+  let epollet = C.flag_et ()
   let empty = 0
   let ( + ) = ( lor )
   let mem a b = a land b != 0

@@ -120,6 +120,7 @@ CAMLprim value miou_epoll_flag_out(__unit()) { return Val_int(EPOLLOUT); }
 CAMLprim value miou_epoll_flag_err(__unit()) { return Val_int(EPOLLERR); }
 CAMLprim value miou_epoll_flag_hup(__unit()) { return Val_int(EPOLLHUP); }
 CAMLprim value miou_epoll_flag_rdhup(__unit()) { return Val_int(EPOLLRDHUP); }
+CAMLprim value miou_epoll_flag_et(__unit()) { return Val_int(EPOLLET); }
 CAMLprim value miou_epoll_flag_oneshot(__unit()) {
   return Val_int(EPOLLONESHOT);
 }
